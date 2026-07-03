@@ -1,0 +1,322 @@
+const express = require('express');
+const { body, param } = require('express-validator');
+const { Material, StockLedger, StockMovement, Site } = require('../models');
+const { authenticate } = require('../middleware/auth');
+const { requireCapability } = require('../middleware/rbac');
+const { validate } = require('../middleware/validate');
+const { UserRole } = require('@afios/shared');
+const { serializeMaterial, userCanAccessSite } = require('../utils/serialize');
+
+const router = express.Router();
+router.use(authenticate);
+
+function buildMaterialFilter(search) {
+  const filter = { isActive: { $ne: false } };
+  if (search) {
+    const term = search.trim();
+    filter.$or = [
+      { name: { $regex: term, $options: 'i' } },
+      { code: { $regex: term, $options: 'i' } },
+      { description: { $regex: term, $options: 'i' } },
+      { grade: { $regex: term, $options: 'i' } },
+      { category: { $regex: term, $options: 'i' } },
+    ];
+  }
+  return filter;
+}
+
+router.get('/catalog', async (req, res, next) => {
+  try {
+    const { search, siteId } = req.query;
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 100));
+    const filter = buildMaterialFilter(search);
+
+    const resolvedSiteId = siteId || req.user.assignedSiteId?.toString();
+    let stockByMaterial = new Map();
+
+    const addLedgers = (ledgers) => {
+      for (const ledger of ledgers) {
+        const key = ledger.materialId.toString();
+        const existing = stockByMaterial.get(key);
+        if (existing) {
+          existing.quantityOnHand += ledger.quantityOnHand;
+        } else {
+          stockByMaterial.set(key, {
+            quantityOnHand: ledger.quantityOnHand,
+            lowStockThreshold: ledger.lowStockThreshold,
+            hasLedger: true,
+          });
+        }
+      }
+    };
+
+    if (siteId) {
+      // Explicit site filter (HQ)
+      addLedgers(await StockLedger.find({ siteId }));
+    } else if (req.user.role === UserRole.STORE_INCHARGE) {
+      // Store Manager: stock across all sites for assigned projects (qty on hand)
+      if (req.user.assignedProjectIds?.length) {
+        const sites = await Site.find({
+          projectId: { $in: req.user.assignedProjectIds },
+        }).select('_id');
+        if (sites.length) {
+          addLedgers(await StockLedger.find({ siteId: { $in: sites.map((s) => s._id) } }));
+        }
+      } else if (resolvedSiteId) {
+        addLedgers(await StockLedger.find({ siteId: resolvedSiteId }));
+      }
+    } else if (resolvedSiteId && req.user.role === UserRole.SITE_INCHARGE) {
+      addLedgers(await StockLedger.find({ siteId: resolvedSiteId }));
+    } else if (
+      [UserRole.COORDINATOR, UserRole.CHAIRMAN, UserRole.EXECUTIVE, UserRole.PROJECT_MANAGER].includes(
+        req.user.role
+      )
+    ) {
+      addLedgers(await StockLedger.find());
+    }
+
+    const total = await Material.countDocuments(filter);
+    const materials = await Material.find(filter)
+      .sort({ code: 1 })
+      .skip((page - 1) * limit)
+      .limit(limit);
+
+    // Stats across full filtered catalog (not only current page)
+    const allIds = await Material.find(filter).select('_id').lean();
+    let inStock = 0;
+    let lowStock = 0;
+    let totalQty = 0;
+    for (const m of allIds) {
+      const stock = stockByMaterial.get(m._id.toString());
+      const qty = stock?.quantityOnHand ?? 0;
+      const threshold = stock?.lowStockThreshold ?? 0;
+      totalQty += qty;
+      if (qty > 0) inStock += 1;
+      if (threshold > 0 && qty <= threshold) lowStock += 1;
+    }
+
+    res.json({
+      data: materials.map((m) => {
+        const stock = stockByMaterial.get(m._id.toString());
+        const quantityOnHand = stock?.quantityOnHand ?? 0;
+        const lowStockThreshold = stock?.lowStockThreshold ?? 0;
+        return {
+          ...serializeMaterial(m),
+          stock: {
+            quantityOnHand,
+            lowStockThreshold,
+            isLowStock: quantityOnHand <= lowStockThreshold && lowStockThreshold > 0,
+            hasLedger: Boolean(stock?.hasLedger),
+          },
+        };
+      }),
+      meta: {
+        siteId: resolvedSiteId || null,
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+        inStock,
+        lowStock,
+        totalQty,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+router.get('/', async (req, res, next) => {
+  try {
+    const { search } = req.query;
+    const filter = buildMaterialFilter(search);
+    const materials = await Material.find(filter).sort({ name: 1 }).limit(80);
+    res.json({ data: materials.map(serializeMaterial) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post(
+  '/',
+  requireCapability('CREATE_INVENTORY_ITEM'),
+  [
+    body('code').trim().notEmpty(),
+    body('name').trim().notEmpty(),
+    body('unit').trim().notEmpty(),
+    body('description').optional().trim(),
+    body('grade').optional().trim(),
+    body('category').optional().trim(),
+    body('hsnCode').optional().trim(),
+    body('siteId').optional().isMongoId(),
+    body('initialQuantity').optional().isFloat({ min: 0 }),
+    body('lowStockThreshold').optional().isFloat({ min: 0 }),
+  ],
+  validate,
+  async (req, res, next) => {
+    try {
+      const existing = await Material.findOne({ code: req.body.code });
+      if (existing) {
+        return res.status(400).json({ statusCode: 400, message: 'Item code already exists' });
+      }
+      const { siteId, initialQuantity, lowStockThreshold, ...materialData } = req.body;
+      const material = await Material.create(materialData);
+
+      const resolvedSiteId = siteId || req.user.assignedSiteId;
+      if (resolvedSiteId && initialQuantity !== undefined) {
+        await StockLedger.findOneAndUpdate(
+          { siteId: resolvedSiteId, materialId: material._id },
+          {
+            $setOnInsert: {
+              siteId: resolvedSiteId,
+              materialId: material._id,
+              quantityOnHand: initialQuantity,
+              lowStockThreshold: lowStockThreshold ?? 10,
+            },
+          },
+          { upsert: true, new: true }
+        );
+      }
+
+      res.status(201).json({ data: serializeMaterial(material) });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+router.patch(
+  '/:id',
+  requireCapability('CREATE_INVENTORY_ITEM'),
+  [
+    param('id').isMongoId(),
+    body('code').optional().trim().notEmpty(),
+    body('name').optional().trim().notEmpty(),
+    body('unit').optional().trim().notEmpty(),
+    body('description').optional().trim(),
+    body('grade').optional().trim(),
+    body('category').optional().trim(),
+    body('hsnCode').optional().trim(),
+  ],
+  validate,
+  async (req, res, next) => {
+    try {
+      const material = await Material.findById(req.params.id);
+      if (!material || material.isActive === false) {
+        return res.status(404).json({ statusCode: 404, message: 'Material not found' });
+      }
+
+      if (req.body.code && req.body.code.toUpperCase() !== material.code) {
+        const duplicate = await Material.findOne({ code: req.body.code.toUpperCase() });
+        if (duplicate) {
+          return res.status(400).json({ statusCode: 400, message: 'Item code already exists' });
+        }
+        material.code = req.body.code.toUpperCase();
+      }
+      if (req.body.name) material.name = req.body.name;
+      if (req.body.unit) material.unit = req.body.unit;
+      if (req.body.description !== undefined) material.description = req.body.description;
+      if (req.body.grade !== undefined) material.grade = req.body.grade;
+      if (req.body.category !== undefined) material.category = req.body.category;
+      if (req.body.hsnCode !== undefined) material.hsnCode = req.body.hsnCode;
+
+      await material.save();
+      res.json({ data: serializeMaterial(material) });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+router.post(
+  '/:id/stock',
+  requireCapability('CREATE_INVENTORY_ITEM'),
+  [
+    param('id').isMongoId(),
+    body('siteId').optional().isMongoId(),
+    body('quantity').isFloat({ min: 0 }),
+    body('lowStockThreshold').optional().isFloat({ min: 0 }),
+    body('mode').optional().isIn(['set', 'add']),
+  ],
+  validate,
+  async (req, res, next) => {
+    try {
+      const material = await Material.findById(req.params.id);
+      if (!material) {
+        return res.status(404).json({ statusCode: 404, message: 'Material not found' });
+      }
+
+      const siteId = req.body.siteId || req.user.assignedSiteId;
+      if (!siteId) {
+        return res.status(400).json({ statusCode: 400, message: 'Site is required to update stock' });
+      }
+      if (!userCanAccessSite(req.user, siteId)) {
+        return res.status(403).json({ statusCode: 403, message: 'Forbidden' });
+      }
+
+      const mode = req.body.mode || 'add';
+      const quantity = Number(req.body.quantity);
+      let ledger = await StockLedger.findOne({ siteId, materialId: material._id });
+      const previousQty = ledger?.quantityOnHand ?? 0;
+
+      if (!ledger) {
+        ledger = await StockLedger.create({
+          siteId,
+          materialId: material._id,
+          quantityOnHand: mode === 'set' ? quantity : quantity,
+          lowStockThreshold: req.body.lowStockThreshold ?? 10,
+        });
+      } else {
+        if (req.body.lowStockThreshold !== undefined) {
+          ledger.lowStockThreshold = req.body.lowStockThreshold;
+        }
+        ledger.quantityOnHand = mode === 'set' ? quantity : previousQty + quantity;
+        ledger.lastMovementAt = new Date();
+        await ledger.save();
+      }
+
+      const delta = ledger.quantityOnHand - previousQty;
+      if (delta !== 0) {
+        await StockMovement.create({
+          siteId,
+          materialId: material._id,
+          quantityDelta: delta,
+          type: 'ADJUSTMENT',
+          actorUserId: req.user._id,
+        });
+      }
+
+      res.json({
+        data: {
+          materialId: material._id.toString(),
+          siteId: siteId.toString(),
+          quantityOnHand: ledger.quantityOnHand,
+          lowStockThreshold: ledger.lowStockThreshold,
+          isLowStock: ledger.quantityOnHand <= ledger.lowStockThreshold,
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+router.delete(
+  '/:id',
+  requireCapability('DELETE_INVENTORY_ITEM'),
+  param('id').isMongoId(),
+  validate,
+  async (req, res, next) => {
+    try {
+      const material = await Material.findById(req.params.id);
+      if (!material) return res.status(404).json({ statusCode: 404, message: 'Not found' });
+      material.isActive = false;
+      await material.save();
+      res.json({ data: { id: material._id.toString(), deleted: true } });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+module.exports = router;

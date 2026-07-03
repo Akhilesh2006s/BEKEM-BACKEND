@@ -1,0 +1,128 @@
+const dns = require('dns');
+const mongoose = require('mongoose');
+
+// Windows often fails Atlas SRV lookups with the system DNS resolver
+dns.setServers(['8.8.8.8', '1.1.1.1']);
+dns.setDefaultResultOrder('ipv4first');
+
+async function connectMongo() {
+  const uris = [process.env.MONGO_URI, process.env.MONGO_URI_DIRECT].filter(Boolean);
+  let lastError;
+  for (const uri of uris) {
+    try {
+      await mongoose.connect(uri, { serverSelectionTimeoutMS: 15000 });
+      await repairPurchaseOrderIndexes();
+      await backfillPurchaseRequestsForApprovedIndents();
+      const { dedupeProjects } = require('../services/projectDeduplicationService');
+      await dedupeProjects();
+      await migrateBranchTransferStatuses();
+      await enforceUserProjectAssignmentRules();
+      return;
+    } catch (err) {
+      lastError = err;
+      console.warn(
+        `MongoDB connect failed (${uri.startsWith('mongodb+srv') ? 'SRV' : 'direct'}):`,
+        err.message
+      );
+    }
+  }
+  throw lastError;
+}
+
+async function repairPurchaseOrderIndexes() {
+  try {
+    const PurchaseOrder = require('../models/PurchaseOrder');
+    await PurchaseOrder.collection.updateMany(
+      { $or: [{ poNumber: null }, { poNumber: '' }] },
+      { $unset: { poNumber: '' } }
+    );
+    await PurchaseOrder.syncIndexes();
+  } catch (err) {
+    console.warn('PurchaseOrder index repair skipped:', err.message);
+  }
+}
+
+async function migrateBranchTransferStatuses() {
+  try {
+    const { BranchTransfer } = require('../models');
+    const result = await BranchTransfer.updateMany(
+      { status: 'REQUESTED' },
+      { $set: { status: 'PENDING_DESTINATION_PM' } }
+    );
+    if (result.modifiedCount) {
+      console.log(`Migrated ${result.modifiedCount} branch transfer(s) to PENDING_DESTINATION_PM`);
+    }
+  } catch (err) {
+    console.warn('Branch transfer status migration skipped:', err.message);
+  }
+}
+
+/** Apply role-based project assignment rules for all users. */
+async function enforceUserProjectAssignmentRules() {
+  try {
+    const { UserRole } = require('@afios/shared');
+    const { User } = require('../models');
+    const { applyRoleAssignments } = require('../services/userAssignmentService');
+    const users = await User.find({
+      role: {
+        $in: [
+          UserRole.SITE_INCHARGE,
+          UserRole.STORE_INCHARGE,
+          UserRole.PROJECT_MANAGER,
+          UserRole.EXECUTIVE,
+          UserRole.COORDINATOR,
+          UserRole.CHAIRMAN,
+        ],
+      },
+    });
+    let updated = 0;
+    for (const user of users) {
+      const before = (user.assignedProjectIds || []).map(String).join(',');
+      await applyRoleAssignments(user, {
+        assignedProjectIds: user.assignedProjectIds,
+        assignedSiteId: user.assignedSiteId,
+      });
+      const after = (user.assignedProjectIds || []).map(String).join(',');
+      if (before !== after || user.isModified()) {
+        await user.save();
+        updated += 1;
+      }
+    }
+    if (updated) {
+      console.log(`Applied project assignment rules for ${updated} user(s)`);
+    }
+  } catch (err) {
+    console.warn('User project assignment migration skipped:', err.message);
+  }
+}
+
+/** Indents approved before auto-PR: create missing purchase requests once. */
+async function backfillPurchaseRequestsForApprovedIndents() {
+  try {
+    const { UserRole } = require('@afios/shared');
+    const { MaterialRequest, PurchaseRequest, User } = require('../models');
+    const { createPurchaseRequestForIndent } = require('../services/purchaseRequestService');
+
+    const stale = await MaterialRequest.find({ status: 'PM_APPROVED' }).select('_id');
+    if (!stale.length) return;
+
+    const pm = await User.findOne({ role: UserRole.PROJECT_MANAGER }).select('_id');
+    if (!pm) return;
+
+    for (const mr of stale) {
+      const hasPr = await PurchaseRequest.exists({ materialRequestId: mr._id });
+      if (hasPr) continue;
+      const populated = await MaterialRequest.findById(mr._id)
+        .populate('projectId')
+        .populate('items.materialId');
+      if (populated) {
+        await createPurchaseRequestForIndent(populated, pm._id);
+        console.log(`Backfilled purchase request for indent ${populated.indentNumber}`);
+      }
+    }
+  } catch (err) {
+    console.warn('PM_APPROVED PR backfill skipped:', err.message);
+  }
+}
+
+module.exports = { connectMongo };

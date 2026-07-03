@@ -1,0 +1,38 @@
+{
+  "name": "bekem-backend",
+  "version": "2.0.0",
+  "private": true,
+  "main": "src/index.js",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "postinstall": "npm run build -w @afios/shared",
+    "build:shared": "npm run build -w @afios/shared",
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js",
+    "seed": "node src/scripts/seed.js",
+    "import:po-index": "node src/scripts/importPoIndex.js",
+    "backfill:stock": "node src/scripts/backfillStock.js",
+    "test": "node --test --test-concurrency=1 src/**/*.test.js"
+  },
+  "dependencies": {
+    "@afios/shared": "*",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-validator": "^7.2.1",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.9.5",
+    "nodemailer": "^6.10.1",
+    "pdfkit": "^0.19.1",
+    "socket.io": "^4.8.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "mongodb-memory-server": "^10.1.4",
+    "supertest": "^7.0.0",
+    "typescript": "^5.7.3"
+  }
+}
