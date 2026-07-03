@@ -99,35 +99,15 @@ function createApp() {
 
 
 
+  const { expressCorsConfig, socketCorsConfig } = require('./utils/corsOrigins');
+
   const io = new Server(server, {
-
-    cors: {
-
-      origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
-
-      credentials: true,
-
-    },
-
+    cors: socketCorsConfig(),
   });
-
-
 
   notificationService.setSocketIo(io);
 
-
-
-  app.use(
-
-    cors({
-
-      origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
-
-      credentials: true,
-
-    })
-
-  );
+  app.use(cors(expressCorsConfig()));
 
   app.use(express.json());
 
