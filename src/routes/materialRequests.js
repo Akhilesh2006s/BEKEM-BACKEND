@@ -420,6 +420,15 @@ router.post(
         }
       }
 
+      // Idempotent: already with PM — return success (avoids false "Forward failed" on retry)
+      if (mr.status === 'FORWARDED_TO_PM') {
+        const populated = await MaterialRequest.findById(mr._id).populate(populateFields);
+        return res.json({
+          data: serializeMaterialRequest(populated),
+          message: 'Already forwarded to PM',
+        });
+      }
+
       if (!['ALLOCATED', 'PENDING_STORE'].includes(mr.status)) {
         return res.status(400).json({
           statusCode: 400,
@@ -431,29 +440,36 @@ router.post(
       mr.status = 'FORWARDED_TO_PM';
       await mr.save();
 
-      await statusHistoryService.record(
-        'MaterialRequest',
-        mr._id,
-        fromStatus,
-        'FORWARDED_TO_PM',
-        req.user._id,
-        req.body.reason
-      );
+      try {
+        await statusHistoryService.record(
+          'MaterialRequest',
+          mr._id,
+          fromStatus,
+          'FORWARDED_TO_PM',
+          req.user._id,
+          req.body.reason
+        );
+      } catch (histErr) {
+        console.error('Forward status history failed:', histErr.message);
+      }
 
-      const pmUsers = await User.find({
-        role: UserRole.PROJECT_MANAGER,
-        assignedProjectIds: mr.projectId,
-      });
-
-      await notificationService.notifyUsers(
-        pmUsers.map((u) => u._id),
-        {
-          title: 'Request forwarded to PM',
-          body: `Request ${mr.indentNumber} forwarded for PM review.`,
-          relatedEntityType: 'MaterialRequest',
-          relatedEntityId: mr._id,
-        }
-      );
+      try {
+        const pmUsers = await User.find({
+          role: UserRole.PROJECT_MANAGER,
+          assignedProjectIds: mr.projectId,
+        });
+        await notificationService.notifyUsers(
+          pmUsers.map((u) => u._id),
+          {
+            title: 'Request forwarded to PM',
+            body: `Request ${mr.indentNumber} forwarded for PM review.`,
+            relatedEntityType: 'MaterialRequest',
+            relatedEntityId: mr._id,
+          }
+        );
+      } catch (notifyErr) {
+        console.error('Forward notification failed:', notifyErr.message);
+      }
 
       req.auditEntityType = 'MaterialRequest';
       req.auditEntityId = mr._id;

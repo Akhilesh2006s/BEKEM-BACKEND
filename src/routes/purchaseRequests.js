@@ -1,7 +1,7 @@
 const express = require('express');
 const { body, param } = require('express-validator');
 const { UserRole } = require('@afios/shared');
-const { PurchaseRequest, MaterialRequest } = require('../models');
+const { PurchaseRequest, MaterialRequest, PurchaseOrder } = require('../models');
 const { authenticate } = require('../middleware/auth');
 const { requireCapability } = require('../middleware/rbac');
 const { validate } = require('../middleware/validate');
@@ -26,9 +26,24 @@ router.get('/', async (req, res, next) => {
     if (req.user.role === UserRole.PROJECT_MANAGER) {
       filter.projectId = { $in: req.user.assignedProjectIds };
     }
-    const items = await PurchaseRequest.find(filter)
+    if (req.query.status) {
+      filter.status = req.query.status;
+    }
+    let items = await PurchaseRequest.find(filter)
       .sort({ createdAt: -1 })
       .populate(populateFields);
+
+    // Exclude PRs that already have a non-rejected PO (prevents duplicate orders)
+    if (req.query.readyForPo === 'true' || req.query.readyForPo === '1') {
+      const prIds = items.map((pr) => pr._id);
+      const orderedPrIds = await PurchaseOrder.distinct('purchaseRequestId', {
+        purchaseRequestId: { $in: prIds },
+        status: { $ne: 'REJECTED' },
+      });
+      const orderedSet = new Set(orderedPrIds.map((id) => id.toString()));
+      items = items.filter((pr) => !orderedSet.has(pr._id.toString()));
+    }
+
     res.json({ data: items.map(serializePurchaseRequest) });
   } catch (err) {
     next(err);

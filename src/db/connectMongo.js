@@ -17,6 +17,7 @@ async function connectMongo() {
       await dedupeProjects();
       await migrateBranchTransferStatuses();
       await enforceUserProjectAssignmentRules();
+      await refreshSiteFiscalYearLabels();
       return;
     } catch (err) {
       lastError = err;
@@ -54,6 +55,24 @@ async function migrateBranchTransferStatuses() {
     }
   } catch (err) {
     console.warn('Branch transfer status migration skipped:', err.message);
+  }
+}
+
+/** Keep site FY labels aligned with current Indian financial year (documents use the same). */
+async function refreshSiteFiscalYearLabels() {
+  try {
+    const { getFinancialYear } = require('../services/procurementReferenceService');
+    const { Site } = require('../models');
+    const fy = getFinancialYear();
+    const result = await Site.updateMany(
+      { chainageLabel: { $regex: /^FY \d{2}-\d{2}$/ } },
+      { $set: { chainageLabel: `FY ${fy}` } }
+    );
+    if (result.modifiedCount) {
+      console.log(`Updated ${result.modifiedCount} site FY label(s) to FY ${fy}`);
+    }
+  } catch (err) {
+    console.warn('Site FY label refresh skipped:', err.message);
   }
 }
 

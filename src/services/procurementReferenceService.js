@@ -17,8 +17,8 @@ function normalizeCode(value, maxLen = 12, fallback = 'GEN') {
 }
 
 /**
- * Official PO format:
- * BEKEM -CHITR /SRE /0004-1 /25-26
+ * Official PO format (no spaces around separators):
+ * BEKEM-CHITR/SRE/0004-1/25-26
  *
  * 0004 = Bekem's PO number for the year (4th PO company-wide this FY)
  * 1    = how many times a PO has been sent to this vendor this FY (1st PO to SRE)
@@ -29,7 +29,7 @@ function buildProcurementRef({ projectCode, vendorCode, poSeq, vendorPoSeq, fina
   const vend = normalizeCode(vendorCode, 6, 'VND');
   const bekemNo = String(poSeq).padStart(4, '0');
   const vendorNo = String(vendorPoSeq || 1);
-  return `BEKEM -${proj} /${vend} /${bekemNo}-${vendorNo} /${fy}`;
+  return `BEKEM-${proj}/${vend}/${bekemNo}-${vendorNo}/${fy}`;
 }
 
 function parseProcurementRef(ref) {

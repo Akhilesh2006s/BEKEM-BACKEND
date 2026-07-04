@@ -27,6 +27,7 @@ const {
   materialCodeFromItem,
   ensureUniqueCode,
 } = require('./codeGenerators');
+const { getFinancialYear } = require('./procurementReferenceService');
 
 /**
  * Wipe demo / live procurement catalog, then rebuild projects, vendors,
@@ -86,7 +87,7 @@ async function syncMasterDataFromInventory({ financialYear = '25-26', clearProcu
     await Site.create({
       projectId: project._id,
       name: `${name} — Main Store`,
-      chainageLabel: `FY ${financialYear}`,
+      chainageLabel: `FY ${getFinancialYear()}`,
     });
   }
 
@@ -199,7 +200,7 @@ async function syncMasterDataFromInventory({ financialYear = '25-26', clearProcu
     stockLedgers,
     cleared: clearProcurement,
     samplePoFormat: projects[0] && vendorByName.size
-      ? `BEKEM -${projects[0].code} /${[...vendorByName.values()][0].code} /0001-1 /${financialYear}`
+      ? `BEKEM-${projects[0].code}/${[...vendorByName.values()][0].code}/0001-1/${financialYear}`
       : null,
   };
 }
