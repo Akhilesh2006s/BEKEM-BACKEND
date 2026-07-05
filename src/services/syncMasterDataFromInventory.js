@@ -80,7 +80,7 @@ async function syncMasterDataFromInventory({ financialYear = '25-26', clearProcu
       targetEndDate: endDate,
       budgetTotal: 0,
       budgetSpent: 0,
-      healthScore: 85,
+      healthScore: 100,
     });
     projectByName.set(name, project);
 

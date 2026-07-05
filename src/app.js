@@ -48,10 +48,23 @@ const goodsReceiptRoutes = require('./routes/goodsReceipts');
 const materialIssueRoutes = require('./routes/materialIssues');
 const branchTransferRoutes = require('./routes/branchTransfers');
 const incidentRoutes = require('./routes/incidents');
+const fileRoutes = require('./routes/files');
 
 
 
 function mountApiRoutes(app, prefix) {
+
+  const { authenticate } = require('./middleware/auth');
+  const { listMaterialCategories } = require('./services/materialCategoryService');
+
+  app.get(`${prefix}/material-categories`, authenticate, async (req, res, next) => {
+    try {
+      const rows = await listMaterialCategories();
+      res.json({ data: rows.map((c) => ({ id: c._id.toString(), name: c.name })) });
+    } catch (err) {
+      next(err);
+    }
+  });
 
   app.use(`${prefix}/auth`, authRoutes);
 
@@ -74,6 +87,7 @@ function mountApiRoutes(app, prefix) {
   app.use(`${prefix}/purchase-orders`, purchaseOrderRoutes);
 
   app.use(`${prefix}/vendors`, vendorRoutes);
+  app.use(`${prefix}/files`, fileRoutes);
 
   app.use(`${prefix}/audit-logs`, auditLogRoutes);
   app.use(`${prefix}/dashboard`, dashboardRoutes);

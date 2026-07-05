@@ -1,6 +1,6 @@
 const express = require('express');
 const { body, param } = require('express-validator');
-const { Material, StockLedger, StockMovement, Site } = require('../models');
+const { Material, StockLedger, StockMovement, Site, MaterialCategory } = require('../models');
 const { authenticate } = require('../middleware/auth');
 const { requireCapability } = require('../middleware/rbac');
 const { validate } = require('../middleware/validate');
@@ -24,6 +24,28 @@ function buildMaterialFilter(search) {
   }
   return filter;
 }
+
+router.get('/categories', async (req, res, next) => {
+  try {
+    const { listMaterialCategories } = require('../services/materialCategoryService');
+    const rows = await listMaterialCategories();
+    res.json({
+      data: rows.map((c) => ({ id: c._id.toString(), name: c.name })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/search', async (req, res, next) => {
+  try {
+    const { searchMaterials } = require('../services/searchService');
+    const data = await searchMaterials(req.query.q, req.user);
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+});
 
 router.get('/catalog', async (req, res, next) => {
   try {
@@ -137,6 +159,27 @@ router.get('/', async (req, res, next) => {
   }
 });
 
+async function resolveMaterialCategory(body) {
+  const { mapLegacyCategory } = require('../services/materialCategoryService');
+  if (body.categoryId) {
+    const cat = await MaterialCategory.findOne({ _id: body.categoryId, isActive: true });
+    if (!cat) {
+      const err = new Error('Invalid material category');
+      err.statusCode = 400;
+      throw err;
+    }
+    return cat;
+  }
+  const name = mapLegacyCategory(body.category);
+  const cat = await MaterialCategory.findOne({ name, isActive: true });
+  if (!cat) {
+    const err = new Error('Invalid material category');
+    err.statusCode = 400;
+    throw err;
+  }
+  return cat;
+}
+
 router.post(
   '/',
   requireCapability('CREATE_INVENTORY_ITEM'),
@@ -146,6 +189,7 @@ router.post(
     body('unit').trim().notEmpty(),
     body('description').optional().trim(),
     body('grade').optional().trim(),
+    body('categoryId').optional().isMongoId(),
     body('category').optional().trim(),
     body('hsnCode').optional().trim(),
     body('siteId').optional().isMongoId(),
@@ -159,8 +203,14 @@ router.post(
       if (existing) {
         return res.status(400).json({ statusCode: 400, message: 'Item code already exists' });
       }
-      const { siteId, initialQuantity, lowStockThreshold, ...materialData } = req.body;
-      const material = await Material.create(materialData);
+      const { siteId, initialQuantity, lowStockThreshold, categoryId, category, ...materialData } =
+        req.body;
+      const cat = await resolveMaterialCategory({ categoryId, category });
+      const material = await Material.create({
+        ...materialData,
+        categoryId: cat._id,
+        category: cat.name,
+      });
 
       const resolvedSiteId = siteId || req.user.assignedSiteId;
       if (resolvedSiteId && initialQuantity !== undefined) {
@@ -195,6 +245,7 @@ router.patch(
     body('unit').optional().trim().notEmpty(),
     body('description').optional().trim(),
     body('grade').optional().trim(),
+    body('categoryId').optional().isMongoId(),
     body('category').optional().trim(),
     body('hsnCode').optional().trim(),
   ],
@@ -217,7 +268,14 @@ router.patch(
       if (req.body.unit) material.unit = req.body.unit;
       if (req.body.description !== undefined) material.description = req.body.description;
       if (req.body.grade !== undefined) material.grade = req.body.grade;
-      if (req.body.category !== undefined) material.category = req.body.category;
+      if (req.body.categoryId != null || req.body.category != null) {
+        const cat = await resolveMaterialCategory({
+          categoryId: req.body.categoryId || material.categoryId,
+          category: req.body.category || material.category,
+        });
+        material.categoryId = cat._id;
+        material.category = cat.name;
+      }
       if (req.body.hsnCode !== undefined) material.hsnCode = req.body.hsnCode;
 
       await material.save();

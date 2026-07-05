@@ -1,4 +1,5 @@
 const { UserRole } = require('@afios/shared');
+const { BEKEM_BUYER_ADDRESS } = require('../constants/bekemAddresses');
 const {
   Project,
   MaterialRequest,
@@ -16,6 +17,29 @@ const {
 } = require('../models');
 
 const MS_DAY = 24 * 60 * 60 * 1000;
+
+function parsePagination(query = {}, defaultLimit = 20) {
+  const page = Math.max(1, parseInt(query.page, 10) || 1);
+  const limit = Math.min(100, Math.max(5, parseInt(query.limit, 10) || defaultLimit));
+  const q = String(query.q || '').trim();
+  return { page, limit, q, skip: (page - 1) * limit };
+}
+
+function buildPaginationMeta(page, limit, total) {
+  return {
+    page,
+    limit,
+    total,
+    totalPages: Math.max(1, Math.ceil(total / limit)),
+  };
+}
+
+function projectSearchFilter(q) {
+  if (!q) return {};
+  const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(escaped, 'i');
+  return { $or: [{ code: regex }, { name: regex }, { location: regex }] };
+}
 
 function daysSince(date) {
   if (!date) return 0;
@@ -37,16 +61,24 @@ function lastNMonthsBuckets(n, getValue) {
   return buckets;
 }
 
-async function getChairmanKpis() {
-  const projects = await Project.find({ status: 'ACTIVE' });
-  const totalBudgetCap = projects.reduce((s, p) => s + (p.budgetTotal || 0), 0);
-  const totalBudgetSpent = projects.reduce((s, p) => s + (p.budgetSpent || 0), 0);
+async function getChairmanKpis(query = {}) {
+  const { computeProjectHealth } = require('./projectHealthService');
+  const { page, limit, q, skip } = parsePagination(query, 15);
+  const projectFilter = { status: 'ACTIVE', ...projectSearchFilter(q) };
+
+  const [projects, projectTotal] = await Promise.all([
+    Project.find(projectFilter).sort({ code: 1 }).skip(skip).limit(limit).lean(),
+    Project.countDocuments(projectFilter),
+  ]);
+  const allActiveProjects = await Project.find({ status: 'ACTIVE' }).lean();
+  const totalBudgetCap = allActiveProjects.reduce((s, p) => s + (p.budgetTotal || 0), 0);
+  const totalBudgetSpent = allActiveProjects.reduce((s, p) => s + (p.budgetSpent || 0), 0);
 
   const now = new Date();
   const thirtyDaysAgo = new Date(now.getTime() - 30 * MS_DAY);
   const sixtyDaysAgo = new Date(now.getTime() - 60 * MS_DAY);
 
-  const spentLast30 = projects.reduce((s, p) => {
+  const spentLast30 = allActiveProjects.reduce((s, p) => {
     const ratio = Math.min(1, daysSince(p.updatedAt || p.createdAt) / 30);
     return s + Math.round((p.budgetSpent || 0) * ratio * 0.15);
   }, 0);
@@ -121,7 +153,8 @@ async function getChairmanKpis() {
     projects.map(async (p) => {
       const prIds = await PurchaseRequest.find({ projectId: p._id }).select('_id');
       const ids = prIds.map((pr) => pr._id);
-      const [poCount, poValue, poPendingChairman, indentCount, lateIndents] = await Promise.all([
+      const [poCount, poValue, poPendingChairman, indentCount, lateIndents, healthScore] =
+        await Promise.all([
         PurchaseOrder.countDocuments({ purchaseRequestId: { $in: ids } }),
         PurchaseOrder.aggregate([
           { $match: { purchaseRequestId: { $in: ids }, status: 'APPROVED' } },
@@ -137,12 +170,13 @@ async function getChairmanKpis() {
           requiredByDate: { $lt: now },
           status: { $nin: ['COMPLETED', 'CLOSED', 'REJECTED', 'CANCELLED'] },
         }),
+        computeProjectHealth(p),
       ]);
       return {
         projectId: p._id.toString(),
         code: p.code,
         name: p.name,
-        healthScore: p.healthScore,
+        healthScore,
         budgetTotal: p.budgetTotal,
         budgetSpent: p.budgetSpent,
         deployPct: p.budgetTotal > 0 ? Math.round((p.budgetSpent / p.budgetTotal) * 100) : 0,
@@ -160,7 +194,7 @@ async function getChairmanKpis() {
     budgetCap: totalBudgetCap,
     budgetDeployPct: totalBudgetCap > 0 ? Math.round((totalBudgetSpent / totalBudgetCap) * 100) : 0,
     budgetChangePct: budgetPctChange,
-    projectsRunning: projects.length,
+    projectsRunning: allActiveProjects.length,
     approvalsPending: pendingApprovals,
     approvalsChangePct: pctChange(pendingApprovals, prevApprovals),
     shortages,
@@ -188,6 +222,7 @@ async function getChairmanKpis() {
       note: 'Under ₹5k → PM · ₹5k–₹10k → Coordinator · Above ₹10k → Chairman (or Coordinator if Chairman not on premises)',
     },
     projectBreakdown,
+    projectPagination: buildPaginationMeta(page, limit, projectTotal),
     sparklines: {
       budget: budgetSparkline,
       approvals: approvalSparkline,
@@ -459,7 +494,16 @@ async function getBudgetVsActual(user) {
 
 async function globalSearch(user, q) {
   if (!q || q.trim().length < 2) {
-    return { materials: [], requests: [], orders: [], workOrders: [], vendors: [], projects: [] };
+    return {
+      materials: [],
+      requests: [],
+      orders: [],
+      workOrders: [],
+      vendors: [],
+      projects: [],
+      grns: [],
+      branchTransfers: [],
+    };
   }
 
   const term = q.trim();
@@ -515,7 +559,11 @@ async function globalSearch(user, q) {
   }
 
   const orders = await PurchaseOrder.find({
-    $or: [{ poNumber: regex }, { draftRef: regex }],
+    $or: [
+      { poNumber: regex },
+      { draftRef: regex },
+      { procurementRef: regex },
+    ],
   })
     .populate('vendorId')
     .sort({ updatedAt: -1 })
@@ -527,6 +575,17 @@ async function globalSearch(user, q) {
     .populate('vendorId')
     .sort({ updatedAt: -1 })
     .limit(8);
+
+  const { GoodsReceiptNote, BranchTransfer } = require('../models');
+  const grns = await GoodsReceiptNote.find({ grnNumber: regex })
+    .populate('purchaseOrderId')
+    .sort({ createdAt: -1 })
+    .limit(8);
+
+  const branchTransfers =
+    user.role === UserRole.SITE_INCHARGE
+      ? []
+      : await BranchTransfer.find({ transferNumber: regex }).sort({ createdAt: -1 }).limit(8);
 
   function poHref(po) {
     const id = po._id.toString();
@@ -554,6 +613,16 @@ async function globalSearch(user, q) {
     if (user.role === UserRole.STORE_INCHARGE) return '/store';
     if (user.role === UserRole.EXECUTIVE) return '/executive/po/new';
     return '/request/new';
+  }
+
+  function grnHref() {
+    return '/store/grn';
+  }
+
+  function btHref(bt) {
+    if (user.role === UserRole.PROJECT_MANAGER) return `/pm/branch-transfers/${bt._id}`;
+    if (user.role === UserRole.STORE_INCHARGE) return `/store/branch-transfers/${bt._id}`;
+    return `/branch-transfers/${bt._id}`;
   }
 
   return {
@@ -595,6 +664,18 @@ async function globalSearch(user, q) {
       label: p.code,
       sublabel: p.name,
       href: user.role === UserRole.PROJECT_MANAGER ? '/pm' : '/chairman',
+    })),
+    grns: grns.map((g) => ({
+      id: g._id.toString(),
+      label: g.grnNumber,
+      sublabel: g.purchaseOrderId?.poNumber || g.purchaseOrderId?.procurementRef || 'Goods receipt',
+      href: grnHref(g),
+    })),
+    branchTransfers: branchTransfers.map((bt) => ({
+      id: bt._id.toString(),
+      label: bt.transferNumber,
+      sublabel: `Branch transfer · ${bt.status}`,
+      href: btHref(bt),
     })),
   };
 }
@@ -734,14 +815,248 @@ async function getUserAnalytics() {
   }));
 }
 
+async function getDashboardWidgets(user) {
+  const now = new Date();
+  const role = user.role;
+
+  const pendingPoStatuses = [
+    'DRAFT',
+    'PM_PENDING',
+    'COORDINATOR_PENDING',
+    'CHAIRMAN_PENDING',
+    'PENDING_REVIEW',
+    'PENDING_APPROVAL',
+  ];
+
+  const [pendingPo, pendingDeliveries, pendingMaterialReceipt, pendingApprovals] =
+    await Promise.all([
+      PurchaseOrder.countDocuments({ status: { $in: pendingPoStatuses } }),
+      PurchaseOrder.countDocuments({
+        status: 'APPROVED',
+        fulfillmentStatus: { $ne: 'closed_complete' },
+        expectedDeliveryDate: { $lt: now, $ne: null },
+      }),
+      PurchaseOrder.countDocuments({
+        status: 'APPROVED',
+        fulfillmentStatus: { $ne: 'closed_complete' },
+      }),
+      PurchaseOrder.countDocuments({
+        status: { $in: ['PENDING_APPROVAL', 'CHAIRMAN_PENDING', 'COORDINATOR_PENDING', 'PM_PENDING'] },
+      }),
+    ]);
+
+  return {
+    role,
+    widgets: {
+      pendingPo,
+      pendingDeliveries,
+      pendingMaterialReceipt,
+      pendingApprovals,
+    },
+  };
+}
+
+async function getChairmanDashboardExtras(query = {}) {
+  const { page, limit, skip } = parsePagination(query, 8);
+  const vendorFilter = { isActive: { $ne: false } };
+
+  const [vendors, vendorTotal, ledgers, materials, projects, approvedPos] = await Promise.all([
+    Vendor.find(vendorFilter).sort({ name: 1 }).skip(skip).limit(limit).lean(),
+    Vendor.countDocuments(vendorFilter),
+    StockLedger.find().populate('materialId').lean(),
+    Material.find().select('name code').lean(),
+    Project.find({ status: 'ACTIVE' }).lean(),
+    PurchaseOrder.find({ status: 'APPROVED' }).lean(),
+  ]);
+
+  const vendorPoCounts = {};
+  for (const po of approvedPos) {
+    const vid = po.vendorId?.toString();
+    if (vid) vendorPoCounts[vid] = (vendorPoCounts[vid] || 0) + 1;
+  }
+
+  const topVendors = vendors
+    .map((v) => ({
+      id: v._id.toString(),
+      name: v.name,
+      code: v.code,
+      poCount: vendorPoCounts[v._id.toString()] || 0,
+      isMsme: Boolean(v.isMsme),
+    }))
+    .sort((a, b) => b.poCount - a.poCount);
+
+  const shortages = ledgers.filter((l) => l.quantityOnHand <= l.lowStockThreshold).length;
+  const totalOnHand = Math.round(ledgers.reduce((s, l) => s + (l.quantityOnHand || 0), 0));
+
+  const totalSpend = approvedPos.reduce((s, po) => s + (po.amount || 0), 0);
+  const openPos = approvedPos.filter((p) => p.fulfillmentStatus !== 'closed_complete').length;
+  const budgetDeployed = projects.reduce((s, p) => s + (p.budgetSpent || 0), 0);
+  const budgetCap = projects.reduce((s, p) => s + (p.budgetTotal || 0), 0);
+
+  return {
+    suppliers: {
+      totalCount: vendorTotal,
+      topVendors,
+      pagination: buildPaginationMeta(page, limit, vendorTotal),
+    },
+    stock: {
+      skuCount: materials.length,
+      siteLedgerCount: ledgers.length,
+      shortages,
+      totalOnHand,
+      healthLabel: shortages === 0 ? 'Healthy' : shortages <= 3 ? 'Watch' : 'Critical',
+    },
+    analyticsPath: '/chairman/user-analytics',
+    enterpriseSummary: {
+      totalSpend,
+      openPoCount: openPos,
+      budgetDeployed,
+      budgetCap,
+      deployPct: budgetCap > 0 ? Math.round((budgetDeployed / budgetCap) * 100) : null,
+    },
+  };
+}
+
+async function getExecutiveDashboard(user, query = {}) {
+  const { Project, PurchaseOrder, PurchaseRequest, MaterialRequest } = require('../models');
+  const { computeProjectHealth } = require('./projectHealthService');
+  const { page, limit, q, skip } = parsePagination(query, 20);
+  const filter = projectSearchFilter(q);
+
+  const [projects, projectTotal, pos, prs, pendingIndents] = await Promise.all([
+    Project.find(filter).sort({ code: 1 }).skip(skip).limit(limit).lean(),
+    Project.countDocuments(filter),
+    PurchaseOrder.find().populate('purchaseRequestId').lean(),
+    PurchaseRequest.find({ status: 'OPEN' }).lean(),
+    MaterialRequest.find({
+      status: { $in: ['PENDING_HO', 'FORWARDED_TO_PM', 'PURCHASE_REQUESTED'] },
+    }).lean(),
+  ]);
+
+  const projectBreakdown = await Promise.all(
+    projects.map(async (p) => {
+      const pid = p._id.toString();
+      const projectPos = pos.filter(
+        (po) => po.purchaseRequestId?.projectId?.toString() === pid
+      );
+      const openPos = projectPos.filter((po) =>
+        ['DRAFT', 'PM_PENDING', 'COORDINATOR_PENDING', 'CHAIRMAN_PENDING', 'PENDING_REVIEW', 'PENDING_APPROVAL'].includes(
+          po.status
+        )
+      );
+      const openPrs = prs.filter((pr) => pr.projectId?.toString() === pid);
+      const indents = pendingIndents.filter((mr) => mr.projectId?.toString() === pid);
+      const healthScore = await computeProjectHealth(p);
+      const budgetTotal = p.budgetTotal || 0;
+      const budgetSpent = p.budgetSpent || 0;
+      return {
+        id: pid,
+        code: p.code,
+        name: p.name,
+        location: p.location,
+        status: p.status,
+        budgetTotal,
+        budgetSpent,
+        healthScore,
+        deployPct: budgetTotal > 0 ? Math.round((budgetSpent / budgetTotal) * 100) : null,
+        openPoCount: openPos.length,
+        openPoValue: openPos.reduce((s, po) => s + (po.amount || 0), 0),
+        openPrCount: openPrs.length,
+        pendingIndentCount: indents.length,
+      };
+    })
+  );
+
+  return {
+    projects: projectBreakdown,
+    pagination: buildPaginationMeta(page, limit, projectTotal),
+    totals: {
+      projectCount: projectTotal,
+      openPoCount: pos.filter((po) =>
+        ['DRAFT', 'PM_PENDING', 'COORDINATOR_PENDING', 'CHAIRMAN_PENDING'].includes(po.status)
+      ).length,
+      openPrCount: prs.length,
+      pendingIndentCount: pendingIndents.length,
+    },
+    registeredOfficeAddress: BEKEM_BUYER_ADDRESS,
+  };
+}
+
+async function getPmDashboard(user) {
+  const { MaterialRequest, Notification } = require('../models');
+  const { serializeMaterialRequestEnriched } = require('../utils/serialize');
+  const { getPmDailyApprovedTotal, MR_PM_DAILY_MAX_INR } = require('./pmApprovalCapService');
+
+  const projectIds = user.assignedProjectIds || [];
+  const projectFilter = projectIds.length ? { projectId: { $in: projectIds } } : {};
+
+  const [pendingRequests, approveQueue, purchaseRequests, notifications] = await Promise.all([
+    MaterialRequest.find({ ...projectFilter, status: 'PENDING_STORE' })
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .populate([
+        { path: 'items.materialId' },
+        { path: 'materialId' },
+        { path: 'siteId' },
+        { path: 'projectId' },
+        { path: 'requestedByUserId', select: 'name' },
+      ]),
+    MaterialRequest.find({ ...projectFilter, status: 'FORWARDED_TO_PM', escalatedToHo: { $ne: true } })
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .populate([
+        { path: 'items.materialId' },
+        { path: 'materialId' },
+        { path: 'siteId' },
+        { path: 'projectId' },
+        { path: 'requestedByUserId', select: 'name' },
+      ]),
+    MaterialRequest.find({ ...projectFilter, status: 'PURCHASE_REQUESTED' })
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .populate([
+        { path: 'items.materialId' },
+        { path: 'materialId' },
+        { path: 'siteId' },
+        { path: 'projectId' },
+        { path: 'requestedByUserId', select: 'name' },
+      ]),
+    Notification.find({ userId: user._id }).sort({ createdAt: -1 }).limit(10),
+  ]);
+
+  const dailyApprovedTotal = await getPmDailyApprovedTotal(user._id);
+
+  return {
+    pendingRequests: await Promise.all(pendingRequests.map(serializeMaterialRequestEnriched)),
+    approveQueue: await Promise.all(approveQueue.map(serializeMaterialRequestEnriched)),
+    purchaseRequests: await Promise.all(purchaseRequests.map(serializeMaterialRequestEnriched)),
+    notifications: notifications.map((n) => ({
+      id: n._id.toString(),
+      title: n.title,
+      body: n.body,
+      isRead: !!n.isRead,
+      createdAt: n.createdAt?.toISOString?.() || n.createdAt,
+      relatedEntityType: n.relatedEntityType,
+      relatedEntityId: n.relatedEntityId?.toString(),
+    })),
+    dailyCap: {
+      dailyApprovedTotal,
+      dailyCap: MR_PM_DAILY_MAX_INR,
+      remaining: Math.max(0, MR_PM_DAILY_MAX_INR - dailyApprovedTotal),
+    },
+  };
+}
+
 module.exports = {
   getChairmanKpis,
   getTodayActions,
   getBudgetVsActual,
   globalSearch,
   getTallySyncStatus,
-  getExplorerProjects,
   getUserAnalytics,
-  daysSince,
-  withAge,
+  getExplorerProjects,
+  getExecutiveDashboard,
+  getPmDashboard,
+  getDashboardWidgets,
+  getChairmanDashboardExtras,
 };

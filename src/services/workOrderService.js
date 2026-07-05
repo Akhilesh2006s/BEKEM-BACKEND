@@ -56,7 +56,7 @@ async function createFromPurchaseOrder({ purchaseOrderId, scope, totalQuantity, 
     totalQuantity,
     quantityUnit: quantityUnit || 'Units',
     contractValue: po.amount,
-    status: 'COORDINATOR_PENDING',
+    status: 'PM_PENDING',
     createdByUserId: actorUserId,
   });
 
@@ -64,16 +64,19 @@ async function createFromPurchaseOrder({ purchaseOrderId, scope, totalQuantity, 
     'WorkOrder',
     wo._id,
     null,
-    'COORDINATOR_PENDING',
+    'PM_PENDING',
     actorUserId,
     `Work order ${woNumber} created from PO ${po.poNumber}`
   );
 
-  const coordinators = await User.find({ role: UserRole.COORDINATOR });
-  for (const c of coordinators) {
-    await notificationService.notifyUser(c._id, {
-      title: 'Work order pending verification',
-      body: `${woNumber} requires coordinator verification.`,
+  const pms = await User.find({
+    role: UserRole.PROJECT_MANAGER,
+    assignedProjectIds: project._id,
+  });
+  for (const pm of pms) {
+    await notificationService.notifyUser(pm._id, {
+      title: 'Work order pending PM approval',
+      body: `${woNumber} requires project manager approval.`,
       relatedEntityType: 'WorkOrder',
       relatedEntityId: wo._id,
     });

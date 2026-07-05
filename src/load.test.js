@@ -55,7 +55,7 @@ describe('Load / soak tests', () => {
       const allocRes = await request(app)
         .post(`/api/material-requests/${mrId}/allocate`)
         .set('Authorization', `Bearer ${storeToken}`)
-        .send({ quantityAllocated: 1 });
+        .send({ decision: 'forward', remark: `Load test forward ${i}` });
 
       assert.notStrictEqual(allocRes.status, 403, `Allocate returned 403 on iteration ${i}`);
     }

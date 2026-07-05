@@ -22,8 +22,17 @@ export function formatCurrency(amount: number | null | undefined): string {
 }
 
 export function formatQuantity(qty: number, unit?: string): string {
-  const formatted = Number.isInteger(qty) ? String(qty) : qty.toFixed(2);
+  const rounded = Math.round((qty + Number.EPSILON) * 100) / 100;
+  const formatted = Number.isInteger(rounded)
+    ? rounded.toLocaleString('en-IN')
+    : rounded.toLocaleString('en-IN', { maximumFractionDigits: 2 });
   return unit ? `${formatted} ${unit}` : formatted;
+}
+
+/** Whole-unit counts for inventory dashboards (no float artifacts). */
+export function formatUnitCount(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return '0';
+  return Math.round(value).toLocaleString('en-IN');
 }
 
 export function getGreeting(): string {

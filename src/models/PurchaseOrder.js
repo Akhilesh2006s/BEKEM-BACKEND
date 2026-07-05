@@ -16,6 +16,7 @@ const poLineSchema = new mongoose.Schema(
   {
     description: { type: String, required: true },
     materialId: { type: mongoose.Schema.Types.ObjectId, ref: 'Material' },
+    itemCode: { type: String, default: '' },
     hsnCode: { type: String, default: '' },
     quantity: { type: Number, required: true },
     rate: { type: Number, required: true },
@@ -51,7 +52,18 @@ const purchaseOrderSchema = new mongoose.Schema(
     amount: { type: Number, required: true },
     paymentTerms: { type: String, default: '' },
     billingAddress: { type: String, default: '' },
+    billingAddressType: {
+      type: String,
+      enum: ['registered_office', 'project_billing'],
+      default: 'registered_office',
+    },
     deliveryAddress: { type: String, default: '' },
+    deliveryAddressType: {
+      type: String,
+      enum: ['site', 'workshop', 'global', 'other'],
+      default: 'site',
+    },
+    deliveryAddressOtherText: { type: String, default: '' },
     expectedDeliveryDate: { type: Date },
     referenceNote: { type: String, default: '' },
     lineItems: { type: [poLineSchema], default: [] },
@@ -59,6 +71,24 @@ const purchaseOrderSchema = new mongoose.Schema(
     status: { type: String, enum: PO_STATUSES, default: 'DRAFT' },
     officialPdfGeneratedAt: { type: Date },
     sentToVendorAt: { type: Date },
+    emailSentAt: { type: Date },
+    emailStatus: {
+      type: String,
+      enum: ['pending', 'queued', 'sent', 'failed', 'skipped'],
+      default: 'pending',
+    },
+    approvedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    finalApprovedAt: { type: Date },
+    approvedAsChairmanOverride: { type: Boolean, default: false },
+    overrideRemark: { type: String, maxlength: 300, default: '' },
+    /** Set once post-approval notifications + email dispatch complete (idempotency guard). */
+    approvalDispatchedAt: { type: Date },
+    fulfillmentStatus: {
+      type: String,
+      enum: ['open_partial', 'closed_complete'],
+      default: 'open_partial',
+    },
+    trackingReceivedAt: { type: Date },
   },
   { timestamps: true }
 );

@@ -11,6 +11,7 @@ const projectSchema = new mongoose.Schema(
     budgetTotal: { type: Number, default: 0 },
     budgetSpent: { type: Number, default: 0 },
     healthScore: { type: Number, default: 100 },
+    billingAddressId: { type: mongoose.Schema.Types.ObjectId, ref: 'Address', default: null },
   },
   { timestamps: true }
 );

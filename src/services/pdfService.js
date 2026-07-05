@@ -57,200 +57,215 @@ function generateAuditLogPdf(logs, filters) {
   };
 }
 
-function generatePurchaseOrderPdf(po) {
+function buildPurchaseOrderPdfContent(doc, po) {
   const { DEFAULT_PO_TERMS } = require('../constants/bekemAddresses');
+  const pageWidth = 595;
+  const margin = 50;
+  const contentWidth = pageWidth - margin * 2;
+  const rightColX = 380;
+  const rightColW = 165;
 
+  const poNo = po.poNumber || po.draftRef || '—';
+  const poDate = po.createdAt
+    ? new Date(po.createdAt).toLocaleDateString('en-IN')
+    : new Date().toLocaleDateString('en-IN');
+
+  let y = margin;
+
+  doc.fontSize(16).fillColor('#1A4FA0').text('BEKEM INFRA PROJECTS PVT. LTD.', margin, y, {
+    width: contentWidth,
+    align: 'center',
+  });
+  y += 22;
+  doc.fontSize(14).fillColor('#0F172A').text('PURCHASE ORDER', margin, y, {
+    width: contentWidth,
+    align: 'center',
+  });
+  y += 28;
+
+  doc.fontSize(9).fillColor('#0F172A');
+  doc.text(`PO No.: ${poNo}`, rightColX, margin + 4, { width: rightColW, align: 'right' });
+  doc.text(`PO Date: ${poDate}`, rightColX, margin + 18, { width: rightColW, align: 'right' });
+  if (po.referenceNote) {
+    doc.text(`Reference: ${po.referenceNote}`, rightColX, margin + 32, {
+      width: rightColW,
+      align: 'right',
+    });
+  }
+
+  doc.fontSize(10).fillColor('#1A4FA0').text('To,', margin, y);
+  y += 14;
+  doc.fontSize(10).fillColor('#0F172A').text(po.vendor?.name || '—', margin, y, { width: contentWidth - 180 });
+  y += 14;
+
+  doc.fontSize(9).fillColor('#334155');
+  if (po.vendor?.address) {
+    const addrH = doc.heightOfString(po.vendor.address, { width: contentWidth - 180 });
+    doc.text(po.vendor.address, margin, y, { width: contentWidth - 180 });
+    y += addrH + 4;
+  }
+  if (po.vendor?.gstNumber) {
+    doc.text(`GST No.: ${po.vendor.gstNumber}`, margin, y);
+    y += 12;
+  }
+  if (po.vendor?.email) {
+    doc.text(`Email: ${po.vendor.email}`, margin, y);
+    y += 12;
+  }
+  if (po.vendor?.contactPerson) {
+    doc.text(
+      `Kind Attn.: ${po.vendor.contactPerson}${po.vendor.phone ? ` (${po.vendor.phone})` : ''}`,
+      margin,
+      y,
+      { width: contentWidth - 180 }
+    );
+    y += 14;
+  }
+
+  y += 8;
+  const tableLeft = margin;
+  const tableWidth = contentWidth;
+  const colSno = tableLeft;
+  const colDesc = tableLeft + 32;
+  const colQty = tableLeft + 290;
+  const colRate = tableLeft + 340;
+  const colAmount = tableLeft + 400;
+  const colDescW = colQty - colDesc - 6;
+  const colQtyW = colRate - colQty - 4;
+  const colRateW = colAmount - colRate - 4;
+  const colAmountW = tableLeft + tableWidth - colAmount;
+
+  doc.fontSize(8).fillColor('#FFFFFF');
+  doc.rect(tableLeft, y, tableWidth, 18).fill('#1A4FA0');
+  doc.fillColor('#FFFFFF');
+  doc.text('S.No', colSno + 4, y + 5, { width: 26 });
+  doc.text('Description', colDesc + 2, y + 5, { width: colDescW });
+  doc.text('Qty', colQty + 2, y + 5, { width: colQtyW });
+  doc.text('Rate (Rs.)', colRate + 2, y + 5, { width: colRateW });
+  doc.text('Amount (Rs.)', colAmount + 2, y + 5, { width: colAmountW });
+  y += 22;
+
+  const items = po.lineItems?.length
+    ? po.lineItems
+    : [{ description: 'As per indent', quantity: 1, rate: po.amount, amount: po.amount }];
+
+  let subtotal = 0;
+  items.forEach((item, idx) => {
+    const desc = item.description || '—';
+    const rowH = Math.max(16, doc.heightOfString(desc, { width: colDescW }) + 4);
+
+    if (y + rowH > 720) {
+      doc.addPage();
+      y = margin;
+    }
+
+    doc.fontSize(8).fillColor('#0F172A');
+    doc.text(String(idx + 1), colSno + 4, y, { width: 26 });
+    doc.text(desc, colDesc + 2, y, { width: colDescW });
+    doc.text(String(item.quantity ?? '—'), colQty + 2, y, { width: colQtyW });
+    doc.text((item.rate ?? 0).toLocaleString('en-IN'), colRate + 2, y, { width: colRateW });
+    doc.text((item.amount ?? 0).toLocaleString('en-IN'), colAmount + 2, y, { width: colAmountW });
+    subtotal += item.amount || 0;
+    y += rowH;
+  });
+
+  const gstBase = subtotal || po.amount || 0;
+  const gst = Math.round(gstBase * 0.18);
+  const grandTotal = gstBase + gst;
+
+  y += 10;
+  const labelX = colRate - 20;
+  const labelW = colAmount - labelX - 8;
+  const valueX = colAmount;
+  const valueW = tableLeft + tableWidth - colAmount;
+  const rowGap = 16;
+
+  doc.fontSize(9).fillColor('#0F172A').font('Helvetica');
+  doc.text('Sub Total:', labelX, y, { width: labelW, align: 'right' });
+  doc.text(gstBase.toLocaleString('en-IN'), valueX, y, { width: valueW, align: 'right' });
+  y += rowGap;
+
+  doc.text('Add GST @ 18%:', labelX, y, { width: labelW, align: 'right' });
+  doc.text(gst.toLocaleString('en-IN'), valueX, y, { width: valueW, align: 'right' });
+  y += rowGap;
+
+  doc.font('Helvetica-Bold');
+  doc.text('Grand Total:', labelX, y, { width: labelW, align: 'right' });
+  doc.text(grandTotal.toLocaleString('en-IN'), valueX, y, { width: valueW, align: 'right' });
+  doc.font('Helvetica');
+  y += rowGap + 8;
+
+  if (y > 640) {
+    doc.addPage();
+    y = margin;
+  }
+
+  doc.fontSize(9).fillColor('#1A4FA0').text('Terms & Conditions', margin, y);
+  y += 14;
+  const terms = [...DEFAULT_PO_TERMS];
+  if (po.paymentTerms && !terms.some((t) => t.includes(po.paymentTerms))) {
+    terms.push(`Payment: ${po.paymentTerms}`);
+  }
+  terms.forEach((term, i) => {
+    const lineH = doc.heightOfString(`${i + 1}. ${term}`, { width: contentWidth });
+    if (y + lineH > 700) {
+      doc.addPage();
+      y = margin;
+    }
+    doc.fontSize(8).fillColor('#334155').text(`${i + 1}. ${term}`, margin, y, { width: contentWidth });
+    y += lineH + 4;
+  });
+
+  y += 12;
+  if (y > 620) {
+    doc.addPage();
+    y = margin;
+  }
+
+  const footerColW = 168;
+  const footerGap = 8;
+  const buyerX = margin;
+  const consigneeX = margin + footerColW + footerGap;
+  const signX = margin + (footerColW + footerGap) * 2;
+
+  doc.fontSize(8).fillColor('#1A4FA0').text("BUYER'S ADDRESS", buyerX, y);
+  doc.fontSize(8).fillColor('#1A4FA0').text('CONSIGNEE ADDRESS', consigneeX, y);
+  doc.fontSize(8).fillColor('#1A4FA0').text('For BEKEM INFRA PROJECTS PVT. LTD.', signX, y, {
+    width: footerColW,
+  });
+  y += 12;
+
+  doc.fontSize(7).fillColor('#334155');
+  const buyerText = po.billingAddress || '—';
+  const consigneeText = po.deliveryAddress || '—';
+  const buyerH = doc.heightOfString(buyerText, { width: footerColW });
+  const consigneeH = doc.heightOfString(consigneeText, { width: footerColW });
+  doc.text(buyerText, buyerX, y, { width: footerColW, lineGap: 2 });
+  doc.text(consigneeText, consigneeX, y, { width: footerColW, lineGap: 2 });
+  doc.text('Authorised Signatory', signX, y + 36, { width: footerColW });
+
+  y += Math.max(buyerH, consigneeH, 48) + 8;
+  doc.y = y;
+}
+
+function generatePurchaseOrderPdf(po) {
   return (res) => {
     streamPdf(res, `${po.poNumber || po.draftRef || 'purchase-order'}.pdf`, (doc) => {
-      const pageWidth = 595;
-      const margin = 50;
-      const contentWidth = pageWidth - margin * 2;
-      const rightColX = 380;
-      const rightColW = 165;
-
-      const poNo = po.poNumber || po.draftRef || '—';
-      const poDate = po.createdAt
-        ? new Date(po.createdAt).toLocaleDateString('en-IN')
-        : new Date().toLocaleDateString('en-IN');
-
-      let y = margin;
-
-      doc.fontSize(16).fillColor('#1A4FA0').text('BEKEM INFRA PROJECTS PVT. LTD.', margin, y, {
-        width: contentWidth,
-        align: 'center',
-      });
-      y += 22;
-      doc.fontSize(14).fillColor('#0F172A').text('PURCHASE ORDER', margin, y, {
-        width: contentWidth,
-        align: 'center',
-      });
-      y += 28;
-
-      doc.fontSize(9).fillColor('#0F172A');
-      doc.text(`PO No.: ${poNo}`, rightColX, margin + 4, { width: rightColW, align: 'right' });
-      doc.text(`PO Date: ${poDate}`, rightColX, margin + 18, { width: rightColW, align: 'right' });
-      if (po.referenceNote) {
-        doc.text(`Reference: ${po.referenceNote}`, rightColX, margin + 32, {
-          width: rightColW,
-          align: 'right',
-        });
-      }
-
-      doc.fontSize(10).fillColor('#1A4FA0').text('To,', margin, y);
-      y += 14;
-      doc.fontSize(10).fillColor('#0F172A').text(po.vendor?.name || '—', margin, y, { width: contentWidth - 180 });
-      y += 14;
-
-      doc.fontSize(9).fillColor('#334155');
-      if (po.vendor?.address) {
-        const addrH = doc.heightOfString(po.vendor.address, { width: contentWidth - 180 });
-        doc.text(po.vendor.address, margin, y, { width: contentWidth - 180 });
-        y += addrH + 4;
-      }
-      if (po.vendor?.gstNumber) {
-        doc.text(`GST No.: ${po.vendor.gstNumber}`, margin, y);
-        y += 12;
-      }
-      if (po.vendor?.email) {
-        doc.text(`Email: ${po.vendor.email}`, margin, y);
-        y += 12;
-      }
-      if (po.vendor?.contactPerson) {
-        doc.text(
-          `Kind Attn.: ${po.vendor.contactPerson}${po.vendor.phone ? ` (${po.vendor.phone})` : ''}`,
-          margin,
-          y,
-          { width: contentWidth - 180 }
-        );
-        y += 14;
-      }
-
-      y += 8;
-      const tableLeft = margin;
-      const tableWidth = contentWidth;
-      const colSno = tableLeft;
-      const colDesc = tableLeft + 32;
-      const colQty = tableLeft + 290;
-      const colRate = tableLeft + 340;
-      const colAmount = tableLeft + 400;
-      const colDescW = colQty - colDesc - 6;
-      const colQtyW = colRate - colQty - 4;
-      const colRateW = colAmount - colRate - 4;
-      const colAmountW = tableLeft + tableWidth - colAmount;
-
-      doc.fontSize(8).fillColor('#FFFFFF');
-      doc.rect(tableLeft, y, tableWidth, 18).fill('#1A4FA0');
-      doc.fillColor('#FFFFFF');
-      doc.text('S.No', colSno + 4, y + 5, { width: 26 });
-      doc.text('Description', colDesc + 2, y + 5, { width: colDescW });
-      doc.text('Qty', colQty + 2, y + 5, { width: colQtyW });
-      doc.text('Rate (Rs.)', colRate + 2, y + 5, { width: colRateW });
-      doc.text('Amount (Rs.)', colAmount + 2, y + 5, { width: colAmountW });
-      y += 22;
-
-      const items = po.lineItems?.length
-        ? po.lineItems
-        : [{ description: 'As per indent', quantity: 1, rate: po.amount, amount: po.amount }];
-
-      let subtotal = 0;
-      items.forEach((item, idx) => {
-        const desc = item.description || '—';
-        const rowH = Math.max(16, doc.heightOfString(desc, { width: colDescW }) + 4);
-
-        if (y + rowH > 720) {
-          doc.addPage();
-          y = margin;
-        }
-
-        doc.fontSize(8).fillColor('#0F172A');
-        doc.text(String(idx + 1), colSno + 4, y, { width: 26 });
-        doc.text(desc, colDesc + 2, y, { width: colDescW });
-        doc.text(String(item.quantity ?? '—'), colQty + 2, y, { width: colQtyW });
-        doc.text((item.rate ?? 0).toLocaleString('en-IN'), colRate + 2, y, { width: colRateW });
-        doc.text((item.amount ?? 0).toLocaleString('en-IN'), colAmount + 2, y, { width: colAmountW });
-        subtotal += item.amount || 0;
-        y += rowH;
-      });
-
-      const gstBase = subtotal || po.amount || 0;
-      const gst = Math.round(gstBase * 0.18);
-      const grandTotal = gstBase + gst;
-
-      y += 10;
-      const labelX = colRate - 20;
-      const labelW = colAmount - labelX - 8;
-      const valueX = colAmount;
-      const valueW = tableLeft + tableWidth - colAmount;
-      const rowGap = 16;
-
-      doc.fontSize(9).fillColor('#0F172A').font('Helvetica');
-      doc.text('Sub Total:', labelX, y, { width: labelW, align: 'right' });
-      doc.text(gstBase.toLocaleString('en-IN'), valueX, y, { width: valueW, align: 'right' });
-      y += rowGap;
-
-      doc.text('Add GST @ 18%:', labelX, y, { width: labelW, align: 'right' });
-      doc.text(gst.toLocaleString('en-IN'), valueX, y, { width: valueW, align: 'right' });
-      y += rowGap;
-
-      doc.font('Helvetica-Bold');
-      doc.text('Grand Total:', labelX, y, { width: labelW, align: 'right' });
-      doc.text(grandTotal.toLocaleString('en-IN'), valueX, y, { width: valueW, align: 'right' });
-      doc.font('Helvetica');
-      y += rowGap + 8;
-
-      if (y > 640) {
-        doc.addPage();
-        y = margin;
-      }
-
-      doc.fontSize(9).fillColor('#1A4FA0').text('Terms & Conditions', margin, y);
-      y += 14;
-      const terms = [...DEFAULT_PO_TERMS];
-      if (po.paymentTerms && !terms.some((t) => t.includes(po.paymentTerms))) {
-        terms.push(`Payment: ${po.paymentTerms}`);
-      }
-      terms.forEach((term, i) => {
-        const lineH = doc.heightOfString(`${i + 1}. ${term}`, { width: contentWidth });
-        if (y + lineH > 700) {
-          doc.addPage();
-          y = margin;
-        }
-        doc.fontSize(8).fillColor('#334155').text(`${i + 1}. ${term}`, margin, y, { width: contentWidth });
-        y += lineH + 4;
-      });
-
-      y += 12;
-      if (y > 620) {
-        doc.addPage();
-        y = margin;
-      }
-
-      const footerColW = 168;
-      const footerGap = 8;
-      const buyerX = margin;
-      const consigneeX = margin + footerColW + footerGap;
-      const signX = margin + (footerColW + footerGap) * 2;
-
-      doc.fontSize(8).fillColor('#1A4FA0').text("BUYER'S ADDRESS", buyerX, y);
-      doc.fontSize(8).fillColor('#1A4FA0').text('CONSIGNEE ADDRESS', consigneeX, y);
-      doc.fontSize(8).fillColor('#1A4FA0').text('For BEKEM INFRA PROJECTS PVT. LTD.', signX, y, {
-        width: footerColW,
-      });
-      y += 12;
-
-      doc.fontSize(7).fillColor('#334155');
-      const buyerText = po.billingAddress || '—';
-      const consigneeText = po.deliveryAddress || '—';
-      const buyerH = doc.heightOfString(buyerText, { width: footerColW });
-      const consigneeH = doc.heightOfString(consigneeText, { width: footerColW });
-      doc.text(buyerText, buyerX, y, { width: footerColW, lineGap: 2 });
-      doc.text(consigneeText, consigneeX, y, { width: footerColW, lineGap: 2 });
-      doc.text('Authorised Signatory', signX, y + 36, { width: footerColW });
-
-      y += Math.max(buyerH, consigneeH, 48) + 8;
-      doc.y = y;
+      buildPurchaseOrderPdfContent(doc, po);
     });
   };
+}
+
+function generatePurchaseOrderPdfBuffer(po) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ margin: 50, size: 'A4' });
+    const chunks = [];
+    doc.on('data', (chunk) => chunks.push(chunk));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+    buildPurchaseOrderPdfContent(doc, po);
+    doc.end();
+  });
 }
 
 function generateBudgetPdf(rows, generatedAt) {
@@ -399,6 +414,7 @@ function generateMaterialIssuePdf(issue) {
 module.exports = {
   generateAuditLogPdf,
   generatePurchaseOrderPdf,
+  generatePurchaseOrderPdfBuffer,
   generateBudgetPdf,
   generateWorkOrderPdf,
   generateMaterialIssuePdf,

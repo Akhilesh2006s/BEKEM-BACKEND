@@ -17,7 +17,19 @@ const notificationService = require('../services/notificationService');
 const { authenticate } = require('../middleware/auth');
 const { requireCapability } = require('../middleware/rbac');
 const { validate } = require('../middleware/validate');
-const { generateGrnNumber } = require('../services/documentNumberService');
+const {
+  computeLineVariances,
+  getCumulativeReceivedByLine,
+  syncPoFulfillment,
+  canViewGrnVariance,
+} = require('../services/grnFulfillmentService');
+const {
+  allocateProjectGrnNumber,
+} = require('../services/grnCounterService');
+const {
+  computeGrnInvoiceValue,
+  validateGrnTransportFields,
+} = require('../services/poEditService');
 
 const router = express.Router();
 router.use(authenticate);
@@ -25,13 +37,11 @@ router.use(authenticate);
 router.get('/pending-purchase-orders', async (req, res, next) => {
   try {
     const { DeliveryVerification } = require('../models');
-    const receivedPoIds = await GoodsReceiptNote.distinct('purchaseOrderId', {
-      status: { $in: ['RECEIVED', 'PARTIALLY_RECEIVED'] },
-    });
     const verifiedPoIds = await DeliveryVerification.distinct('purchaseOrderId');
     const orders = await PurchaseOrder.find({
       status: 'APPROVED',
-      _id: { $in: verifiedPoIds, $nin: receivedPoIds },
+      fulfillmentStatus: { $ne: 'closed_complete' },
+      _id: { $in: verifiedPoIds },
     })
       .sort({ createdAt: -1 })
       .populate([
@@ -80,12 +90,17 @@ router.post(
     body('items.*.materialId').isMongoId(),
     body('items.*.quantityOrdered').isFloat({ min: 0 }),
     body('items.*.quantityReceived').isFloat({ min: 0 }),
+    body('items.*.invoiceUnitPrice').optional().isFloat({ min: 0 }),
+    body('items.*.lineIndex').optional().isInt({ min: 0 }),
     body('items.*.lineStatus').optional().isIn(['RECEIVED', 'PARTIAL', 'REJECTED']),
     body('note').optional().trim(),
     body('remarks').optional().trim(),
     body('invoiceNo').optional().trim(),
+    body('invoiceValue').optional().isFloat({ min: 0 }),
     body('challanNo').optional().trim(),
     body('vehicleNo').optional().trim(),
+    body('vehicleNumber').optional().trim(),
+    body('ewayBillNumber').optional().trim(),
     body('driverName').optional().trim(),
     body('deliveryDate').optional().isISO8601(),
     body('saveDraft').optional().isBoolean(),
@@ -97,49 +112,43 @@ router.post(
   ],
   validate,
   async (req, res, next) => {
+    const { withIdempotency, sendIdempotent } = require('../services/idempotencyService');
     try {
+      const outcome = await withIdempotency(req, `grn:${req.body.purchaseOrderId}`, async () => {
       const po = await PurchaseOrder.findById(req.body.purchaseOrderId);
-      if (!po) return res.status(404).json({ statusCode: 404, message: 'PO not found' });
+      if (!po) return { statusCode: 404, body: { statusCode: 404, message: 'PO not found' } };
       if (po.status !== 'APPROVED') {
-        return res.status(400).json({ statusCode: 400, message: 'PO must be approved before receipt' });
+        return { statusCode: 400, body: { statusCode: 400, message: 'PO must be approved before receipt' } };
       }
 
       const { DeliveryVerification } = require('../models');
       const verification = await DeliveryVerification.findOne({ purchaseOrderId: po._id });
       if (!verification) {
-        return res.status(400).json({
+        return {
           statusCode: 400,
-          message: 'Store must verify physical delivery before GRN can be created',
-        });
+          body: { statusCode: 400, message: 'Store must verify physical delivery before GRN can be created' },
+        };
       }
 
-      const existingGrn = await GoodsReceiptNote.findOne({
-        purchaseOrderId: po._id,
-        status: { $in: ['RECEIVED', 'PARTIALLY_RECEIVED'] },
-      });
-      if (existingGrn) {
-        return res.status(400).json({
+      const existingComplete = po.fulfillmentStatus === 'closed_complete';
+      if (existingComplete) {
+        return {
           statusCode: 400,
-          message: 'This PO has already been fully received',
-        });
+          body: { statusCode: 400, message: 'This PO has already been fully received' },
+        };
       }
 
-      const pr = await PurchaseRequest.findById(po.purchaseRequestId);
-      const site =
-        (await Site.findOne({ projectId: pr?.projectId })) ||
-        (req.user.assignedSiteId ? await Site.findById(req.user.assignedSiteId) : null);
-      const siteId = site?._id || req.user.assignedSiteId;
-      if (!siteId) {
-        return res.status(400).json({ statusCode: 400, message: 'No site for stock update' });
-      }
-
-      const grnNumber = await generateGrnNumber();
-      const items = req.body.items.map((i) => ({
-        materialId: i.materialId,
-        quantityOrdered: i.quantityOrdered,
+      const cumulativeBefore = await getCumulativeReceivedByLine(po._id);
+      const linePayloads = req.body.items.map((i, idx) => ({
+        lineIndex: i.lineIndex != null ? Number(i.lineIndex) : idx,
         quantityReceived: i.quantityReceived,
-        lineStatus: i.lineStatus || (i.quantityReceived >= i.quantityOrdered ? 'RECEIVED' : 'PARTIAL'),
+        invoiceUnitPrice: i.invoiceUnitPrice,
       }));
+      const { items, isPartial, varianceLines } = computeLineVariances(
+        po,
+        linePayloads,
+        cumulativeBefore
+      );
 
       const totalReceived = items.reduce((s, i) => s + i.quantityReceived, 0);
       const allReceived = items.every((i) => i.lineStatus === 'RECEIVED');
@@ -153,11 +162,46 @@ router.post(
             ? 'RECEIVED'
             : 'PARTIALLY_RECEIVED';
 
-      const receiveType = req.body.receiveType || 'FULL';
+      const receiveType =
+        req.body.receiveType || (isPartial || status === 'PARTIALLY_RECEIVED' ? 'PARTIAL' : 'FULL');
       const remarks = req.body.remarks || req.body.note || '';
       const attachments = Array.isArray(req.body.attachments)
         ? req.body.attachments.filter((a) => a?.name)
         : [];
+
+      const pr = await PurchaseRequest.findById(po.purchaseRequestId);
+      const projectId = pr?.projectId?._id || pr?.projectId;
+      if (!projectId) {
+        return { statusCode: 400, body: { statusCode: 400, message: 'PO project not found for GRN numbering' } };
+      }
+
+      const invoiceValue =
+        req.body.invoiceValue != null
+          ? Number(req.body.invoiceValue)
+          : computeGrnInvoiceValue(items);
+
+      const transportErr = validateGrnTransportFields(invoiceValue, {
+        vehicleNo: req.body.vehicleNo,
+        vehicleNumber: req.body.vehicleNumber,
+        ewayBillNumber: req.body.ewayBillNumber,
+      });
+      if (transportErr) {
+        return {
+          statusCode: transportErr.statusCode,
+          body: { statusCode: transportErr.statusCode, message: transportErr.message },
+        };
+      }
+
+      const site =
+        (await Site.findOne({ projectId: pr?.projectId })) ||
+        (req.user.assignedSiteId ? await Site.findById(req.user.assignedSiteId) : null);
+      const siteId = site?._id || req.user.assignedSiteId;
+      if (!siteId) {
+        return { statusCode: 400, body: { statusCode: 400, message: 'No site for stock update' } };
+      }
+
+      const grnNumber = await allocateProjectGrnNumber(projectId);
+      const vehicleNo = (req.body.vehicleNo || req.body.vehicleNumber || '').trim();
 
       const grn = await GoodsReceiptNote.create({
         grnNumber,
@@ -167,9 +211,13 @@ router.post(
         receivedQuantity: totalReceived,
         status,
         receiveType,
+        isPartialGrn: isPartial,
+        varianceDetails: isPartial ? { lines: varianceLines } : null,
         invoiceNo: req.body.invoiceNo || '',
+        invoiceValue,
         challanNo: req.body.challanNo || '',
-        vehicleNo: req.body.vehicleNo || '',
+        vehicleNo,
+        ewayBillNumber: (req.body.ewayBillNumber || '').trim(),
         driverName: req.body.driverName || '',
         deliveryDate: req.body.deliveryDate ? new Date(req.body.deliveryDate) : new Date(),
         note: remarks,
@@ -203,11 +251,14 @@ router.post(
         }
       }
 
+      const fulfillment = await syncPoFulfillment(po, req.user._id);
+
       if (!saveDraft && pr?.materialRequestId && status !== 'REJECTED') {
         const mr = await MaterialRequest.findById(pr.materialRequestId);
         if (
           mr &&
-          ['CHAIRMAN_APPROVED', 'PO_CREATED', 'COORDINATOR_VERIFIED'].includes(mr.status)
+          fulfillment.fulfillmentStatus === 'closed_complete' &&
+          ['CHAIRMAN_APPROVED', 'PO_CREATED', 'COORDINATOR_VERIFIED', 'MATERIAL_RECEIVED'].includes(mr.status)
         ) {
           const fromStatus = mr.status;
           mr.status = 'MATERIAL_RECEIVED';
@@ -240,19 +291,26 @@ router.post(
       const populated = await GoodsReceiptNote.findById(grn._id)
         .populate('purchaseOrderId')
         .populate('items.materialId');
-      res.status(201).json({
-        data: {
-          id: populated._id.toString(),
-          grnNumber: populated.grnNumber,
-          status: populated.status,
-          items: populated.items.map((i) => ({
-            materialId: i.materialId._id.toString(),
-            materialName: i.materialId.name,
-            quantityReceived: i.quantityReceived,
-            lineStatus: i.lineStatus,
-          })),
-        },
+      const responseGrn = {
+        id: populated._id.toString(),
+        grnNumber: populated.grnNumber,
+        status: populated.status,
+        isPartialGrn: populated.isPartialGrn,
+        varianceDetails: canViewGrnVariance(req.user.role) ? populated.varianceDetails : null,
+        fulfillmentStatus: fulfillment.fulfillmentStatus,
+        items: populated.items.map((i) => ({
+          materialId: i.materialId._id.toString(),
+          materialName: i.materialId.name,
+          quantityReceived: i.quantityReceived,
+          lineStatus: i.lineStatus,
+          invoiceUnitPrice: canViewGrnVariance(req.user.role) ? i.invoiceUnitPrice : undefined,
+          qtyVariance: canViewGrnVariance(req.user.role) ? i.qtyVariance : undefined,
+          priceVariance: canViewGrnVariance(req.user.role) ? i.priceVariance : undefined,
+        })),
+      };
+      return { statusCode: 201, body: { data: responseGrn } };
       });
+      return sendIdempotent(res, outcome);
     } catch (err) {
       next(err);
     }

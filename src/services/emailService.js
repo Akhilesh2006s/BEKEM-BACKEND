@@ -17,7 +17,7 @@ function createTransport() {
   });
 }
 
-async function sendPoToVendor(po, vendor) {
+async function sendPoToVendor(po, vendor, { pdfBuffer } = {}) {
   if (!vendor?.email) {
     return { sent: false, reason: 'Vendor has no email address' };
   }
@@ -27,7 +27,7 @@ async function sendPoToVendor(po, vendor) {
   const text = [
     `Dear ${vendor.contactPerson || vendor.name},`,
     '',
-    `Please find our official Purchase Order ${poNo} for your action.`,
+    `Please find our official Purchase Order ${poNo} attached for your action.`,
     '',
     `Amount: Rs. ${(po.amount || 0).toLocaleString('en-IN')}`,
     `Payment terms: ${po.paymentTerms || 'As per PO'}`,
@@ -41,9 +41,22 @@ async function sendPoToVendor(po, vendor) {
     'Procurement Department',
   ].join('\n');
 
+  const attachments = pdfBuffer
+    ? [
+        {
+          filename: `${poNo.replace(/[/\\?%*:|"<>]/g, '-')}.pdf`,
+          content: pdfBuffer,
+          contentType: 'application/pdf',
+        },
+      ]
+    : [];
+
   const transport = createTransport();
   if (!transport) {
     console.log(`[PO EMAIL — dev mode] To: ${vendor.email}\nSubject: ${subject}\n${text}`);
+    if (pdfBuffer) {
+      console.log(`[PO EMAIL — dev mode] Attachment: ${attachments[0].filename} (${pdfBuffer.length} bytes)`);
+    }
     return { sent: true, mode: 'log', to: vendor.email };
   }
 
@@ -52,6 +65,7 @@ async function sendPoToVendor(po, vendor) {
     to: vendor.email,
     subject,
     text,
+    attachments,
   });
 
   return { sent: true, mode: 'smtp', to: vendor.email };

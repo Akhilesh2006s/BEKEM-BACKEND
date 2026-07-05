@@ -35,7 +35,7 @@ describe('Full chain integration', () => {
       .set('Authorization', `Bearer ${siteToken}`)
       .send({
         materialId: material._id.toString(),
-        quantityRequested: 10,
+        quantityRequested: 1,
         purpose: 'Integration test pour',
         requiredByDate: new Date(Date.now() + 7 * 86400000).toISOString(),
       });
@@ -43,17 +43,10 @@ describe('Full chain integration', () => {
     assert.strictEqual(createRes.status, 201);
     const mrId = createRes.body.data.id;
 
-    const allocRes = await request(app)
+    const forwardRes = await request(app)
       .post(`/api/material-requests/${mrId}/allocate`)
       .set('Authorization', `Bearer ${storeToken}`)
-      .send({ quantityAllocated: 10 });
-
-    assert.strictEqual(allocRes.status, 200, `Allocate failed: ${JSON.stringify(allocRes.body)}`);
-
-    const forwardRes = await request(app)
-      .post(`/api/material-requests/${mrId}/forward`)
-      .set('Authorization', `Bearer ${storeToken}`)
-      .send({ reason: 'Stock confirmed, forwarding to PM' });
+      .send({ decision: 'forward', remark: 'Stock confirmed, forwarding entire indent to PM' });
 
     assert.strictEqual(forwardRes.status, 200);
 
@@ -120,7 +113,6 @@ describe('Full chain integration', () => {
 
     const statuses = history.map((h) => h.toStatus);
     assert.ok(statuses.includes('PENDING_STORE'));
-    assert.ok(statuses.includes('ALLOCATED'));
     assert.ok(statuses.includes('FORWARDED_TO_PM'));
     assert.ok(statuses.includes('PM_APPROVED'));
     assert.ok(statuses.includes('PURCHASE_REQUESTED'));

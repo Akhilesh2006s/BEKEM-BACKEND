@@ -13,11 +13,36 @@ describe('Permission Matrix', () => {
     assert.ok(!caps.includes('ALLOCATE_MATERIAL_REQUEST'));
   });
 
-  it('Store Manager can allocate and forward but not create requests', () => {
+  it('Store Manager can allocate and forward but not create PO', () => {
     const caps = PERMISSION_MATRIX[UserRole.STORE_INCHARGE];
     assert.ok(caps.includes('ALLOCATE_MATERIAL_REQUEST'));
     assert.ok(caps.includes('FORWARD_MATERIAL_REQUEST'));
     assert.ok(!caps.includes('CREATE_MATERIAL_REQUEST'));
+    assert.ok(!caps.includes('CREATE_PO'));
+    assert.ok(!caps.includes('VERIFY_RECORDS'));
+    assert.ok(!caps.includes('FINAL_APPROVAL'));
+  });
+
+  it('Project Manager approves PR but cannot create or edit PO', () => {
+    const caps = PERMISSION_MATRIX[UserRole.PROJECT_MANAGER];
+    assert.ok(caps.includes('APPROVE_MATERIAL_REQUEST'));
+    assert.ok(caps.includes('CREATE_PURCHASE_REQUEST'));
+    assert.ok(!caps.includes('CREATE_PO'));
+    assert.ok(!caps.includes('VERIFY_RECORDS'));
+    assert.ok(!caps.includes('FINAL_APPROVAL'));
+  });
+
+  it('Chairman cannot create PO', () => {
+    const caps = PERMISSION_MATRIX[UserRole.CHAIRMAN];
+    assert.ok(!caps.includes('CREATE_PO'));
+    assert.ok(caps.includes('FINAL_APPROVAL'));
+  });
+
+  it('Site Manager has no PO capabilities', () => {
+    const caps = PERMISSION_MATRIX[UserRole.SITE_INCHARGE];
+    assert.ok(!caps.includes('CREATE_PO'));
+    assert.ok(!caps.includes('VERIFY_RECORDS'));
+    assert.ok(!caps.includes('FINAL_APPROVAL'));
   });
 
   it('Coordinator verifies POs but cannot final-approve', () => {

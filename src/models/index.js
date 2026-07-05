@@ -24,4 +24,10 @@ module.exports = {
   DeliveryVerification: require('./DeliveryVerification'),
   StockInventoryRecord: require('./StockInventoryRecord'),
   Incident: require('./Incident'),
+  Address: require('./Address'),
+  PoStatusTimeline: require('./PoStatusTimeline'),
+  DeliveryAlert: require('./DeliveryAlert'),
+  ProjectGrnCounter: require('./ProjectGrnCounter'),
+  MaterialCategory: require('./MaterialCategory'),
+  IdempotencyRecord: require('./IdempotencyRecord'),
 };

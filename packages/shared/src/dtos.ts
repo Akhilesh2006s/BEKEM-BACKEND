@@ -52,6 +52,124 @@ export interface ProjectDto {
   budgetTotal: number;
   budgetSpent: number;
   healthScore: number;
+  billingAddressId?: string | null;
+  billingAddress?: string | null;
+  hasProjectBillingAddress?: boolean;
+}
+
+export interface ExecutiveProjectSummaryDto {
+  id: string;
+  code: string;
+  name: string;
+  location: string;
+  status: string;
+  budgetTotal: number;
+  budgetSpent: number;
+  healthScore: number;
+  deployPct?: number | null;
+  openPoCount: number;
+  openPoValue: number;
+  openPrCount: number;
+  pendingIndentCount: number;
+}
+
+export interface PaginationMetaDto {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
+
+export interface ExecutiveDashboardDto {
+  projects: ExecutiveProjectSummaryDto[];
+  pagination?: PaginationMetaDto;
+  totals: {
+    projectCount: number;
+    openPoCount: number;
+    openPrCount: number;
+    pendingIndentCount: number;
+  };
+  registeredOfficeAddress: string;
+}
+
+export interface DashboardWidgetsDto {
+  role: string;
+  widgets: {
+    pendingPo: number;
+    pendingDeliveries: number;
+    pendingMaterialReceipt: number;
+    pendingApprovals: number;
+  };
+}
+
+export interface PoTimelineStageDto {
+  stage: string;
+  label: string;
+  reachedAt: string | null;
+  isCurrent: boolean;
+  isComplete: boolean;
+}
+
+export interface PoTimelineDto {
+  stages: PoTimelineStageDto[];
+  currentStage: string;
+}
+
+export interface PoGrnLineSummaryDto {
+  poLineId?: string;
+  description?: string;
+  orderedQty: number;
+  cumulativeReceived: number;
+  remainingQty: number;
+  isComplete: boolean;
+}
+
+export interface PoGrnListItemDto {
+  id: string;
+  grnNumber: string;
+  status: string;
+  receiveType: string;
+  isPartialGrn?: boolean;
+  varianceDetails?: { lines: Array<Record<string, unknown>> } | null;
+  invoiceNo?: string;
+  receivedAt: string;
+}
+
+export interface PoGrnsDto {
+  fulfillmentStatus: 'open_partial' | 'closed_complete';
+  lineSummary: PoGrnLineSummaryDto[];
+  grns: PoGrnListItemDto[];
+}
+
+export interface DeliveryAlertDto {
+  id: string;
+  poId?: string;
+  poNumber?: string;
+  expectedDeliveryDate?: string;
+  alertCreatedAt?: string;
+}
+
+export interface ChairmanDashboardExtrasDto {
+  suppliers: {
+    totalCount: number;
+    topVendors: Array<{ id: string; name: string; code?: string; poCount: number; isMsme?: boolean }>;
+    pagination?: PaginationMetaDto;
+  };
+  stock: {
+    skuCount: number;
+    siteLedgerCount: number;
+    shortages: number;
+    totalOnHand: number;
+    healthLabel: string;
+  };
+  analyticsPath: string;
+  enterpriseSummary: {
+    totalSpend: number;
+    openPoCount: number;
+    budgetDeployed: number;
+    budgetCap: number;
+    deployPct: number;
+  };
 }
 
 export interface SiteDto {
@@ -70,7 +188,31 @@ export interface MaterialDto {
   unit: string;
   grade?: string;
   category?: string;
+  categoryId?: string;
   hsnCode?: string;
+  gstRate?: number;
+}
+
+export interface MaterialCategoryDto {
+  id: string;
+  name: string;
+}
+
+export interface ProjectGrnCounterDto {
+  projectId: string;
+  nextNumber: number;
+  grnNumber: string;
+}
+
+export interface MaterialSearchResultDto {
+  id: string;
+  itemCode: string;
+  description: string;
+  name: string;
+  hsnCode: string;
+  gstRate: number;
+  unit: string;
+  category?: string;
 }
 
 export interface IndentLineItemDto {
@@ -82,6 +224,11 @@ export interface IndentLineItemDto {
   /** Unit on this indent line (may differ from catalog default). */
   unit?: string;
   material?: MaterialDto;
+  /** Stock comparison fields (server-computed). */
+  requestedQty?: number;
+  availableQty?: number;
+  existingStock?: number;
+  requiredQty?: number;
 }
 
 export interface CreateIndentDto {
@@ -115,7 +262,40 @@ export interface MaterialRequestDto {
   site?: SiteDto;
   project?: ProjectDto;
   requester?: { id: string; name: string };
+  estimatedValue?: number;
+  escalatedToHo?: boolean;
+  canFullyIssue?: boolean;
+  hasShortfall?: boolean;
 }
+
+export interface PmDailyCapDto {
+  dailyApprovedTotal: number;
+  dailyCap: number;
+  remaining: number;
+}
+
+export interface PmDashboardDto {
+  pendingRequests: MaterialRequestDto[];
+  approveQueue: MaterialRequestDto[];
+  purchaseRequests: MaterialRequestDto[];
+  notifications: NotificationDto[];
+  dailyCap: PmDailyCapDto;
+}
+
+export type IssueReason =
+  | 'emergency'
+  | 'already_approved'
+  | 'urgent_work'
+  | 'repeat_issue'
+  | 'other';
+
+export const ISSUE_REASON_LABELS: Record<IssueReason, string> = {
+  emergency: 'Emergency',
+  already_approved: 'Already approved',
+  urgent_work: 'Urgent work',
+  repeat_issue: 'Repeat issue',
+  other: 'Other',
+};
 
 export interface StatusHistoryDto {
   id: string;
@@ -199,16 +379,36 @@ export interface VendorDto {
   materialIds: string[];
   materials?: Array<{ id: string; code: string; name: string; unit: string }>;
   rating: number;
+  isMsme?: boolean;
+  msmeNumber?: string;
+  msmeCertificateUrl?: string;
+  panNumber?: string;
+  bankName?: string;
+  bankAccountNumber?: string;
+  ifscCode?: string;
+}
+
+export interface MsmeCertificateUploadDto {
+  fileName: string;
+  mimeType: string;
+  dataBase64: string;
 }
 
 export interface CreateVendorDto {
   name: string;
+  isMsme: boolean;
   code?: string;
   address?: string;
   gstNumber?: string;
+  panNumber?: string;
   email?: string;
   contactPerson?: string;
   phone?: string;
+  bankName?: string;
+  bankAccountNumber?: string;
+  ifscCode?: string;
+  msmeNumber?: string;
+  msmeCertificate?: MsmeCertificateUploadDto;
   category?: string;
   suppliedCategories?: string[];
   materialIds?: string[];
@@ -242,12 +442,16 @@ export interface PoLineItemDto {
   id?: string;
   description: string;
   materialId?: string;
+  itemCode?: string;
   hsnCode?: string;
   quantity: number;
   rate: number;
   gstPercent?: number;
   amount: number;
 }
+
+export type BillingAddressType = 'registered_office' | 'project_billing';
+export type DeliveryAddressType = 'site' | 'workshop' | 'global' | 'other';
 
 export interface PurchaseOrderDto {
   id: string;
@@ -263,11 +467,21 @@ export interface PurchaseOrderDto {
   amount: number;
   paymentTerms: string;
   billingAddress?: string;
+  billingAddressType?: BillingAddressType;
   deliveryAddress?: string;
+  deliveryAddressType?: DeliveryAddressType;
+  deliveryAddressOtherText?: string;
   referenceNote?: string;
   lineItems?: PoLineItemDto[];
   status: string;
+  fulfillmentStatus?: 'open_partial' | 'closed_complete';
+  expectedDeliveryDate?: string | null;
   approvalRoutingNote?: string;
+  emailSentAt?: string | null;
+  emailStatus?: 'pending' | 'queued' | 'sent' | 'failed' | 'skipped';
+  approvedAsChairmanOverride?: boolean;
+  overrideRemark?: string;
+  finalApprovedAt?: string | null;
   createdAt: string;
   vendor?: VendorDto;
   purchaseRequest?: PurchaseRequestDto;
@@ -291,6 +505,33 @@ export interface RejectMaterialRequestDto {
 export interface VerifyPurchaseOrderDto {
   action: 'APPROVE' | 'RETURN' | 'CLARIFICATION';
   note?: string;
+}
+
+export interface PoApprovalHistoryEntryDto {
+  id: string;
+  fromStatus: string | null;
+  toStatus: string;
+  note: string;
+  timestamp: string;
+  actorName: string;
+  actorRole: string | null;
+  isChairmanOverride: boolean;
+  overrideRemark: string | null;
+}
+
+export interface PoApprovalHistoryDto {
+  data: PoApprovalHistoryEntryDto[];
+  meta: {
+    approvedAsChairmanOverride: boolean;
+    overrideRemark: string | null;
+    finalApprovedAt: string | null;
+    emailStatus: string;
+    emailSentAt: string | null;
+  };
+}
+
+export interface PoApproveOverrideDto {
+  remark: string;
 }
 
 export interface CreatePurchaseOrderWizardDto {
@@ -362,6 +603,7 @@ export interface ChairmanKpiDto {
     note: string;
   };
   projectBreakdown?: ChairmanProjectBreakdownDto[];
+  projectPagination?: PaginationMetaDto;
   sparklines: {
     budget: number[];
     approvals: number[];
@@ -407,6 +649,8 @@ export interface GlobalSearchDto {
   workOrders: SearchResultItemDto[];
   vendors: SearchResultItemDto[];
   projects: SearchResultItemDto[];
+  grns: SearchResultItemDto[];
+  branchTransfers: SearchResultItemDto[];
 }
 
 export interface TallySyncStatusDto {
@@ -572,6 +816,59 @@ export interface CertifyWorkOrderDto {
   evidenceNote?: string;
 }
 
+export interface BranchTransferItemDto {
+  materialId?: string;
+  materialName?: string;
+  quantity: number;
+  quantityReceived?: number;
+}
+
+export interface BranchTransferDto {
+  id: string;
+  transferNumber: string;
+  status: string;
+  fromProjectId?: string;
+  toProjectId?: string;
+  fromProject?: string;
+  toProject?: string;
+  fromProjectName?: string;
+  toProjectName?: string;
+  materialRequestId?: string;
+  coordinatorDecision?: string | null;
+  itemCount: number;
+  items?: BranchTransferItemDto[];
+  note?: string;
+  rejectionNote?: string;
+  requestedBy?: string;
+  requestedByUserId?: string;
+  pmApprovedBy?: string;
+  pmApprovedAt?: string;
+  coordinatorDecidedBy?: string;
+  coordinatorDecidedAt?: string;
+  transferredAt?: string;
+  createdAt?: string;
+  canPmApprove?: boolean;
+  canPmReject?: boolean;
+  canCoordinatorDecide?: boolean;
+  canExecute?: boolean;
+}
+
+export interface CreateBranchTransferDto {
+  fromProjectId: string;
+  toProjectId?: string;
+  items: Array<{ materialId: string; quantity: number }>;
+  note?: string;
+  materialRequestId?: string;
+}
+
+export interface CoordinatorDecideBranchTransferDto {
+  decision: 'transfer' | 'raise_po_instead';
+  note?: string;
+  fromProjectId?: string;
+  toProjectId?: string;
+  items?: Array<{ materialId: string; quantity: number }>;
+}
+
 export interface IncidentDto {
   id: string;
   incidentNumber: string;
@@ -651,6 +948,7 @@ export interface UpdateMaterialDto {
   description?: string;
   grade?: string;
   category?: string;
+  categoryId?: string;
   hsnCode?: string;
 }
 
@@ -661,6 +959,7 @@ export interface CreateMaterialDto {
   description?: string;
   grade?: string;
   category?: string;
+  categoryId?: string;
   hsnCode?: string;
   siteId?: string;
   initialQuantity?: number;

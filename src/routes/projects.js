@@ -18,7 +18,7 @@ const router = express.Router();
 
 router.use(authenticate);
 
-function serializeProject(p) {
+function serializeProject(p, billingAddress) {
   return {
     id: p._id.toString(),
     code: p.code,
@@ -30,8 +30,21 @@ function serializeProject(p) {
     budgetTotal: p.budgetTotal,
     budgetSpent: p.budgetSpent,
     healthScore: p.healthScore,
+    billingAddressId: p.billingAddressId?.toString?.() || p.billingAddressId || null,
+    billingAddress: billingAddress || null,
+    hasProjectBillingAddress: !!billingAddress,
   };
 }
+
+router.get('/search', async (req, res, next) => {
+  try {
+    const { searchProjects } = require('../services/searchService');
+    const data = await searchProjects(req.query.q, req.user);
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+});
 
 router.get('/', async (req, res, next) => {
   try {
@@ -86,7 +99,7 @@ router.post(
           : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
         budgetTotal: req.body.budgetTotal || 0,
         budgetSpent: 0,
-        healthScore: 85,
+        healthScore: 100,
       });
       await attachProjectToAllProjectsRoles(project._id);
       res.status(201).json({ data: serializeProject(project) });
@@ -95,6 +108,41 @@ router.post(
     }
   }
 );
+
+router.get('/:id/grn-counter', param('id').isMongoId(), validate, async (req, res, next) => {
+  try {
+    const { peekNextProjectGrnNumber } = require('../services/grnCounterService');
+    const project = await Project.findById(req.params.id);
+    if (!project) return res.status(404).json({ statusCode: 404, message: 'Not found' });
+    const preview = await peekNextProjectGrnNumber(project._id);
+    res.json({
+      data: {
+        projectId: project._id.toString(),
+        nextNumber: preview.nextNumber,
+        grnNumber: preview.grnNumber,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/:id/billing-address', param('id').isMongoId(), validate, async (req, res, next) => {
+  try {
+    const project = await Project.findById(req.params.id).populate('billingAddressId');
+    if (!project) return res.status(404).json({ statusCode: 404, message: 'Not found' });
+    const addr = project.billingAddressId;
+    res.json({
+      data: {
+        hasProjectBillingAddress: !!addr?.lines,
+        billingAddress: addr?.lines || null,
+        registeredOfficeAddress: require('../constants/bekemAddresses').BEKEM_BUYER_ADDRESS,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
 
 router.get('/:id/detail', async (req, res, next) => {
   try {

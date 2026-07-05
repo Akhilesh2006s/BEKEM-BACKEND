@@ -6,13 +6,49 @@ const { authenticate } = require('../middleware/auth');
 const { requireCapability, requireRoles } = require('../middleware/rbac');
 const { requireFinalApproval } = require('../middleware/approvalAuth');
 const { validate } = require('../middleware/validate');
+const {
+  rejectStoreSiteForWorkOrders,
+  assertCanAccessProject,
+  seesAllProjects,
+} = require('../middleware/projectScope');
 const statusHistoryService = require('../services/statusHistoryService');
 const notificationService = require('../services/notificationService');
 const workOrderService = require('../services/workOrderService');
+const { userManagesProject } = require('../services/branchTransferService');
 const { serializeWorkOrder } = require('../utils/serializeWorkOrder');
+const { handleIdempotent } = require('../utils/idempotentHandler');
+
+const PM_APPROVED_STATUSES = [
+  'EXECUTIVE_PENDING',
+  'COORDINATOR_PENDING',
+  'CHAIRMAN_PENDING',
+  'PENDING_ACCEPTANCE',
+  'ACCEPTED',
+  'CLOSED',
+];
+const EXECUTIVE_APPROVED_STATUSES = [
+  'COORDINATOR_PENDING',
+  'CHAIRMAN_PENDING',
+  'PENDING_ACCEPTANCE',
+  'ACCEPTED',
+  'CLOSED',
+];
+const COORDINATOR_VERIFIED_STATUSES = [
+  'CHAIRMAN_PENDING',
+  'PENDING_ACCEPTANCE',
+  'ACCEPTED',
+  'CLOSED',
+];
+const CHAIRMAN_APPROVED_STATUSES = ['PENDING_ACCEPTANCE', 'ACCEPTED', 'CLOSED'];
+
+async function woResponse(woId, statusCode = 200) {
+  const populated = await WorkOrder.findById(woId).populate(woPopulate);
+  return { statusCode, body: { data: serializeWorkOrder(populated) } };
+}
 
 const router = express.Router();
 router.use(authenticate);
+router.use(rejectStoreSiteForWorkOrders);
 
 const woPopulate = [
   { path: 'vendorId' },
@@ -30,42 +66,41 @@ const woPopulate = [
   { path: 'certifications.certifiedByUserId', select: 'name' },
 ];
 
+function workOrderListFilter(user, query) {
+  const { status, queue, projectId } = query;
+  const filter = {};
+
+  if (queue === 'pm') {
+    filter.status = 'PM_PENDING';
+    if (!seesAllProjects(user.role)) {
+      filter.projectId = { $in: user.assignedProjectIds || [] };
+    }
+  } else if (queue === 'executive') {
+    filter.status = 'EXECUTIVE_PENDING';
+  } else if (queue === 'coordinator') {
+    filter.status = 'COORDINATOR_PENDING';
+  } else if (queue === 'chairman') {
+    filter.status = 'CHAIRMAN_PENDING';
+  } else if (queue === 'acceptance') {
+    filter.status = 'PENDING_ACCEPTANCE';
+  } else if (status) {
+    filter.status = status;
+  }
+
+  if (!seesAllProjects(user.role)) {
+    if (user.role === UserRole.PROJECT_MANAGER) {
+      filter.projectId = filter.projectId || { $in: user.assignedProjectIds || [] };
+    }
+  } else if (projectId) {
+    filter.projectId = projectId;
+  }
+
+  return filter;
+}
+
 router.get('/', async (req, res, next) => {
   try {
-    const { status, queue, projectId } = req.query;
-    const filter = {};
-
-    if (queue === 'coordinator') {
-      filter.status = { $in: ['COORDINATOR_PENDING', 'CHAIRMAN_PENDING'] };
-    } else if (queue === 'chairman') {
-      filter.status = 'CHAIRMAN_PENDING';
-    } else if (queue === 'executive') {
-      filter.status = { $in: ['PENDING_ACCEPTANCE', 'DRAFT'] };
-    } else if (queue === 'store') {
-      filter.status = { $in: ['ACCEPTED', 'IN_PROGRESS'] };
-    } else if (queue === 'pm') {
-      filter.status = { $in: ['ACCEPTED', 'IN_PROGRESS'] };
-      if (projectId) filter.projectId = projectId;
-      else if (req.user.role === UserRole.PROJECT_MANAGER && req.user.assignedProjectIds?.length) {
-        filter.projectId = { $in: req.user.assignedProjectIds };
-      }
-    } else if (queue === 'site') {
-      filter.status = { $in: ['ACCEPTED', 'IN_PROGRESS'] };
-      if (req.user.assignedSiteId) filter.siteId = req.user.assignedSiteId;
-    } else if (status) {
-      filter.status = status;
-    }
-
-    if (req.user.role === UserRole.PROJECT_MANAGER && !queue && !status) {
-      filter.projectId = { $in: req.user.assignedProjectIds || [] };
-    }
-    if (req.user.role === UserRole.SITE_INCHARGE && req.user.assignedSiteId && !queue) {
-      filter.siteId = req.user.assignedSiteId;
-    }
-    if (req.user.role === UserRole.STORE_INCHARGE && req.user.assignedSiteId && queue !== 'store') {
-      filter.siteId = req.user.assignedSiteId;
-    }
-
+    const filter = workOrderListFilter(req.user, req.query);
     const orders = await WorkOrder.find(filter).sort({ createdAt: -1 }).populate(woPopulate);
     res.json({ data: orders.map(serializeWorkOrder) });
   } catch (err) {
@@ -77,8 +112,10 @@ router.get('/:id', param('id').isMongoId(), validate, async (req, res, next) => 
   try {
     const wo = await WorkOrder.findById(req.params.id).populate(woPopulate);
     if (!wo) return res.status(404).json({ statusCode: 404, message: 'Not found' });
+    assertCanAccessProject(req.user, wo.projectId?._id || wo.projectId);
     res.json({ data: serializeWorkOrder(wo) });
   } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
     next(err);
   }
 });
@@ -95,7 +132,7 @@ router.post(
   ],
   validate,
   async (req, res, next) => {
-    try {
+    return handleIdempotent(req, res, `wo-create:${req.body.purchaseOrderId}`, async () => {
       const wo = await workOrderService.createFromPurchaseOrder({
         purchaseOrderId: req.body.purchaseOrderId,
         scope: req.body.scope,
@@ -108,18 +145,62 @@ router.post(
       req.auditEntityType = 'WorkOrder';
       req.auditEntityId = wo._id;
 
-      const populated = await WorkOrder.findById(wo._id).populate(woPopulate);
-      res.status(201).json({ data: serializeWorkOrder(populated) });
-    } catch (err) {
-      if (err.statusCode) return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
-      next(err);
-    }
+      return woResponse(wo._id, 201);
+    }, next);
   }
 );
 
 router.post(
-  '/:id/verify',
-  requireCapability('VERIFY_RECORDS'),
+  '/:id/pm-approve',
+  requireCapability('APPROVE_MATERIAL_REQUEST'),
+  [param('id').isMongoId(), body('note').optional().trim()],
+  validate,
+  async (req, res, next) => {
+    return handleIdempotent(req, res, `wo-pm-approve:${req.params.id}`, async () => {
+      const wo = await WorkOrder.findById(req.params.id);
+      if (!wo) return { statusCode: 404, body: { statusCode: 404, message: 'Not found' } };
+      assertCanAccessProject(req.user, wo.projectId);
+      if (wo.status !== 'PM_PENDING') {
+        if (PM_APPROVED_STATUSES.includes(wo.status)) return woResponse(wo._id);
+        return { statusCode: 400, body: { statusCode: 400, message: 'Work order not awaiting PM approval' } };
+      }
+      if (!userManagesProject(req.user, wo.projectId)) {
+        return { statusCode: 403, body: { statusCode: 403, message: 'Only assigned project PM can approve' } };
+      }
+
+      const fromStatus = wo.status;
+      wo.status = 'EXECUTIVE_PENDING';
+      wo.pmApprovedByUserId = req.user._id;
+      wo.pmApprovedAt = new Date();
+      await wo.save();
+
+      await statusHistoryService.record(
+        'WorkOrder',
+        wo._id,
+        fromStatus,
+        wo.status,
+        req.user._id,
+        req.body.note || 'PM approved work order'
+      );
+
+      const executives = await User.find({ role: UserRole.EXECUTIVE });
+      for (const e of executives) {
+        await notificationService.notifyUser(e._id, {
+          title: 'Work order pending executive review',
+          body: `${wo.woNumber} requires executive review.`,
+          relatedEntityType: 'WorkOrder',
+          relatedEntityId: wo._id,
+        });
+      }
+
+      return woResponse(wo._id);
+    }, next);
+  }
+);
+
+router.post(
+  '/:id/executive-review',
+  requireCapability('CREATE_WORK_ORDER'),
   [
     param('id').isMongoId(),
     body('action').isIn(['APPROVE', 'RETURN']),
@@ -127,16 +208,21 @@ router.post(
   ],
   validate,
   async (req, res, next) => {
-    try {
+    return handleIdempotent(req, res, `wo-executive-review:${req.params.id}:${req.body.action}`, async () => {
       const wo = await WorkOrder.findById(req.params.id);
-      if (!wo) return res.status(404).json({ statusCode: 404, message: 'Not found' });
-      if (wo.status !== 'COORDINATOR_PENDING') {
-        return res.status(400).json({ statusCode: 400, message: 'Work order not pending verification' });
+      if (!wo) return { statusCode: 404, body: { statusCode: 404, message: 'Not found' } };
+      if (wo.status !== 'EXECUTIVE_PENDING') {
+        if (req.body.action === 'APPROVE' && EXECUTIVE_APPROVED_STATUSES.includes(wo.status)) {
+          return woResponse(wo._id);
+        }
+        return { statusCode: 400, body: { statusCode: 400, message: 'Work order not awaiting executive review' } };
       }
 
       const fromStatus = wo.status;
       if (req.body.action === 'APPROVE') {
-        wo.status = 'PENDING_ACCEPTANCE';
+        wo.status = 'COORDINATOR_PENDING';
+        wo.executiveReviewedByUserId = req.user._id;
+        wo.executiveReviewedAt = new Date();
       } else {
         wo.status = 'DRAFT';
       }
@@ -152,11 +238,67 @@ router.post(
       );
 
       if (req.body.action === 'APPROVE') {
-        const executives = await User.find({ role: UserRole.EXECUTIVE });
-        for (const e of executives) {
-          await notificationService.notifyUser(e._id, {
-            title: 'Work order approved',
-            body: `${wo.woNumber} is ready for contractor acceptance.`,
+        const coordinators = await User.find({ role: UserRole.COORDINATOR });
+        for (const c of coordinators) {
+          await notificationService.notifyUser(c._id, {
+            title: 'Work order pending verification',
+            body: `${wo.woNumber} requires coordinator verification.`,
+            relatedEntityType: 'WorkOrder',
+            relatedEntityId: wo._id,
+          });
+        }
+      }
+
+      return woResponse(wo._id);
+    }, next);
+  }
+);
+
+router.post(
+  '/:id/verify',
+  requireCapability('VERIFY_RECORDS'),
+  [
+    param('id').isMongoId(),
+    body('action').isIn(['APPROVE', 'RETURN']),
+    body('note').optional().trim(),
+  ],
+  validate,
+  async (req, res, next) => {
+    return handleIdempotent(req, res, `wo-verify:${req.params.id}:${req.body.action}`, async () => {
+      const wo = await WorkOrder.findById(req.params.id);
+      if (!wo) return { statusCode: 404, body: { statusCode: 404, message: 'Not found' } };
+      if (wo.status !== 'COORDINATOR_PENDING') {
+        if (req.body.action === 'APPROVE' && COORDINATOR_VERIFIED_STATUSES.includes(wo.status)) {
+          return woResponse(wo._id);
+        }
+        return { statusCode: 400, body: { statusCode: 400, message: 'Work order not pending verification' } };
+      }
+
+      const fromStatus = wo.status;
+      if (req.body.action === 'APPROVE') {
+        wo.status = 'CHAIRMAN_PENDING';
+        wo.coordinatorVerifiedByUserId = req.user._id;
+        wo.coordinatorVerifiedAt = new Date();
+      } else {
+        wo.status = 'EXECUTIVE_PENDING';
+      }
+      await wo.save();
+
+      await statusHistoryService.record(
+        'WorkOrder',
+        wo._id,
+        fromStatus,
+        wo.status,
+        req.user._id,
+        req.body.note || req.body.action
+      );
+
+      if (req.body.action === 'APPROVE') {
+        const chairmen = await User.find({ role: UserRole.CHAIRMAN });
+        for (const c of chairmen) {
+          await notificationService.notifyUser(c._id, {
+            title: 'Work order awaiting final approval',
+            body: `${wo.woNumber} requires chairman approval.`,
             relatedEntityType: 'WorkOrder',
             relatedEntityId: wo._id,
           });
@@ -166,11 +308,8 @@ router.post(
       req.auditEntityType = 'WorkOrder';
       req.auditEntityId = wo._id;
 
-      const populated = await WorkOrder.findById(wo._id).populate(woPopulate);
-      res.json({ data: serializeWorkOrder(populated) });
-    } catch (err) {
-      next(err);
-    }
+      return woResponse(wo._id);
+    }, next);
   }
 );
 
@@ -180,15 +319,18 @@ router.post(
   [param('id').isMongoId(), body('note').optional().trim()],
   validate,
   async (req, res, next) => {
-    try {
+    return handleIdempotent(req, res, `wo-chairman-approve:${req.params.id}`, async () => {
       const wo = await WorkOrder.findById(req.params.id);
-      if (!wo) return res.status(404).json({ statusCode: 404, message: 'Not found' });
+      if (!wo) return { statusCode: 404, body: { statusCode: 404, message: 'Not found' } };
       if (wo.status !== 'CHAIRMAN_PENDING') {
-        return res.status(400).json({ statusCode: 400, message: 'Work order not awaiting chairman approval' });
+        if (CHAIRMAN_APPROVED_STATUSES.includes(wo.status)) return woResponse(wo._id);
+        return { statusCode: 400, body: { statusCode: 400, message: 'Work order not awaiting chairman approval' } };
       }
 
       const fromStatus = wo.status;
       wo.status = 'PENDING_ACCEPTANCE';
+      wo.chairmanApprovedByUserId = req.user._id;
+      wo.chairmanApprovedAt = new Date();
       await wo.save();
 
       await statusHistoryService.record(
@@ -210,11 +352,8 @@ router.post(
         });
       }
 
-      const populated = await WorkOrder.findById(wo._id).populate(woPopulate);
-      res.json({ data: serializeWorkOrder(populated) });
-    } catch (err) {
-      next(err);
-    }
+      return woResponse(wo._id);
+    }, next);
   }
 );
 
@@ -319,92 +458,6 @@ router.post(
 );
 
 router.post(
-  '/:id/issue-material',
-  requireCapability('ISSUE_WO_MATERIAL'),
-  [
-    param('id').isMongoId(),
-    body('materialId').isMongoId(),
-    body('quantity').isFloat({ min: 0.01 }),
-  ],
-  validate,
-  async (req, res, next) => {
-    try {
-      const wo = await workOrderService.issueMaterial({
-        workOrderId: req.params.id,
-        materialId: req.body.materialId,
-        quantity: req.body.quantity,
-        actorUserId: req.user._id,
-        siteId: req.user.assignedSiteId,
-      });
-
-      const populated = await WorkOrder.findById(wo._id).populate(woPopulate);
-      res.json({ data: serializeWorkOrder(populated) });
-    } catch (err) {
-      if (err.statusCode) return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
-      next(err);
-    }
-  }
-);
-
-router.post(
-  '/:id/certify',
-  requireCapability('CERTIFY_WO_WORK'),
-  [
-    param('id').isMongoId(),
-    body('quantity').isFloat({ min: 0.01 }),
-    body('note').trim().notEmpty(),
-    body('evidenceNote').optional().trim(),
-  ],
-  validate,
-  async (req, res, next) => {
-    try {
-      const wo = await workOrderService.certifyWork({
-        workOrderId: req.params.id,
-        quantity: req.body.quantity,
-        note: req.body.note,
-        evidenceNote: req.body.evidenceNote,
-        actorUserId: req.user._id,
-      });
-
-      const populated = await WorkOrder.findById(wo._id).populate(woPopulate);
-      res.json({ data: serializeWorkOrder(populated) });
-    } catch (err) {
-      if (err.statusCode) return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
-      next(err);
-    }
-  }
-);
-
-router.post(
-  '/:id/certifications/:certId/verify',
-  requireCapability('TRACK_WO_PROGRESS'),
-  [
-    param('id').isMongoId(),
-    param('certId').isMongoId(),
-    body('action').isIn(['VERIFY', 'REJECT']),
-    body('pmNote').optional().trim(),
-  ],
-  validate,
-  async (req, res, next) => {
-    try {
-      const wo = await workOrderService.verifyCertification({
-        workOrderId: req.params.id,
-        certificationId: req.params.certId,
-        action: req.body.action,
-        pmNote: req.body.pmNote,
-        actorUserId: req.user._id,
-      });
-
-      const populated = await WorkOrder.findById(wo._id).populate(woPopulate);
-      res.json({ data: serializeWorkOrder(populated) });
-    } catch (err) {
-      if (err.statusCode) return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
-      next(err);
-    }
-  }
-);
-
-router.post(
   '/:id/close',
   requireRoles(UserRole.PROJECT_MANAGER, UserRole.EXECUTIVE),
   [param('id').isMongoId(), body('note').optional().trim()],
@@ -413,6 +466,7 @@ router.post(
     try {
       const wo = await WorkOrder.findById(req.params.id);
       if (!wo) return res.status(404).json({ statusCode: 404, message: 'Not found' });
+      assertCanAccessProject(req.user, wo.projectId);
       if (wo.status !== 'IN_PROGRESS') {
         return res.status(400).json({ statusCode: 400, message: 'Only in-progress work orders can be closed' });
       }
@@ -436,6 +490,7 @@ router.post(
       const populated = await WorkOrder.findById(wo._id).populate(woPopulate);
       res.json({ data: serializeWorkOrder(populated) });
     } catch (err) {
+      if (err.statusCode) return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
       next(err);
     }
   }

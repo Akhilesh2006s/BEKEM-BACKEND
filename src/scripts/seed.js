@@ -2,7 +2,8 @@ require('dotenv').config();
 const bcrypt = require('bcryptjs');
 const mongoose = require('mongoose');
 const { connectMongo } = require('../db/connectMongo');
-const { BEKEM_BUYER_ADDRESS } = require('../constants/bekemAddresses');
+const { BEKEM_BUYER_ADDRESS, BEKEM_BUYER_GST, BEKEM_WORKSHOP_ADDRESS, BEKEM_GLOBAL_WAREHOUSE_ADDRESS } = require('../constants/bekemAddresses');
+const { ensureDefaultAddresses } = require('../services/addressBootstrapService');
 const {
   User,
   Project,
@@ -21,6 +22,11 @@ const {
   StockMovement,
   WorkOrder,
   Incident,
+  Address,
+  BranchTransfer,
+  DeliveryVerification,
+  GoodsReceiptNote,
+  IdempotencyRecord,
 } = require('../models');
 
 const DEMO_PASSWORD = 'Bekem@Demo2026!';
@@ -147,7 +153,23 @@ async function seedDatabase() {
     StockMovement.deleteMany({}),
     WorkOrder.deleteMany({}),
     Incident.deleteMany({}),
+    Address.deleteMany({}),
+    BranchTransfer.deleteMany({}),
+    DeliveryVerification.deleteMany({}),
+    GoodsReceiptNote.deleteMany({}),
+    IdempotencyRecord.deleteMany({}),
   ]);
+
+  await ensureDefaultAddresses();
+
+  const projectBillingAddr = await Address.create({
+    type: 'project_billing',
+    label: 'Metro Line Extension — Billing',
+    lines: `BEKEM INFRA PROJECTS PVT. LTD. — Metro Line Extension
+Chennai Phase II Project Office, Anna Salai, Chennai — 600 002
+GST No.: 29AADCB5671Q1ZY`,
+    gstNumber: BEKEM_BUYER_GST,
+  });
 
   const project = await Project.create({
     code: 'PRJ-001',
@@ -171,6 +193,7 @@ async function seedDatabase() {
     budgetTotal: 890000000,
     budgetSpent: 210000000,
     healthScore: 76,
+    billingAddressId: projectBillingAddr._id,
   });
 
   const site = await Site.create({
@@ -454,6 +477,10 @@ Store Manager: ${storeUser.name}`;
 
   const poApproved = await PurchaseOrder.create({
     poNumber: 'PO-PRJ-002-2025-003',
+    procurementRef: 'BEKEM-PRJ00/SIB/0001/25-26',
+    poSeq: 1,
+    vendorPoSeq: 1,
+    financialYear: '25-26',
     purchaseRequestId: prDraft._id,
     vendorId: vendors[0]._id,
     amount: 2400000,
@@ -472,6 +499,98 @@ Store Manager: ${storeUser.name}`;
       },
     ],
     status: 'APPROVED',
+    emailStatus: 'queued',
+    approvalDispatchedAt: new Date(),
+    finalApprovedAt: new Date(Date.now() - 3 * 86400000),
+    approvedByUserId: chairmanUser._id,
+    fulfillmentStatus: 'open_partial',
+  });
+
+  const prGrnDemo = await PurchaseRequest.create({
+    prNumber: 'PR/PRJ-001/FY25-26/0003',
+    materialRequestId: mrApproved._id,
+    projectId: project._id,
+    status: 'APPROVED',
+    createdByUserId: pmUser._id,
+    amountEstimate: 85000,
+  });
+
+  const poGrnReady = await PurchaseOrder.create({
+    poNumber: 'PO-PRJ-001-2025-009',
+    procurementRef: 'BEKEM-PRJ00/SGH/0002/25-26',
+    poSeq: 2,
+    vendorPoSeq: 1,
+    financialYear: '25-26',
+    purchaseRequestId: prGrnDemo._id,
+    vendorId: vendors[0]._id,
+    amount: 85000,
+    paymentTerms: 'Net 30 days',
+    billingAddress: BEKEM_BUYER_ADDRESS,
+    deliveryAddress: consigneeSite1,
+    lineItems: [
+      {
+        description: 'TMT Steel 12mm — 10 MT',
+        materialId: steel._id,
+        hsnCode: '72142090',
+        quantity: 10,
+        rate: 8500,
+        gstPercent: 18,
+        amount: 85000,
+      },
+    ],
+    status: 'APPROVED',
+    emailStatus: 'queued',
+    approvalDispatchedAt: new Date(),
+    finalApprovedAt: new Date(Date.now() - 1 * 86400000),
+    approvedByUserId: chairmanUser._id,
+    fulfillmentStatus: 'open_partial',
+    expectedDeliveryDate: new Date(Date.now() - 2 * 86400000),
+  });
+
+  await DeliveryVerification.create({
+    purchaseOrderId: poGrnReady._id,
+    siteId: site._id,
+    items: [{ materialId: steel._id, quantityOrdered: 10, quantityVerified: 10, condition: 'OK' }],
+    remarks: 'Demo: delivery verified at site — ready for GRN receipt',
+    verifiedByUserId: storeUser._id,
+  });
+
+  const prWoChairman = await PurchaseRequest.create({
+    prNumber: 'PR/PRJ-002/FY25-26/0001',
+    projectId: project2._id,
+    status: 'APPROVED',
+    createdByUserId: execUser._id,
+    amountEstimate: 1200000,
+  });
+
+  const poWoChairman = await PurchaseOrder.create({
+    poNumber: 'PO-PRJ-002-2025-004',
+    procurementRef: 'BEKEM-PRJ00/CST/0003/25-26',
+    poSeq: 3,
+    vendorPoSeq: 1,
+    financialYear: '25-26',
+    purchaseRequestId: prWoChairman._id,
+    vendorId: vendors[1]._id,
+    amount: 1200000,
+    paymentTerms: 'Net 45 days',
+    billingAddress: BEKEM_BUYER_ADDRESS,
+    deliveryAddress: consigneeMetro,
+    lineItems: [
+      {
+        description: 'Elevated section waterproofing',
+        materialId: bitumen._id,
+        hsnCode: '27132000',
+        quantity: 20,
+        rate: 60000,
+        gstPercent: 18,
+        amount: 1200000,
+      },
+    ],
+    status: 'APPROVED',
+    emailStatus: 'queued',
+    approvalDispatchedAt: new Date(),
+    finalApprovedAt: new Date(),
+    approvedByUserId: chairmanUser._id,
   });
 
   await WorkOrder.create({
@@ -510,6 +629,50 @@ Store Manager: ${storeUser.name}`;
     contractValue: 425000,
     status: 'COORDINATOR_PENDING',
     createdByUserId: execUser._id,
+  });
+
+  await WorkOrder.create({
+    woNumber: 'WO-PRJ-002-2025-002',
+    purchaseOrderId: poWoChairman._id,
+    projectId: project2._id,
+    siteId: siteMetro._id,
+    vendorId: vendors[1]._id,
+    scope: 'Waterproofing works — elevated section package',
+    totalQuantity: 2000,
+    quantityUnit: 'Sqm',
+    completedQuantity: 0,
+    progressPercent: 0,
+    contractValue: 1200000,
+    status: 'CHAIRMAN_PENDING',
+    createdByUserId: execUser._id,
+    coordinatorVerifiedByUserId: coordUser._id,
+    coordinatorVerifiedAt: new Date(),
+  });
+
+  await BranchTransfer.create({
+    transferNumber: 'BT/2026/0001',
+    fromProjectId: project2._id,
+    fromSiteId: siteMetro._id,
+    toProjectId: project._id,
+    toSiteId: site._id,
+    items: [{ materialId: steel._id, quantity: 50 }],
+    status: 'REQUESTED',
+    note: 'Demo: transfer steel from Metro to Highway section — awaiting destination PM',
+    requestedByUserId: storeUser._id,
+  });
+
+  await BranchTransfer.create({
+    transferNumber: 'BT/2026/0002',
+    fromProjectId: project._id,
+    fromSiteId: site2._id,
+    toProjectId: project2._id,
+    toSiteId: siteMetro._id,
+    items: [{ materialId: cement._id, quantity: 120 }],
+    status: 'PM_APPROVED',
+    note: 'Demo: cement transfer approved by PM — awaiting coordinator decision',
+    requestedByUserId: storeUser._id,
+    pmApprovedByUserId: pmUser._id,
+    pmApprovedAt: new Date(Date.now() - 1 * 86400000),
   });
 
   await Incident.create({
@@ -558,7 +721,15 @@ Store Manager: ${storeUser.name}`;
     { entityType: 'MaterialRequest', entityId: mrPending._id, fromStatus: null, toStatus: 'PENDING_STORE', actorUserId: siteUser._id, note: 'Indent submitted' },
     { entityType: 'MaterialRequest', entityId: mrWithPm._id, fromStatus: 'PENDING_STORE', toStatus: 'ALLOCATED', actorUserId: storeUser._id, note: 'Stock allocated' },
     { entityType: 'MaterialRequest', entityId: mrWithPm._id, fromStatus: 'ALLOCATED', toStatus: 'FORWARDED_TO_PM', actorUserId: storeUser._id, note: 'Forwarded for PM approval' },
-    { entityType: 'MaterialRequest', entityId: mrApproved._id, fromStatus: 'FORWARDED_TO_PM', toStatus: 'PM_APPROVED', actorUserId: pmUser._id, note: 'Approved for procurement' },
+    {
+      entityType: 'MaterialRequest',
+      entityId: mrApproved._id,
+      fromStatus: 'FORWARDED_TO_PM',
+      toStatus: 'PM_APPROVED',
+      actorUserId: pmUser._id,
+      note: 'Approved for procurement',
+      timestamp: new Date(Date.now() - 2 * 86400000),
+    },
     { entityType: 'PurchaseOrder', entityId: poPendingCoord._id, fromStatus: 'DRAFT', toStatus: 'COORDINATOR_PENDING', actorUserId: execUser._id, note: 'PO submitted for verification' },
   ];
 
@@ -571,7 +742,8 @@ Store Manager: ${storeUser.name}`;
     { userId: pmUser._id, title: 'Indent forwarded', body: `${mrWithPm.indentNumber} needs your approval.`, relatedEntityType: 'MaterialRequest', relatedEntityId: mrWithPm._id, isRead: false },
     { userId: execUser._id, title: 'Ready for PO', body: `${mrApproved.indentNumber} approved — create purchase order.`, relatedEntityType: 'MaterialRequest', relatedEntityId: mrApproved._id, isRead: false },
     { userId: coordUser._id, title: 'PO verification', body: `${poPendingCoord.poNumber} requires coordinator review.`, relatedEntityType: 'PurchaseOrder', relatedEntityId: poPendingCoord._id, isRead: false },
-    { userId: chairmanUser._id, title: 'Safety incident', body: 'High severity incident reported at Chainage 45-60.', relatedEntityType: 'Incident', relatedEntityId: mrPending._id, isRead: false },
+    { userId: chairmanUser._id, title: 'WO awaiting approval', body: `${'WO-PRJ-002-2025-002'} needs Chairman sign-off.`, relatedEntityType: 'WorkOrder', relatedEntityId: poWoChairman._id, isRead: false },
+    { userId: storeUser._id, title: 'GRN ready', body: `${poGrnReady.poNumber} delivered and verified — record receipt.`, relatedEntityType: 'PurchaseOrder', relatedEntityId: poGrnReady._id, isRead: false },
     { userId: siteUser._id, title: 'Materials issued', body: `${mrCompleted.indentNumber} fully issued from store.`, relatedEntityType: 'MaterialRequest', relatedEntityId: mrCompleted._id, isRead: true },
   ];
 
@@ -622,6 +794,16 @@ async function seed() {
   } catch (err) {
     console.warn('\nPO index import failed:', err.message);
     console.warn('Demo catalog kept. Fix the Excel path and re-run import:po-index.\n');
+  }
+
+  try {
+    const { seedTransactionalDemo } = require('./seedTransactionalDemo');
+    console.log('\nSeeding UAT transactional demo (post-import)…');
+    const tx = await seedTransactionalDemo({ force: true });
+    console.log(`✅ UAT transactions: ${tx.summary}\n`);
+  } catch (err) {
+    console.warn('\nUAT transactional seed failed:', err.message);
+    console.warn('Run manually: npm run seed:transactions\n');
   }
 
   await mongoose.disconnect();

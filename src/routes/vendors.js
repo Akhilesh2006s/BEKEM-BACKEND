@@ -69,6 +69,18 @@ router.get('/for-materials', async (req, res, next) => {
   }
 });
 
+router.get('/search', async (req, res, next) => {
+  try {
+    const { searchVendors } = require('../services/searchService');
+    const data = await searchVendors(req.query.q, req.user, {
+      materialId: req.query.materialId,
+    });
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get('/', async (req, res, next) => {
   try {
     const { materialId, search, strict } = req.query;
@@ -124,17 +136,79 @@ router.get('/:id', param('id').isMongoId(), validate, async (req, res, next) => 
   }
 });
 
+function validateVendorMsmePayload(body) {
+  const isMsme = body.isMsme === true;
+  if (isMsme) {
+    if (!body.msmeNumber?.trim()) {
+      const err = new Error('MSME number is required when vendor is MSME registered');
+      err.statusCode = 400;
+      throw err;
+    }
+    if (!body.msmeCertificate?.dataBase64 && !body.msmeCertificateUrl) {
+      const err = new Error('MSME certificate upload is required when vendor is MSME registered');
+      err.statusCode = 400;
+      throw err;
+    }
+  } else if (body.isMsme === false) {
+    if (body.msmeNumber || body.msmeCertificate || body.msmeCertificateUrl) {
+      const err = new Error('MSME fields must not be sent when isMsme is false');
+      err.statusCode = 400;
+      throw err;
+    }
+  }
+  return isMsme;
+}
+
+async function buildVendorPayload(body) {
+  const isMsme = validateVendorMsmePayload(body);
+  let msmeCertificateUrl = null;
+  if (isMsme && body.msmeCertificate?.dataBase64) {
+    const { saveMsmeCertificate } = require('../services/vendorFileService');
+    msmeCertificateUrl = saveMsmeCertificate(body.msmeCertificate);
+  } else if (isMsme && body.msmeCertificateUrl) {
+    msmeCertificateUrl = body.msmeCertificateUrl;
+  }
+
+  return {
+    name: body.name,
+    code: body.code,
+    address: body.address,
+    gstNumber: body.gstNumber,
+    email: body.email,
+    contactPerson: body.contactPerson,
+    phone: body.phone,
+    category: body.category,
+    suppliedCategories: body.suppliedCategories,
+    materialIds: body.materialIds,
+    isMsme,
+    msmeNumber: isMsme ? body.msmeNumber?.trim() : null,
+    msmeCertificateUrl: isMsme ? msmeCertificateUrl : null,
+    panNumber: body.panNumber || '',
+    bankName: body.bankName || '',
+    bankAccountNumber: body.bankAccountNumber || '',
+    ifscCode: body.ifscCode || '',
+    contactInfo: body.phone || body.email || '',
+  };
+}
+
 router.post(
   '/',
   requireCapability('MANAGE_VENDORS'),
   [
     body('name').trim().notEmpty(),
+    body('isMsme').isBoolean(),
     body('code').optional().trim(),
     body('address').optional().trim(),
     body('gstNumber').optional().trim(),
+    body('panNumber').optional().trim(),
     body('email').optional().trim(),
     body('contactPerson').optional().trim(),
     body('phone').optional().trim(),
+    body('bankName').optional().trim(),
+    body('bankAccountNumber').optional().trim(),
+    body('ifscCode').optional().trim(),
+    body('msmeNumber').optional().trim(),
+    body('msmeCertificate').optional().isObject(),
     body('category').optional().trim(),
     body('suppliedCategories').optional().isArray(),
     body('materialIds').optional().isArray(),
@@ -142,13 +216,14 @@ router.post(
   validate,
   async (req, res, next) => {
     try {
-      const vendor = await Vendor.create({
-        ...req.body,
-        contactInfo: req.body.phone || req.body.email || '',
-      });
+      const payload = await buildVendorPayload(req.body);
+      const vendor = await Vendor.create(payload);
       const populated = await Vendor.findById(vendor._id).populate('materialIds');
       res.status(201).json({ data: serializeVendor(populated) });
     } catch (err) {
+      if (err.statusCode) {
+        return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
+      }
       next(err);
     }
   }
@@ -160,11 +235,18 @@ router.patch(
   [
     param('id').isMongoId(),
     body('name').optional().trim().notEmpty(),
+    body('isMsme').optional().isBoolean(),
     body('address').optional().trim(),
     body('gstNumber').optional().trim(),
+    body('panNumber').optional().trim(),
     body('email').optional().trim(),
     body('contactPerson').optional().trim(),
     body('phone').optional().trim(),
+    body('bankName').optional().trim(),
+    body('bankAccountNumber').optional().trim(),
+    body('ifscCode').optional().trim(),
+    body('msmeNumber').optional().trim(),
+    body('msmeCertificate').optional().isObject(),
     body('category').optional().trim(),
     body('suppliedCategories').optional().isArray(),
     body('materialIds').optional().isArray(),
@@ -175,19 +257,29 @@ router.patch(
       const vendor = await Vendor.findById(req.params.id);
       if (!vendor) return res.status(404).json({ statusCode: 404, message: 'Not found' });
 
-      const fields = [
-        'name',
-        'address',
-        'gstNumber',
-        'email',
-        'contactPerson',
-        'phone',
-        'category',
-        'suppliedCategories',
-        'materialIds',
-      ];
-      for (const f of fields) {
-        if (req.body[f] !== undefined) vendor[f] = req.body[f];
+      if (req.body.isMsme !== undefined) {
+        const merged = { ...vendor.toObject(), ...req.body };
+        const payload = await buildVendorPayload(merged);
+        Object.assign(vendor, payload);
+      } else {
+        const fields = [
+          'name',
+          'address',
+          'gstNumber',
+          'panNumber',
+          'email',
+          'contactPerson',
+          'phone',
+          'bankName',
+          'bankAccountNumber',
+          'ifscCode',
+          'category',
+          'suppliedCategories',
+          'materialIds',
+        ];
+        for (const f of fields) {
+          if (req.body[f] !== undefined) vendor[f] = req.body[f];
+        }
       }
       if (req.body.phone || req.body.email) {
         vendor.contactInfo = req.body.phone || req.body.email || vendor.contactInfo;
@@ -196,6 +288,9 @@ router.patch(
       const populated = await Vendor.findById(vendor._id).populate('materialIds');
       res.json({ data: serializeVendor(populated) });
     } catch (err) {
+      if (err.statusCode) {
+        return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
+      }
       next(err);
     }
   }

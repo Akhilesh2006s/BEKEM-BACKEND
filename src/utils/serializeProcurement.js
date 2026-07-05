@@ -1,4 +1,5 @@
 const { poApprovalRoutingNote } = require('../constants/approvalPolicy');
+const { sanitizeProcurementRef } = require('../services/procurementReferenceService');
 
 function refId(value) {
   if (value == null) return undefined;
@@ -24,6 +25,13 @@ function serializeVendor(v) {
     suppliedCategories: v.suppliedCategories || [],
     materialIds,
     rating: v.rating,
+    isMsme: !!v.isMsme,
+    msmeNumber: v.isMsme ? v.msmeNumber || '' : undefined,
+    msmeCertificateUrl: v.isMsme ? v.msmeCertificateUrl || '' : undefined,
+    panNumber: v.panNumber || '',
+    bankName: v.bankName || '',
+    bankAccountNumber: v.bankAccountNumber || '',
+    ifscCode: v.ifscCode || '',
   };
   if (v.materialIds?.length && typeof v.materialIds[0] === 'object' && v.materialIds[0].code) {
     base.materials = v.materialIds.map((m) => ({
@@ -79,13 +87,13 @@ function serializeQuotation(q) {
 
 function serializePurchaseOrder(po) {
   const displayPoNumber = po.poSeq
-    ? `${String(po.poSeq).padStart(4, '0')}-${po.vendorPoSeq || 1}`
+    ? String(po.poSeq).padStart(4, '0')
     : po.poNumber?.split('/')?.[2]?.trim() || po.draftRef || 'Draft';
   const base = {
     id: po._id.toString(),
     poNumber: po.poNumber || po.draftRef || 'Draft',
     displayPoNumber,
-    procurementRef: po.procurementRef || po.poNumber || po.draftRef || '',
+    procurementRef: sanitizeProcurementRef(po.procurementRef || po.poNumber || po.draftRef || ''),
     financialYear: po.financialYear || '',
     poSeq: po.poSeq,
     vendorPoSeq: po.vendorPoSeq,
@@ -96,13 +104,17 @@ function serializePurchaseOrder(po) {
     amount: po.amount,
     paymentTerms: po.paymentTerms,
     billingAddress: po.billingAddress || '',
+    billingAddressType: po.billingAddressType || 'registered_office',
     deliveryAddress: po.deliveryAddress || '',
+    deliveryAddressType: po.deliveryAddressType || 'site',
+    deliveryAddressOtherText: po.deliveryAddressOtherText || '',
     expectedDeliveryDate: po.expectedDeliveryDate?.toISOString?.() || null,
     referenceNote: po.referenceNote || '',
     lineItems: (po.lineItems || []).map((li) => ({
       id: li._id?.toString(),
       description: li.description,
       materialId: refId(li.materialId),
+      itemCode: li.itemCode || '',
       hsnCode: li.hsnCode,
       quantity: li.quantity,
       rate: li.rate,
@@ -116,8 +128,14 @@ function serializePurchaseOrder(po) {
       url: a.url,
     })),
     status: po.status,
+    fulfillmentStatus: po.fulfillmentStatus || 'open_partial',
     approvalRoutingNote: poApprovalRoutingNote(po),
     officialPdfGeneratedAt: po.officialPdfGeneratedAt?.toISOString?.(),
+    emailSentAt: po.emailSentAt?.toISOString?.() || po.sentToVendorAt?.toISOString?.() || null,
+    emailStatus: po.emailStatus || 'pending',
+    approvedAsChairmanOverride: !!po.approvedAsChairmanOverride,
+    overrideRemark: po.overrideRemark || '',
+    finalApprovedAt: po.finalApprovedAt?.toISOString?.() || null,
     createdAt: po.createdAt?.toISOString?.(),
     updatedAt: po.updatedAt?.toISOString?.(),
   };

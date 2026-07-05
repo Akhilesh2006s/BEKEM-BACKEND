@@ -1,37 +1,72 @@
 const express = require('express');
 const { body, param } = require('express-validator');
 const { UserRole } = require('@afios/shared');
-const {
-  BranchTransfer,
-  StockLedger,
-  StockMovement,
-  Site,
-} = require('../models');
+const { BranchTransfer, Site, MaterialRequest } = require('../models');
 const { authenticate } = require('../middleware/auth');
 const { requireCapability } = require('../middleware/rbac');
 const { validate } = require('../middleware/validate');
+const { assertCanAccessBranchTransfer } = require('../middleware/projectScope');
 const { generateTransferNumber } = require('../services/documentNumberService');
 const notificationService = require('../services/notificationService');
+const statusHistoryService = require('../services/statusHistoryService');
+const { executeBranchTransfer } = require('../services/branchTransferExecutionService');
 const {
   getProjectManagers,
   userManagesProject,
   serializeTransferRow,
+  transferActionFlags,
 } = require('../services/branchTransferService');
+const { handleIdempotent } = require('../utils/idempotentHandler');
+
+const PM_APPROVED_BT = ['PM_APPROVED', 'COORDINATOR_DECIDED', 'RAISE_PO_INSTEAD', 'TRANSFERRED'];
+const COORDINATOR_DECIDED_BT = ['COORDINATOR_DECIDED', 'RAISE_PO_INSTEAD', 'TRANSFERRED'];
+
+async function btResponse(transferId) {
+  const populated = await BranchTransfer.findById(transferId).populate(transferPopulate);
+  return { statusCode: 200, body: { data: serializeTransferRow(populated) } };
+}
 
 const router = express.Router();
 router.use(authenticate);
 
 const transferPopulate =
-  'fromProjectId toProjectId fromSiteId toSiteId items.materialId requestedByUserId destinationApprovedByUserId sourceFinalApprovedByUserId';
+  'fromProjectId toProjectId fromSiteId toSiteId items.materialId requestedByUserId pmApprovedByUserId coordinatorDecidedByUserId executedByUserId rejectedByUserId materialRequestId';
 
-async function resolveDefaultSiteForProject(projectId) {
-  if (!projectId) return null;
-  const site = await Site.findOne({ projectId }).sort({ createdAt: 1 });
-  return site?._id || null;
+async function loadTransfer(req, res, next) {
+  try {
+    const t = await BranchTransfer.findById(req.params.id).populate(transferPopulate);
+    if (!t) return res.status(404).json({ statusCode: 404, message: 'Not found' });
+    assertCanAccessBranchTransfer(req.user, t);
+    req.branchTransfer = t;
+    next();
+  } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
+    next(err);
+  }
 }
+
+router.get('/targets/search', async (req, res, next) => {
+  try {
+    const { searchBranchTransferTargets } = require('../services/searchService');
+    const data = await searchBranchTransferTargets(req.query.q, req.user, {
+      fromProjectId: req.query.fromProjectId,
+      excludeProjectId: req.query.excludeProjectId,
+    });
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+});
 
 router.get('/', async (req, res, next) => {
   try {
+    if (req.user.role === UserRole.SITE_INCHARGE) {
+      return res.status(403).json({
+        statusCode: 403,
+        message: 'Site role cannot access branch transfers',
+      });
+    }
+
     const filter = {};
     if (req.user.role === UserRole.PROJECT_MANAGER) {
       filter.$or = [
@@ -43,26 +78,19 @@ router.get('/', async (req, res, next) => {
       if (site?.projectId) {
         filter.$or = [{ fromProjectId: site.projectId }, { toProjectId: site.projectId }];
       }
+    } else if (req.query.status) {
+      filter.status = req.query.status;
     }
+
     const transfers = await BranchTransfer.find(filter)
       .sort({ createdAt: -1 })
       .populate(transferPopulate)
-      .limit(50);
+      .limit(100);
+
     res.json({
       data: transfers.map((t) => {
         const row = serializeTransferRow(t);
-        const toId = row.toProjectId;
-        const fromId = row.fromProjectId;
-        row.canDestinationAccept =
-          req.user.role === UserRole.PROJECT_MANAGER &&
-          t.status === 'PENDING_DESTINATION_PM' &&
-          userManagesProject(req.user, toId);
-        row.canDestinationReject = row.canDestinationAccept;
-        row.canSourceFinalAccept =
-          req.user.role === UserRole.PROJECT_MANAGER &&
-          t.status === 'PENDING_SOURCE_FINAL' &&
-          userManagesProject(req.user, fromId);
-        return row;
+        return { ...row, ...transferActionFlags(t, req.user) };
       }),
     });
   } catch (err) {
@@ -70,11 +98,12 @@ router.get('/', async (req, res, next) => {
   }
 });
 
-router.get('/:id', param('id').isMongoId(), validate, async (req, res, next) => {
+router.get('/:id', param('id').isMongoId(), validate, loadTransfer, async (req, res, next) => {
   try {
-    const t = await BranchTransfer.findById(req.params.id).populate(transferPopulate);
-    if (!t) return res.status(404).json({ statusCode: 404, message: 'Not found' });
-    res.json({ data: serializeTransferRow(t) });
+    const row = serializeTransferRow(req.branchTransfer);
+    res.json({
+      data: { ...row, ...transferActionFlags(req.branchTransfer, req.user) },
+    });
   } catch (err) {
     next(err);
   }
@@ -85,129 +114,183 @@ router.post(
   requireCapability('CREATE_BRANCH_TRANSFER'),
   [
     body('fromProjectId').isMongoId(),
-    body('toProjectId').isMongoId(),
+    body('toProjectId').optional().isMongoId(),
     body('items').isArray({ min: 1 }),
     body('items.*.materialId').isMongoId(),
     body('items.*.quantity').isFloat({ min: 0.01 }),
     body('note').optional().trim(),
+    body('materialRequestId').optional().isMongoId(),
   ],
   validate,
   async (req, res, next) => {
-    try {
-      if (req.body.fromProjectId === req.body.toProjectId) {
-        return res.status(400).json({ statusCode: 400, message: 'From and to project must differ' });
-      }
+    const scopeKey = req.body.materialRequestId
+      ? `bt-create:mr:${req.body.materialRequestId}`
+      : `bt-create:${req.body.fromProjectId}:${req.body.toProjectId}`;
+    return handleIdempotent(req, res, scopeKey, async () => {
+      let { fromProjectId, toProjectId, items, note, materialRequestId } = req.body;
 
-      if (req.user.role === UserRole.PROJECT_MANAGER) {
-        const allowed = (req.user.assignedProjectIds || []).map((id) => id.toString());
-        if (!allowed.includes(req.body.fromProjectId)) {
-          return res.status(403).json({
-            statusCode: 403,
-            message: 'From project must be your assigned project',
-          });
+      if (req.user.role === UserRole.STORE_INCHARGE) {
+        if (!req.user.assignedSiteId) {
+          return { statusCode: 400, body: { statusCode: 400, message: 'Store user has no assigned site' } };
         }
+        const site = await Site.findById(req.user.assignedSiteId).select('projectId');
+        if (!site?.projectId) {
+          return { statusCode: 400, body: { statusCode: 400, message: 'Store site has no project' } };
+        }
+        toProjectId = site.projectId.toString();
+      } else {
+        return {
+          statusCode: 403,
+          body: { statusCode: 403, message: 'Only store users can initiate branch transfers' },
+        };
       }
 
-      const isCoordinator = req.user.role === UserRole.COORDINATOR;
+      if (!toProjectId) {
+        return { statusCode: 400, body: { statusCode: 400, message: 'Destination project is required' } };
+      }
+      if (fromProjectId === toProjectId) {
+        return { statusCode: 400, body: { statusCode: 400, message: 'Source and destination projects must differ' } };
+      }
+
+      const { userCanAccessProject } = require('../utils/serialize');
+      if (!userCanAccessProject(req.user, toProjectId)) {
+        return { statusCode: 403, body: { statusCode: 403, message: 'Forbidden — project out of scope' } };
+      }
+
+      if (materialRequestId) {
+        const mr = await MaterialRequest.findById(materialRequestId);
+        if (!mr) return { statusCode: 404, body: { statusCode: 404, message: 'Linked indent not found' } };
+      }
+
       const transferNumber = await generateTransferNumber();
       const transfer = await BranchTransfer.create({
         transferNumber,
-        fromProjectId: req.body.fromProjectId,
-        toProjectId: req.body.toProjectId,
-        items: req.body.items,
-        note: req.body.note || '',
+        fromProjectId,
+        toProjectId,
+        items,
+        note: note || '',
+        materialRequestId: materialRequestId || undefined,
         requestedByUserId: req.user._id,
-        status: isCoordinator ? 'APPROVED' : 'PENDING_DESTINATION_PM',
-        sourceFinalApprovedByUserId: isCoordinator ? req.user._id : undefined,
-        approvedByUserId: isCoordinator ? req.user._id : undefined,
+        status: 'REQUESTED',
       });
 
-      if (!isCoordinator) {
-        const destinationPms = await getProjectManagers(req.body.toProjectId);
-        const notifyIds = destinationPms
-          .map((u) => u._id)
-          .filter((id) => id.toString() !== req.user._id.toString());
-        if (notifyIds.length) {
-          await notificationService.notifyUsers(notifyIds, {
-            title: 'Branch transfer awaiting your approval',
-            body: `${transferNumber}: incoming transfer to your project — accept or reject.`,
-            relatedEntityType: 'BranchTransfer',
-            relatedEntityId: transfer._id,
-          });
-        }
+      await statusHistoryService.record(
+        'BranchTransfer',
+        transfer._id,
+        null,
+        'REQUESTED',
+        req.user._id,
+        `Branch transfer ${transferNumber} requested`
+      );
+
+      const destinationPms = await getProjectManagers(toProjectId);
+      for (const pm of destinationPms) {
+        await notificationService.notifyUser(pm._id, {
+          title: 'Branch transfer awaiting PM approval',
+          body: `${transferNumber}: stock requested from another project — review and approve.`,
+          relatedEntityType: 'BranchTransfer',
+          relatedEntityId: transfer._id,
+        });
       }
 
-      res.status(201).json({
-        data: {
-          id: transfer._id.toString(),
-          transferNumber: transfer.transferNumber,
-          status: transfer.status,
+      return {
+        statusCode: 201,
+        body: {
+          data: {
+            id: transfer._id.toString(),
+            transferNumber: transfer.transferNumber,
+            status: transfer.status,
+          },
         },
-      });
-    } catch (err) {
-      next(err);
-    }
+      };
+    }, next);
   }
 );
 
 router.post(
-  '/:id/destination-accept',
+  '/:id/pm-approve',
   requireCapability('APPROVE_MATERIAL_REQUEST'),
   [param('id').isMongoId(), body('note').optional().trim()],
   validate,
+  loadTransfer,
   async (req, res, next) => {
-    try {
-      const transfer = await BranchTransfer.findById(req.params.id);
-      if (!transfer) return res.status(404).json({ statusCode: 404, message: 'Not found' });
-      if (transfer.status !== 'PENDING_DESTINATION_PM') {
-        return res.status(400).json({ statusCode: 400, message: 'Not awaiting destination PM approval' });
+    return handleIdempotent(req, res, `bt-pm-approve:${req.params.id}`, async () => {
+      const transfer = req.branchTransfer;
+      if (transfer.status !== 'REQUESTED') {
+        if (PM_APPROVED_BT.includes(transfer.status)) {
+          return { statusCode: 200, body: { data: { id: transfer._id.toString(), status: transfer.status } } };
+        }
+        return { statusCode: 400, body: { statusCode: 400, message: 'Transfer not awaiting PM approval' } };
       }
       if (!userManagesProject(req.user, transfer.toProjectId)) {
-        return res.status(403).json({ statusCode: 403, message: 'Only destination project PM can accept' });
+        return { statusCode: 403, body: { statusCode: 403, message: 'Only destination project PM can approve' } };
       }
 
-      transfer.status = 'PENDING_SOURCE_FINAL';
-      transfer.destinationApprovedByUserId = req.user._id;
+      const fromStatus = transfer.status;
+      transfer.status = 'PM_APPROVED';
+      transfer.pmApprovedByUserId = req.user._id;
+      transfer.pmApprovedAt = new Date();
       await transfer.save();
 
-      await notificationService.notifyUser(transfer.requestedByUserId, {
-        title: 'Destination PM accepted transfer',
-        body: `${transfer.transferNumber}: destination project accepted — waiting for your final approval.`,
-        relatedEntityType: 'BranchTransfer',
-        relatedEntityId: transfer._id,
-      });
+      await statusHistoryService.record(
+        'BranchTransfer',
+        transfer._id,
+        fromStatus,
+        transfer.status,
+        req.user._id,
+        req.body.note || 'PM approved branch transfer'
+      );
 
-      res.json({ data: { id: transfer._id.toString(), status: transfer.status } });
-    } catch (err) {
-      next(err);
-    }
+      const { User } = require('../models');
+      const coordinators = await User.find({ role: UserRole.COORDINATOR });
+      for (const c of coordinators) {
+        await notificationService.notifyUser(c._id, {
+          title: 'Branch transfer decision required',
+          body: `${transfer.transferNumber}: PM approved — confirm transfer or raise PO instead.`,
+          relatedEntityType: 'BranchTransfer',
+          relatedEntityId: transfer._id,
+        });
+      }
+
+      return { statusCode: 200, body: { data: { id: transfer._id.toString(), status: transfer.status } } };
+    }, next);
   }
 );
 
 router.post(
-  '/:id/destination-reject',
+  '/:id/pm-reject',
   requireCapability('APPROVE_MATERIAL_REQUEST'),
   [param('id').isMongoId(), body('note').optional().trim()],
   validate,
+  loadTransfer,
   async (req, res, next) => {
     try {
-      const transfer = await BranchTransfer.findById(req.params.id);
-      if (!transfer) return res.status(404).json({ statusCode: 404, message: 'Not found' });
-      if (transfer.status !== 'PENDING_DESTINATION_PM') {
-        return res.status(400).json({ statusCode: 400, message: 'Not awaiting destination PM approval' });
+      const transfer = req.branchTransfer;
+      if (transfer.status !== 'REQUESTED') {
+        return res.status(400).json({ statusCode: 400, message: 'Transfer not awaiting PM approval' });
       }
       if (!userManagesProject(req.user, transfer.toProjectId)) {
         return res.status(403).json({ statusCode: 403, message: 'Only destination project PM can reject' });
       }
 
+      const fromStatus = transfer.status;
       transfer.status = 'REJECTED';
       transfer.rejectedByUserId = req.user._id;
-      transfer.rejectionNote = req.body.note || 'Rejected by destination project manager';
+      transfer.rejectionNote = req.body.note || 'Rejected by project manager';
       await transfer.save();
+
+      await statusHistoryService.record(
+        'BranchTransfer',
+        transfer._id,
+        fromStatus,
+        transfer.status,
+        req.user._id,
+        transfer.rejectionNote
+      );
 
       await notificationService.notifyUser(transfer.requestedByUserId, {
         title: 'Branch transfer rejected',
-        body: `${transfer.transferNumber} was rejected by the destination project manager.`,
+        body: `${transfer.transferNumber} was rejected by the project manager.`,
         relatedEntityType: 'BranchTransfer',
         relatedEntityId: transfer._id,
       });
@@ -220,134 +303,154 @@ router.post(
 );
 
 router.post(
-  '/:id/source-final-accept',
-  requireCapability('APPROVE_MATERIAL_REQUEST'),
+  '/:id/coordinator-decide',
+  requireCapability('VERIFY_RECORDS'),
+  [
+    param('id').isMongoId(),
+    body('decision').isIn(['transfer', 'raise_po_instead']),
+    body('note').optional().trim(),
+    body('fromProjectId').optional().isMongoId(),
+    body('toProjectId').optional().isMongoId(),
+    body('items').optional().isArray({ min: 1 }),
+    body('items.*.materialId').optional().isMongoId(),
+    body('items.*.quantity').optional().isFloat({ min: 0.01 }),
+  ],
+  validate,
+  loadTransfer,
+  async (req, res, next) => {
+    return handleIdempotent(req, res, `bt-coordinator-decide:${req.params.id}:${req.body.decision}`, async () => {
+      const transfer = req.branchTransfer;
+      if (transfer.status !== 'PM_APPROVED') {
+        if (COORDINATOR_DECIDED_BT.includes(transfer.status)) {
+          let redirect = null;
+          if (transfer.status === 'RAISE_PO_INSTEAD' && transfer.materialRequestId) {
+            redirect = {
+              type: 'indent',
+              materialRequestId: transfer.materialRequestId.toString(),
+              path: `/requests/${transfer.materialRequestId}`,
+            };
+          } else if (transfer.status === 'RAISE_PO_INSTEAD') {
+            redirect = { type: 'po', path: '/executive/po/new' };
+          }
+          return {
+            statusCode: 200,
+            body: {
+              data: {
+                id: transfer._id.toString(),
+                status: transfer.status,
+                coordinatorDecision: transfer.coordinatorDecision,
+                redirect,
+              },
+            },
+          };
+        }
+        return { statusCode: 400, body: { statusCode: 400, message: 'Transfer not awaiting coordinator decision' } };
+      }
+
+      if (req.body.fromProjectId) transfer.fromProjectId = req.body.fromProjectId;
+      if (req.body.toProjectId) transfer.toProjectId = req.body.toProjectId;
+      if (req.body.items?.length) transfer.items = req.body.items;
+
+      const fromStatus = transfer.status;
+      transfer.coordinatorDecidedByUserId = req.user._id;
+      transfer.coordinatorDecidedAt = new Date();
+      transfer.coordinatorDecision = req.body.decision;
+
+      let redirect = null;
+
+      if (req.body.decision === 'transfer') {
+        transfer.status = 'COORDINATOR_DECIDED';
+      } else {
+        transfer.status = 'RAISE_PO_INSTEAD';
+        if (transfer.materialRequestId) {
+          const mr = await MaterialRequest.findById(transfer.materialRequestId);
+          if (mr && !['FORWARDED_TO_PM', 'PM_APPROVED', 'PO_CREATED'].includes(mr.status)) {
+            const prev = mr.status;
+            mr.status = 'FORWARDED_TO_PM';
+            await mr.save();
+            await statusHistoryService.record(
+              'MaterialRequest',
+              mr._id,
+              prev,
+              'FORWARDED_TO_PM',
+              req.user._id,
+              'Coordinator chose PO instead of branch transfer'
+            );
+          }
+          redirect = {
+            type: 'indent',
+            materialRequestId: transfer.materialRequestId.toString(),
+            path: `/requests/${transfer.materialRequestId}`,
+          };
+        } else {
+          redirect = { type: 'po', path: '/executive/po/new' };
+        }
+      }
+
+      await transfer.save();
+
+      await statusHistoryService.record(
+        'BranchTransfer',
+        transfer._id,
+        fromStatus,
+        transfer.status,
+        req.user._id,
+        req.body.note || `Coordinator decision: ${req.body.decision}`
+      );
+
+      return {
+        statusCode: 200,
+        body: {
+          data: {
+            id: transfer._id.toString(),
+            status: transfer.status,
+            coordinatorDecision: transfer.coordinatorDecision,
+            redirect,
+          },
+        },
+      };
+    }, next);
+  }
+);
+
+router.post(
+  '/:id/execute',
+  requireCapability('VERIFY_RECORDS'),
   [param('id').isMongoId(), body('note').optional().trim()],
   validate,
+  loadTransfer,
   async (req, res, next) => {
-    try {
-      const transfer = await BranchTransfer.findById(req.params.id);
-      if (!transfer) return res.status(404).json({ statusCode: 404, message: 'Not found' });
-      if (transfer.status !== 'PENDING_SOURCE_FINAL') {
-        return res.status(400).json({ statusCode: 400, message: 'Not awaiting source PM final approval' });
-      }
-      if (!userManagesProject(req.user, transfer.fromProjectId)) {
-        return res.status(403).json({ statusCode: 403, message: 'Only source project PM can give final approval' });
-      }
-
-      transfer.status = 'APPROVED';
-      transfer.sourceFinalApprovedByUserId = req.user._id;
-      transfer.approvedByUserId = req.user._id;
-      await transfer.save();
-
-      res.json({ data: { id: transfer._id.toString(), status: transfer.status } });
-    } catch (err) {
-      next(err);
-    }
-  }
-);
-
-router.post(
-  '/:id/dispatch',
-  requireCapability('CREATE_BRANCH_TRANSFER'),
-  param('id').isMongoId(),
-  validate,
-  async (req, res, next) => {
-    try {
-      const transfer = await BranchTransfer.findById(req.params.id);
-      if (!transfer) return res.status(404).json({ statusCode: 404, message: 'Not found' });
-      if (transfer.status !== 'APPROVED') {
-        return res.status(400).json({ statusCode: 400, message: 'Transfer must be fully approved first' });
+    return handleIdempotent(req, res, `bt-execute:${req.params.id}`, async () => {
+      const transfer = req.branchTransfer;
+      if (transfer.status === 'TRANSFERRED') return btResponse(transfer._id);
+      if (transfer.status !== 'COORDINATOR_DECIDED' || transfer.coordinatorDecision !== 'transfer') {
+        return {
+          statusCode: 400,
+          body: { statusCode: 400, message: 'Transfer must be coordinator-confirmed before execution' },
+        };
       }
 
-      let siteId = transfer.fromSiteId;
-      if (!siteId) {
-        siteId = await resolveDefaultSiteForProject(transfer.fromProjectId);
-        if (siteId) transfer.fromSiteId = siteId;
-      }
-      if (!siteId) {
-        return res.status(400).json({ statusCode: 400, message: 'No store site found on source project' });
-      }
+      const fromStatus = transfer.status;
+      await executeBranchTransfer(transfer, req.user._id);
 
-      for (const item of transfer.items) {
-        const ledger = await StockLedger.findOne({ siteId, materialId: item.materialId });
-        if (!ledger || ledger.quantityOnHand < item.quantity) {
-          return res.status(400).json({ statusCode: 400, message: 'Insufficient stock at source' });
-        }
-        ledger.quantityOnHand -= item.quantity;
-        ledger.lastMovementAt = new Date();
-        await ledger.save();
-        await StockMovement.create({
-          siteId,
-          materialId: item.materialId,
-          quantityDelta: -item.quantity,
-          type: 'ADJUSTMENT',
-          actorUserId: req.user._id,
-        });
-      }
+      await statusHistoryService.record(
+        'BranchTransfer',
+        transfer._id,
+        fromStatus,
+        'TRANSFERRED',
+        req.user._id,
+        req.body.note || 'Stock transferred between projects'
+      );
 
-      transfer.status = 'DISPATCHED';
-      transfer.dispatchedByUserId = req.user._id;
-      await transfer.save();
-      res.json({ data: { id: transfer._id.toString(), status: transfer.status } });
-    } catch (err) {
-      next(err);
-    }
-  }
-);
+      await notificationService.notifyUser(transfer.requestedByUserId, {
+        title: 'Branch transfer completed',
+        body: `${transfer.transferNumber}: stock has been transferred.`,
+        relatedEntityType: 'BranchTransfer',
+        relatedEntityId: transfer._id,
+      });
 
-router.post(
-  '/:id/receive',
-  requireCapability('RECEIVE_MATERIAL'),
-  param('id').isMongoId(),
-  validate,
-  async (req, res, next) => {
-    try {
-      const transfer = await BranchTransfer.findById(req.params.id);
-      if (!transfer) return res.status(404).json({ statusCode: 404, message: 'Not found' });
-      if (transfer.status !== 'DISPATCHED') {
-        return res.status(400).json({ statusCode: 400, message: 'Transfer must be dispatched first' });
-      }
-
-      let siteId = transfer.toSiteId;
-      if (!siteId) {
-        siteId = await resolveDefaultSiteForProject(transfer.toProjectId);
-        if (siteId) transfer.toSiteId = siteId;
-      }
-      if (!siteId) {
-        return res.status(400).json({ statusCode: 400, message: 'No store site found on destination project' });
-      }
-
-      for (const item of transfer.items) {
-        let ledger = await StockLedger.findOne({ siteId, materialId: item.materialId });
-        if (!ledger) {
-          ledger = await StockLedger.create({
-            siteId,
-            materialId: item.materialId,
-            quantityOnHand: 0,
-            lowStockThreshold: 10,
-          });
-        }
-        ledger.quantityOnHand += item.quantity;
-        item.quantityReceived = item.quantity;
-        ledger.lastMovementAt = new Date();
-        await ledger.save();
-        await StockMovement.create({
-          siteId,
-          materialId: item.materialId,
-          quantityDelta: item.quantity,
-          type: 'INCOMING',
-          actorUserId: req.user._id,
-        });
-      }
-
-      transfer.status = 'RECEIVED';
-      transfer.receivedByUserId = req.user._id;
-      await transfer.save();
-      res.json({ data: { id: transfer._id.toString(), status: transfer.status } });
-    } catch (err) {
-      next(err);
-    }
+      return btResponse(transfer._id);
+    }, next);
   }
 );
 

@@ -4,6 +4,7 @@ const STATUSES = [
   'PENDING_STORE',
   'ALLOCATED',
   'FORWARDED_TO_PM',
+  'PENDING_HO',
   'PM_APPROVED',
   'PURCHASE_REQUESTED',
   'RFQ_OPEN',
@@ -47,6 +48,10 @@ const materialRequestSchema = new mongoose.Schema(
     requestedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     status: { type: String, enum: STATUSES, default: 'PENDING_STORE' },
     pendingWithRole: { type: String, default: 'STORE_INCHARGE' },
+    /** Estimated indent value (INR) for PM daily cap tracking. */
+    estimatedValue: { type: Number, default: 0 },
+    escalatedToHo: { type: Boolean, default: false },
+    escalatedAt: { type: Date },
   },
   { timestamps: true }
 );

@@ -46,12 +46,19 @@ async function repairPurchaseOrderIndexes() {
 async function migrateBranchTransferStatuses() {
   try {
     const { BranchTransfer } = require('../models');
-    const result = await BranchTransfer.updateMany(
-      { status: 'REQUESTED' },
-      { $set: { status: 'PENDING_DESTINATION_PM' } }
-    );
-    if (result.modifiedCount) {
-      console.log(`Migrated ${result.modifiedCount} branch transfer(s) to PENDING_DESTINATION_PM`);
+    const legacyMap = {
+      PENDING_DESTINATION_PM: 'REQUESTED',
+      PENDING_SOURCE_FINAL: 'PM_APPROVED',
+      APPROVED: 'COORDINATOR_DECIDED',
+      DISPATCHED: 'COORDINATOR_DECIDED',
+      RECEIVED: 'TRANSFERRED',
+      CANCELLED: 'REJECTED',
+    };
+    for (const [from, to] of Object.entries(legacyMap)) {
+      const result = await BranchTransfer.updateMany({ status: from }, { $set: { status: to } });
+      if (result.modifiedCount) {
+        console.log(`Migrated ${result.modifiedCount} branch transfer(s) from ${from} to ${to}`);
+      }
     }
   } catch (err) {
     console.warn('Branch transfer status migration skipped:', err.message);

@@ -17,6 +17,8 @@ const attachmentSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const ISSUE_REASONS = ['emergency', 'already_approved', 'urgent_work', 'repeat_issue', 'other'];
+
 const materialIssueSchema = new mongoose.Schema(
   {
     issueNumber: { type: String, required: true, unique: true },
@@ -25,6 +27,8 @@ const materialIssueSchema = new mongoose.Schema(
     items: { type: [issueItemSchema], required: true },
     issuedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     status: { type: String, enum: ['ISSUED'], default: 'ISSUED' },
+    issueReason: { type: String, enum: ISSUE_REASONS },
+    issueReasonOtherText: { type: String, default: '' },
     note: { type: String, default: '' },
     attachments: { type: [attachmentSchema], default: [] },
   },
@@ -32,3 +36,4 @@ const materialIssueSchema = new mongoose.Schema(
 );
 
 module.exports = mongoose.model('MaterialIssue', materialIssueSchema);
+module.exports.ISSUE_REASONS = ISSUE_REASONS;

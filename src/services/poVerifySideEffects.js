@@ -3,13 +3,23 @@ const notificationService = require('./notificationService');
 const { UserRole } = require('@afios/shared');
 const { User, PurchaseRequest, Vendor } = require('../models');
 const { sendPoToVendor } = require('./emailService');
+const { generatePurchaseOrderPdfBuffer } = require('./pdfService');
 const delegationService = require('./delegationService');
 const { assignOfficialProcurementNumbers } = require('./procurementReferenceService');
+const { recordPoSent } = require('./poTimelineService');
 const {
   requiresChairmanApproval,
   requiresCoordinatorFinalApproval,
   requiresPmApproval,
 } = require('../constants/approvalPolicy');
+
+const PO_ALERT_ROLES = [
+  UserRole.EXECUTIVE,
+  UserRole.COORDINATOR,
+  UserRole.CHAIRMAN,
+  UserRole.STORE_INCHARGE,
+];
+
 async function runSideEffect(label, fn) {
   try {
     await fn();
@@ -21,20 +31,14 @@ async function runSideEffect(label, fn) {
 async function notifyChairmen(po) {
   const chairmen = await User.find({ role: UserRole.CHAIRMAN });
   const delegateIds = await delegationService.getPoFinalDelegateUserIds();
-  const recipientIds = [
-    ...chairmen.map((u) => u._id),
-    ...delegateIds,
-  ];
+  const recipientIds = [...chairmen.map((u) => u._id), ...delegateIds];
   const unique = [...new Set(recipientIds.map((id) => id.toString()))];
-  await notificationService.notifyUsers(
-    unique,
-    {
-      title: 'PO awaiting approval',
-      body: `${po.poNumber || po.draftRef} requires chairman final approval.`,
-      relatedEntityType: 'PurchaseOrder',
-      relatedEntityId: po._id,
-    }
-  );
+  await notificationService.notifyUsers(unique, {
+    title: 'PO awaiting approval',
+    body: `${po.poNumber || po.draftRef} requires chairman final approval.`,
+    relatedEntityType: 'PurchaseOrder',
+    relatedEntityId: po._id,
+  });
 }
 
 async function notifyExecutivesReturned(po) {
@@ -50,13 +54,82 @@ async function notifyExecutivesReturned(po) {
   );
 }
 
+async function notifyPoApprovedInternal(po) {
+  const users = await User.find({ role: { $in: PO_ALERT_ROLES } });
+  const poNo = po.poNumber || po.draftRef || 'PO';
+  const overrideTag = po.approvedAsChairmanOverride
+    ? ' (approved in Chairman\'s absence)'
+    : '';
+  await notificationService.notifyUsers(
+    users.map((u) => u._id),
+    {
+      title: 'Purchase order approved',
+      body: `${poNo} has been approved${overrideTag}. View the official PO.`,
+      relatedEntityType: 'PurchaseOrder',
+      relatedEntityId: po._id,
+    }
+  );
+}
+
+async function dispatchVendorEmail(po, vendor) {
+  if (!vendor?.email) {
+    po.emailStatus = 'skipped';
+    po.emailSentAt = null;
+    return;
+  }
+  const populated = await Vendor.findById(vendor._id);
+  let pdfBuffer;
+  try {
+    pdfBuffer = await generatePurchaseOrderPdfBuffer(po);
+  } catch (err) {
+    console.error('[PO PDF generation]', err.message);
+    po.emailStatus = 'failed';
+    return;
+  }
+
+  try {
+    const result = await sendPoToVendor(po, populated || vendor, { pdfBuffer });
+    if (result.sent && result.mode === 'smtp') {
+      po.emailSentAt = new Date();
+      po.sentToVendorAt = po.emailSentAt;
+      po.emailStatus = 'sent';
+    } else if (result.sent && result.mode === 'log') {
+      po.emailStatus = 'queued';
+      po.emailSentAt = null;
+    } else {
+      po.emailStatus = 'skipped';
+    }
+  } catch (err) {
+    console.error('[PO email dispatch]', err.message);
+    po.emailStatus = 'failed';
+  }
+}
+
+async function runPostApprovalDispatch(po) {
+  if (po.approvalDispatchedAt && po.emailStatus && po.emailStatus !== 'pending') return po;
+
+  await notifyPoApprovedInternal(po);
+
+  const vendor = await Vendor.findById(po.vendorId);
+  await dispatchVendorEmail(po, vendor);
+
+  if (!po.approvalDispatchedAt) {
+    po.approvalDispatchedAt = new Date();
+  }
+  await po.save();
+  if (po.emailStatus === 'sent') {
+    await recordPoSent(po._id, null);
+  }
+  return po;
+}
+
 /**
  * Coordinator verify:
  * - < ₹5k should be PM (reject if wrongly here)
  * - ₹5k–₹10k → final approve
- * - > ₹10k → Chairman, unless chairmanUnavailable + note
+ * - > ₹10k → Chairman queue
  */
-async function coordinatorVerifyPurchaseOrder(po, actorUserId, note, options = {}) {
+async function coordinatorVerifyPurchaseOrder(po, actorUserId, note) {
   if (requiresPmApproval(po.amount)) {
     const err = new Error('POs under ₹5,000 must be approved by the Project Manager');
     err.statusCode = 400;
@@ -68,25 +141,8 @@ async function coordinatorVerifyPurchaseOrder(po, actorUserId, note, options = {
       po,
       actorUserId,
       note || 'Coordinator approved (₹5,000–₹10,000 band)',
-      null
-    );
-  }
-
-  // Above ₹10,000
-  if (options.chairmanUnavailable) {
-    const reason = String(note || '').trim();
-    if (reason.length < 8) {
-      const err = new Error(
-        'Enter a reason (min 8 characters) that Chairman is not on premises / unavailable'
-      );
-      err.statusCode = 400;
-      throw err;
-    }
-    return finalizePurchaseOrder(
-      po,
-      actorUserId,
-      `Coordinator approved in Chairman absence: ${reason}`,
-      null
+      null,
+      { chairmanOverride: false }
     );
   }
 
@@ -105,6 +161,24 @@ async function coordinatorVerifyPurchaseOrder(po, actorUserId, note, options = {
   return po;
 }
 
+async function coordinatorOverrideApprove(po, actorUserId, remark) {
+  const text = String(remark || '').trim();
+  if (text.length < 1 || text.length > 300) {
+    const err = new Error('Override remark must be between 1 and 300 characters');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (po.status !== 'CHAIRMAN_PENDING') {
+    const err = new Error('PO is not awaiting Chairman approval');
+    err.statusCode = 400;
+    throw err;
+  }
+  return finalizePurchaseOrder(po, actorUserId, 'Coordinator override approval', null, {
+    chairmanOverride: true,
+    overrideRemark: text,
+  });
+}
+
 async function pmApprovePurchaseOrder(po, actorUserId, note) {
   if (!requiresPmApproval(po.amount)) {
     const err = new Error('Only POs under ₹5,000 can be approved by Project Manager');
@@ -116,18 +190,32 @@ async function pmApprovePurchaseOrder(po, actorUserId, note) {
     err.statusCode = 400;
     throw err;
   }
-  return finalizePurchaseOrder(po, actorUserId, note || 'Project Manager approved (under ₹5,000)', null);
+  return finalizePurchaseOrder(
+    po,
+    actorUserId,
+    note || 'Project Manager approved (under ₹5,000)',
+    null,
+    { chairmanOverride: false }
+  );
 }
 
-async function finalizePurchaseOrder(po, actorUserId, note, approvalContext) {
+async function finalizePurchaseOrder(po, actorUserId, note, approvalContext, options = {}) {
+  if (po.status === 'APPROVED') {
+    await runPostApprovalDispatch(po);
+    return po;
+  }
+
   const fromStatus = po.status;
   po.status = 'APPROVED';
+  po.approvedByUserId = actorUserId;
+  po.finalApprovedAt = new Date();
+  po.approvedAsChairmanOverride = !!options.chairmanOverride;
+  po.overrideRemark = options.chairmanOverride ? String(options.overrideRemark || '').trim() : '';
 
   if (!po.poNumber) {
     const pr = await PurchaseRequest.findById(po.purchaseRequestId).populate('projectId');
     const { projectShortCode, vendorShortCode } = require('./codeGenerators');
-    const projectCode =
-      pr?.projectId?.code || projectShortCode(pr?.projectId?.name) || 'PRJ';
+    const projectCode = pr?.projectId?.code || projectShortCode(pr?.projectId?.name) || 'PRJ';
     const vendor = await Vendor.findById(po.vendorId);
     const vendorCode = vendor?.code || vendorShortCode(vendor?.name) || 'VND';
     await assignOfficialProcurementNumbers(po, { projectCode, vendorCode });
@@ -135,7 +223,6 @@ async function finalizePurchaseOrder(po, actorUserId, note, approvalContext) {
   }
   await po.save();
 
-  // Sync expected delivery onto matching Stock Inventory lines (if present)
   if (po.expectedDeliveryDate && (po.poNumber || po.procurementRef)) {
     try {
       const { StockInventoryRecord } = require('../models');
@@ -149,10 +236,9 @@ async function finalizePurchaseOrder(po, actorUserId, note, approvalContext) {
     }
   }
 
-  const historyNote = delegationService.formatApprovalNote(
-    note || 'Approved',
-    approvalContext
-  );
+  const historyNote = options.chairmanOverride
+    ? `Approved in Chairman's absence: ${po.overrideRemark}`
+    : delegationService.formatApprovalNote(note || 'Approved', approvalContext);
 
   await statusHistoryService.record(
     'PurchaseOrder',
@@ -190,17 +276,7 @@ async function finalizePurchaseOrder(po, actorUserId, note, approvalContext) {
     });
   }
 
-  const vendor = await Vendor.findById(po.vendorId);
-  if (vendor?.email) {
-    try {
-      await sendPoToVendor(po, vendor);
-      po.sentToVendorAt = new Date();
-      await po.save();
-    } catch (err) {
-      console.error('[PO email]', err.message);
-    }
-  }
-
+  await runPostApprovalDispatch(po);
   return po;
 }
 
@@ -211,6 +287,8 @@ module.exports = {
   notifyChairmen,
   notifyExecutivesReturned,
   coordinatorVerifyPurchaseOrder,
+  coordinatorOverrideApprove,
   pmApprovePurchaseOrder,
   finalizePurchaseOrder,
+  runPostApprovalDispatch,
 };

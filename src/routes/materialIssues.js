@@ -13,7 +13,8 @@ const { generateIssueNumber } = require('../services/documentNumberService');
 const { getIndentLineItems } = require('../services/materialRequestHelpers');
 const statusHistoryService = require('../services/statusHistoryService');
 const notificationService = require('../services/notificationService');
-const { serializeMaterialRequest } = require('../utils/serialize');
+const { ISSUE_REASONS } = require('../constants/indentPolicy');
+const { serializeMaterialRequestEnriched } = require('../utils/serialize');
 
 const router = express.Router();
 router.use(authenticate);
@@ -61,6 +62,8 @@ function serializeIssue(issue) {
       ? { id: issue.issuedByUserId._id.toString(), name: issue.issuedByUserId.name }
       : undefined,
     note: issue.note,
+    issueReason: issue.issueReason,
+    issueReasonOtherText: issue.issueReasonOtherText || '',
     attachments: (issue.attachments || []).map((a) => ({
       name: a.name,
       fileType: a.fileType,
@@ -93,10 +96,13 @@ router.post(
   requireCapability('ISSUE_MATERIAL'),
   [
     body('materialRequestId').isMongoId(),
-    body('items').isArray({ min: 1 }),
-    body('items.*.materialId').isMongoId(),
-    body('items.*.quantity').isFloat({ min: 0.01 }),
+    body('items').optional().isArray({ min: 1 }),
+    body('items.*.materialId').optional().isMongoId(),
+    body('items.*.quantity').optional().isFloat({ min: 0.01 }),
+    body('reason').isIn(ISSUE_REASONS).withMessage('Issue reason is required'),
+    body('reasonOtherText').optional().trim(),
     body('note').optional().trim(),
+    body('remark').optional().trim(),
     body('attachments').optional().isArray(),
     body('attachments.*.name').optional().isString(),
     body('attachments.*.fileType').optional().isString(),
@@ -116,14 +122,37 @@ router.post(
         });
       }
 
+      const reason = req.body.reason;
+      if (reason === 'other') {
+        const otherText = String(req.body.reasonOtherText || '').trim();
+        if (!otherText) {
+          return res.status(400).json({
+            statusCode: 400,
+            message: 'Please provide details when reason is Other',
+          });
+        }
+      }
+
+      let issueItems = req.body.items;
+      if (!issueItems?.length) {
+        const lines = getIndentLineItems(mr);
+        issueItems = lines.map((line) => ({
+          materialId: line.materialId._id || line.materialId,
+          quantity: line.quantityAllocated || line.quantityRequested,
+        }));
+      }
+
+      const alreadyAllocated = mr.status === 'ALLOCATED';
       const issueNumber = await generateIssueNumber();
       const issue = await MaterialIssue.create({
         issueNumber,
         materialRequestId: mr._id,
         siteId: mr.siteId,
-        items: req.body.items,
+        items: issueItems,
         issuedByUserId: req.user._id,
-        note: req.body.note || '',
+        issueReason: reason,
+        issueReasonOtherText: reason === 'other' ? String(req.body.reasonOtherText || '').trim() : '',
+        note: req.body.note || req.body.remark || '',
         attachments: Array.isArray(req.body.attachments)
           ? req.body.attachments
               .filter((a) => a?.name)
@@ -135,24 +164,26 @@ router.post(
           : [],
       });
 
-      for (const item of req.body.items) {
-        const ledger = await StockLedger.findOne({ siteId: mr.siteId, materialId: item.materialId });
-        if (!ledger || ledger.quantityOnHand < item.quantity) {
-          return res.status(400).json({ statusCode: 400, message: 'Insufficient stock to issue' });
+      for (const item of issueItems) {
+        if (!alreadyAllocated) {
+          const ledger = await StockLedger.findOne({ siteId: mr.siteId, materialId: item.materialId });
+          if (!ledger || ledger.quantityOnHand < item.quantity) {
+            return res.status(400).json({ statusCode: 400, message: 'Insufficient stock to issue' });
+          }
+          ledger.quantityOnHand -= item.quantity;
+          ledger.lastMovementAt = new Date();
+          await ledger.save();
+          await StockMovement.create({
+            siteId: mr.siteId,
+            materialId: item.materialId,
+            materialRequestId: mr._id,
+            quantityDelta: -item.quantity,
+            type: 'ALLOCATION',
+            actorUserId: req.user._id,
+          });
         }
-        ledger.quantityOnHand -= item.quantity;
-        ledger.lastMovementAt = new Date();
-        await ledger.save();
-        await StockMovement.create({
-          siteId: mr.siteId,
-          materialId: item.materialId,
-          materialRequestId: mr._id,
-          quantityDelta: -item.quantity,
-          type: 'ALLOCATION',
-          actorUserId: req.user._id,
-        });
 
-        const line = mr.items.find((li) => li.materialId.toString() === item.materialId);
+        const line = mr.items.find((li) => li.materialId.toString() === item.materialId.toString());
         if (line) line.quantityIssued = (line.quantityIssued || 0) + item.quantity;
       }
 
@@ -161,13 +192,14 @@ router.post(
       mr.pendingWithRole = 'SITE_INCHARGE';
       await mr.save();
 
+      const reasonLabel = reason === 'other' ? req.body.reasonOtherText : reason.replace(/_/g, ' ');
       await statusHistoryService.record(
         'MaterialRequest',
         mr._id,
         fromStatus,
         'ISSUED',
         req.user._id,
-        `Materials issued — ${issueNumber}`
+        `Materials issued — ${issueNumber}. Reason: ${reasonLabel}`
       );
 
       await notificationService.notifyUser(mr.requestedByUserId, {
@@ -181,7 +213,7 @@ router.post(
       res.status(201).json({
         data: {
           issue: { id: issue._id.toString(), issueNumber },
-          indent: serializeMaterialRequest(populated),
+          indent: await serializeMaterialRequestEnriched(populated),
         },
       });
     } catch (err) {

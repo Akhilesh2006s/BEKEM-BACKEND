@@ -124,9 +124,7 @@ router.get('/site/:siteId/po-index', async (req, res, next) => {
           supplier: po.vendorId?.name || '',
           vendorCode: po.vendorId?.code || '',
           poNo: po.procurementRef || po.poNumber || po.draftRef,
-          displayPoNumber: po.poSeq
-            ? `${String(po.poSeq).padStart(4, '0')}-${po.vendorPoSeq || 1}`
-            : '—',
+          displayPoNumber: po.poSeq ? String(po.poSeq).padStart(4, '0') : '—',
           procurementRef: po.procurementRef || '',
           financialYear: po.financialYear || getFinancialYear(po.createdAt),
           poDate: po.createdAt?.toISOString?.(),
@@ -154,9 +152,7 @@ router.get('/site/:siteId/po-index', async (req, res, next) => {
           supplier: po.vendorId?.name || '',
           vendorCode: po.vendorId?.code || '',
           poNo: po.procurementRef || po.poNumber || po.draftRef,
-          displayPoNumber: po.poSeq
-            ? `${String(po.poSeq).padStart(4, '0')}-${po.vendorPoSeq || 1}`
-            : '—',
+          displayPoNumber: po.poSeq ? String(po.poSeq).padStart(4, '0') : '—',
           procurementRef: po.procurementRef || '',
           financialYear: po.financialYear || getFinancialYear(po.createdAt),
           poDate: po.createdAt?.toISOString?.(),

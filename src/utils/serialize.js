@@ -71,17 +71,19 @@ function serializeMaterial(m) {
     description: m.description || '',
     unit: m.unit,
     grade: m.grade || '',
-    category: m.category || 'General',
+    category: m.category || 'Consumables',
+    categoryId: m.categoryId?.toString?.() || m.categoryId || undefined,
     hsnCode: m.hsnCode || '',
+    gstRate: m.gstRate ?? 18,
   };
 }
 
-function serializeLineItem(item) {
+function serializeLineItem(item, stockFields) {
   const mat = item.materialId;
   const unit = item.unit || mat?.unit || '';
   const material = mat?.name ? serializeMaterial(mat) : undefined;
   if (material && unit) material.unit = unit;
-  return {
+  const base = {
     id: item._id.toString(),
     materialId: resolveId(mat),
     quantityRequested: item.quantityRequested,
@@ -90,19 +92,31 @@ function serializeLineItem(item) {
     unit,
     material,
   };
+  if (stockFields) {
+    base.requestedQty = stockFields.requestedQty;
+    base.availableQty = stockFields.availableQty;
+    base.existingStock = stockFields.existingStock;
+    base.requiredQty = stockFields.requiredQty;
+  }
+  return base;
 }
 
-function serializeMaterialRequest(mr) {
+function serializeMaterialRequest(mr, stockContext) {
   const lineItems = getIndentLineItems(mr);
   const first = lineItems[0];
   const firstMat = first?.materialId;
+  const stockByItemId = new Map(
+    (stockContext?.stockByLine || []).map((s) => [s.itemId, s])
+  );
 
   const base = {
     id: mr._id.toString(),
     indentNumber: mr.indentNumber,
     projectId: resolveId(mr.projectId),
     siteId: resolveId(mr.siteId),
-    items: lineItems.map(serializeLineItem),
+    items: lineItems.map((item) =>
+      serializeLineItem(item, stockByItemId.get(item._id.toString()))
+    ),
     itemCount: lineItems.length,
     materialId: resolveId(firstMat),
     quantityRequested: first?.quantityRequested,
@@ -112,6 +126,10 @@ function serializeMaterialRequest(mr) {
     requestedByUserId: resolveId(mr.requestedByUserId),
     status: mr.status,
     pendingWith: pendingWithLabel(mr.status),
+    estimatedValue: mr.estimatedValue || 0,
+    escalatedToHo: !!mr.escalatedToHo,
+    canFullyIssue: stockContext?.canFullyIssue,
+    hasShortfall: stockContext?.hasShortfall,
     createdAt: mr.createdAt?.toISOString?.() || mr.createdAt,
     updatedAt: mr.updatedAt?.toISOString?.() || mr.updatedAt,
   };
@@ -149,6 +167,12 @@ function serializeMaterialRequest(mr) {
   return base;
 }
 
+async function serializeMaterialRequestEnriched(mr) {
+  const { enrichIndentWithStock } = require('../services/indentStockService');
+  const stockContext = await enrichIndentWithStock(mr);
+  return serializeMaterialRequest(mr, stockContext);
+}
+
 module.exports = {
   resolveId,
   userCanAccessProject,
@@ -157,4 +181,5 @@ module.exports = {
   serializeUser,
   serializeMaterial,
   serializeMaterialRequest,
+  serializeMaterialRequestEnriched,
 };

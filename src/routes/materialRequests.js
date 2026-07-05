@@ -26,10 +26,25 @@ const {
   userCanAccessSite,
   userCanAccessProject,
   serializeMaterialRequest,
+  serializeMaterialRequestEnriched,
   resolveId,
 } = require('../utils/serialize');
+const { enrichIndentWithStock } = require('../services/indentStockService');
+const { estimateIndentAmount } = require('../services/purchaseRequestService');
+const { checkPmCanApprove, getPmDailyApprovedTotal, MR_PM_DAILY_MAX_INR } = require('../services/pmApprovalCapService');
+const { handleIdempotent } = require('../utils/idempotentHandler');
 
 const router = express.Router();
+
+function requireRemark(value) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) {
+    const err = new Error('Remark is required');
+    err.statusCode = 400;
+    throw err;
+  }
+  return trimmed;
+}
 
 const populateFields = [
   { path: 'items.materialId' },
@@ -38,6 +53,13 @@ const populateFields = [
   { path: 'projectId' },
   { path: 'requestedByUserId', select: 'name' },
 ];
+
+async function mrEnrichedBody(mrId) {
+  const populated = await MaterialRequest.findById(mrId).populate(populateFields);
+  return { data: await serializeMaterialRequestEnriched(populated) };
+}
+
+const FORWARDED_STATUSES = ['FORWARDED_TO_PM', 'PM_APPROVED', 'PURCHASE_REQUESTED', 'PENDING_HO', 'PO_CREATED'];
 
 router.use(authenticate);
 
@@ -55,6 +77,7 @@ router.get('/', async (req, res, next) => {
   try {
     const { status, tab, projectId } = req.query;
     const filter = {};
+    const statusFilter = parseStatusFilter(status);
 
     if (projectId) {
       const canFilterByProject = [
@@ -85,9 +108,11 @@ router.get('/', async (req, res, next) => {
       if (!filter.projectId) {
         filter.projectId = { $in: req.user.assignedProjectIds };
       }
+      if (statusFilter === 'FORWARDED_TO_PM' || status === 'FORWARDED_TO_PM') {
+        filter.escalatedToHo = { $ne: true };
+      }
     }
 
-    const statusFilter = parseStatusFilter(status);
     if (statusFilter) filter.status = statusFilter;
 
     if (tab === 'approved') {
@@ -108,7 +133,27 @@ router.get('/', async (req, res, next) => {
       .sort({ createdAt: -1 })
       .populate(populateFields);
 
-    res.json({ data: requests.map(serializeMaterialRequest) });
+    const data = await Promise.all(requests.map((mr) => serializeMaterialRequestEnriched(mr)));
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+});
+
+
+router.get('/pm/daily-cap', async (req, res, next) => {
+  try {
+    if (req.user.role !== UserRole.PROJECT_MANAGER) {
+      return res.status(403).json({ statusCode: 403, message: 'Forbidden' });
+    }
+    const dailyApprovedTotal = await getPmDailyApprovedTotal(req.user._id);
+    res.json({
+      data: {
+        dailyApprovedTotal,
+        dailyCap: MR_PM_DAILY_MAX_INR,
+        remaining: Math.max(0, MR_PM_DAILY_MAX_INR - dailyApprovedTotal),
+      },
+    });
   } catch (err) {
     next(err);
   }
@@ -138,7 +183,7 @@ router.get('/:id', param('id').isMongoId(), validate, async (req, res, next) => 
       }
     }
 
-    res.json({ data: serializeMaterialRequest(mr) });
+    res.json({ data: await serializeMaterialRequestEnriched(mr) });
   } catch (err) {
     next(err);
   }
@@ -286,83 +331,111 @@ router.post(
   requireCapability('ALLOCATE_MATERIAL_REQUEST'),
   [
     param('id').isMongoId(),
-    body('allocations').optional().isArray({ min: 1 }),
-    body('allocations.*.itemId').optional().isMongoId(),
-    body('allocations.*.quantityAllocated').optional().isFloat({ min: 0 }),
-    body('quantityAllocated').optional().isFloat({ min: 0 }),
+    body('decision').isIn(['issue', 'forward']).withMessage('decision must be issue or forward'),
+    body('remark').trim().notEmpty().withMessage('Remark is required'),
   ],
   validate,
   async (req, res, next) => {
-    try {
+    return handleIdempotent(req, res, `mr-allocate:${req.params.id}:${req.body.decision}`, async () => {
       const mr = await MaterialRequest.findById(req.params.id);
-      if (!mr) {
-        return res.status(404).json({ statusCode: 404, message: 'Request not found' });
-      }
+      if (!mr) return { statusCode: 404, body: { statusCode: 404, message: 'Request not found' } };
 
       if (!userCanAccessSite(req.user, mr.siteId)) {
-        return res.status(403).json({ statusCode: 403, message: 'Forbidden: not your site' });
+        return { statusCode: 403, body: { statusCode: 403, message: 'Forbidden: not your site' } };
       }
 
+      const { decision } = req.body;
       if (mr.status !== 'PENDING_STORE') {
-        return res.status(400).json({ statusCode: 400, message: 'Request is not pending store action' });
+        if (decision === 'forward' && FORWARDED_STATUSES.includes(mr.status)) {
+          return { statusCode: 200, body: await mrEnrichedBody(mr._id) };
+        }
+        if (decision === 'issue' && mr.status === 'ALLOCATED') {
+          return { statusCode: 200, body: await mrEnrichedBody(mr._id) };
+        }
+        return { statusCode: 400, body: { statusCode: 400, message: 'Request is not pending store action' } };
+      }
+
+      const remark = requireRemark(req.body.remark);
+      const stockContext = await enrichIndentWithStock(mr);
+
+      if (decision === 'forward') {
+        const fromStatus = mr.status;
+        mr.status = 'FORWARDED_TO_PM';
+        mr.pendingWithRole = 'PROJECT_MANAGER';
+        mr.estimatedValue = estimateIndentAmount(mr);
+        await mr.save();
+
+        await statusHistoryService.record(
+          'MaterialRequest',
+          mr._id,
+          fromStatus,
+          'FORWARDED_TO_PM',
+          req.user._id,
+          remark
+        );
+
+        const pmUsers = await User.find({
+          role: UserRole.PROJECT_MANAGER,
+          assignedProjectIds: mr.projectId,
+        });
+        await notificationService.notifyUsers(
+          pmUsers.map((u) => u._id),
+          {
+            title: 'Indent forwarded to PM',
+            body: `${mr.indentNumber} forwarded — ${remark}`,
+            relatedEntityType: 'MaterialRequest',
+            relatedEntityId: mr._id,
+          }
+        );
+
+        req.auditEntityType = 'MaterialRequest';
+        req.auditEntityId = mr._id;
+
+        return { statusCode: 200, body: await mrEnrichedBody(mr._id) };
+      }
+
+      if (!stockContext.canFullyIssue) {
+        return {
+          statusCode: 400,
+          body: {
+            statusCode: 400,
+            message:
+              'Cannot issue partial indent — one or more lines are short on stock. Forward the entire indent to PM instead.',
+          },
+        };
       }
 
       const lineItems = getIndentLineItems(mr);
-      const allocations = req.body.allocations?.length
-        ? req.body.allocations
-        : lineItems.length === 1
-          ? [{ itemId: lineItems[0]._id.toString(), quantityAllocated: req.body.quantityAllocated }]
-          : null;
-
-      if (!allocations?.length) {
-        return res.status(400).json({
-          statusCode: 400,
-          message: 'allocations array required for multi-item indents',
-        });
-      }
-
-      for (const alloc of allocations) {
-        const item = mr.items.id(alloc.itemId) || lineItems.find((i) => i._id.toString() === alloc.itemId);
-        if (!item) {
-          return res.status(400).json({ statusCode: 400, message: 'Invalid line item' });
-        }
-        const materialId = item.materialId._id || item.materialId;
-        const ledger = await StockLedger.findOne({ siteId: mr.siteId, materialId });
-        const available = ledger?.quantityOnHand || 0;
-        const qty = alloc.quantityAllocated;
-        if (qty > available) {
-          const mat = await Material.findById(materialId);
-          return res.status(400).json({
-            statusCode: 400,
-            message: `Insufficient stock for ${mat?.name || 'material'}. Available: ${available}`,
-          });
-        }
-      }
-
       const fromStatus = mr.status;
-      for (const alloc of allocations) {
-        const item = mr.items.id(alloc.itemId);
-        if (!item) continue;
-        const qty = alloc.quantityAllocated;
+
+      for (const item of lineItems) {
+        const qty = item.quantityRequested;
         item.quantityAllocated = qty;
 
-        const ledger = await StockLedger.findOne({
-          siteId: mr.siteId,
-          materialId: item.materialId,
-        });
-        if (ledger && qty > 0) {
-          ledger.quantityOnHand -= qty;
-          ledger.lastMovementAt = new Date();
-          await ledger.save();
-          await StockMovement.create({
-            siteId: mr.siteId,
-            materialId: item.materialId,
-            materialRequestId: mr._id,
-            quantityDelta: -qty,
-            type: 'ALLOCATION',
-            actorUserId: req.user._id,
-          });
+        const materialId = item.materialId._id || item.materialId;
+        const ledger = await StockLedger.findOne({ siteId: mr.siteId, materialId });
+        if (!ledger || ledger.quantityOnHand < qty) {
+          const mat = await Material.findById(materialId);
+          return {
+            statusCode: 400,
+            body: {
+              statusCode: 400,
+              message: `Insufficient stock for ${mat?.name || 'material'} — forward entire indent to PM.`,
+            },
+          };
         }
+
+        ledger.quantityOnHand -= qty;
+        ledger.lastMovementAt = new Date();
+        await ledger.save();
+        await StockMovement.create({
+          siteId: mr.siteId,
+          materialId,
+          materialRequestId: mr._id,
+          quantityDelta: -qty,
+          type: 'ALLOCATION',
+          actorUserId: req.user._id,
+        });
       }
 
       mr.status = 'ALLOCATED';
@@ -375,12 +448,12 @@ router.post(
         fromStatus,
         'ALLOCATED',
         req.user._id,
-        `Store allocated materials for ${mr.indentNumber}`
+        remark
       );
 
       await notificationService.notifyUser(mr.requestedByUserId, {
         title: 'Indent accepted by store',
-        body: `Your indent ${mr.indentNumber} has been accepted by store.`,
+        body: `Your indent ${mr.indentNumber} has been fully allocated.`,
         relatedEntityType: 'MaterialRequest',
         relatedEntityId: mr._id,
       });
@@ -388,11 +461,8 @@ router.post(
       req.auditEntityType = 'MaterialRequest';
       req.auditEntityId = mr._id;
 
-      const populated = await MaterialRequest.findById(mr._id).populate(populateFields);
-      res.json({ data: serializeMaterialRequest(populated) });
-    } catch (err) {
-      next(err);
-    }
+      return { statusCode: 200, body: await mrEnrichedBody(mr._id) };
+    }, next);
   }
 );
 
@@ -401,43 +471,47 @@ router.post(
   requireCapability('FORWARD_MATERIAL_REQUEST'),
   [
     param('id').isMongoId(),
-    body('reason').trim().notEmpty().withMessage('Reason required'),
+    body('remark').optional().trim(),
+    body('reason').optional().trim(),
   ],
   validate,
   async (req, res, next) => {
-    try {
-      const mr = await MaterialRequest.findById(req.params.id);
-      if (!mr) {
-        return res.status(404).json({ statusCode: 404, message: 'Request not found' });
+    return handleIdempotent(req, res, `mr-forward:${req.params.id}`, async () => {
+      const remark = String(req.body.remark || req.body.reason || '').trim();
+      if (!remark) {
+        return {
+          statusCode: 400,
+          body: { statusCode: 400, message: 'Remark is required before forwarding this indent' },
+        };
       }
+
+      const mr = await MaterialRequest.findById(req.params.id);
+      if (!mr) return { statusCode: 404, body: { statusCode: 404, message: 'Request not found' } };
 
       if (!userCanAccessSite(req.user, mr.siteId) && req.user.role !== UserRole.PROJECT_MANAGER) {
         if (req.user.role === UserRole.PROJECT_MANAGER && !userCanAccessProject(req.user, mr.projectId)) {
-          return res.status(403).json({ statusCode: 403, message: 'Forbidden' });
+          return { statusCode: 403, body: { statusCode: 403, message: 'Forbidden' } };
         }
         if (req.user.role !== UserRole.PROJECT_MANAGER) {
-          return res.status(403).json({ statusCode: 403, message: 'Forbidden: not your site' });
+          return { statusCode: 403, body: { statusCode: 403, message: 'Forbidden: not your site' } };
         }
       }
 
-      // Idempotent: already with PM — return success (avoids false "Forward failed" on retry)
       if (mr.status === 'FORWARDED_TO_PM') {
-        const populated = await MaterialRequest.findById(mr._id).populate(populateFields);
-        return res.json({
-          data: serializeMaterialRequest(populated),
-          message: 'Already forwarded to PM',
-        });
+        return { statusCode: 200, body: { ...(await mrEnrichedBody(mr._id)), message: 'Already forwarded to PM' } };
       }
 
       if (!['ALLOCATED', 'PENDING_STORE'].includes(mr.status)) {
-        return res.status(400).json({
+        return {
           statusCode: 400,
-          message: 'Request cannot be forwarded in current status',
-        });
+          body: { statusCode: 400, message: 'Request cannot be forwarded in current status' },
+        };
       }
 
       const fromStatus = mr.status;
       mr.status = 'FORWARDED_TO_PM';
+      mr.pendingWithRole = 'PROJECT_MANAGER';
+      mr.estimatedValue = estimateIndentAmount(mr);
       await mr.save();
 
       try {
@@ -447,7 +521,7 @@ router.post(
           fromStatus,
           'FORWARDED_TO_PM',
           req.user._id,
-          req.body.reason
+          remark
         );
       } catch (histErr) {
         console.error('Forward status history failed:', histErr.message);
@@ -474,9 +548,62 @@ router.post(
       req.auditEntityType = 'MaterialRequest';
       req.auditEntityId = mr._id;
 
+      return { statusCode: 200, body: await mrEnrichedBody(mr._id) };
+    }, next);
+  }
+);
+
+router.post(
+  '/:id/store-reject',
+  requireCapability('ALLOCATE_MATERIAL_REQUEST'),
+  [
+    param('id').isMongoId(),
+    body('remark').trim().notEmpty().withMessage('Remark is required'),
+  ],
+  validate,
+  async (req, res, next) => {
+    try {
+      const mr = await MaterialRequest.findById(req.params.id);
+      if (!mr) {
+        return res.status(404).json({ statusCode: 404, message: 'Request not found' });
+      }
+
+      if (!userCanAccessSite(req.user, mr.siteId)) {
+        return res.status(403).json({ statusCode: 403, message: 'Forbidden: not your site' });
+      }
+
+      if (mr.status !== 'PENDING_STORE') {
+        return res.status(400).json({ statusCode: 400, message: 'Request is not pending store action' });
+      }
+
+      const remark = requireRemark(req.body.remark);
+      const fromStatus = mr.status;
+      mr.status = 'REJECTED';
+      mr.pendingWithRole = null;
+      await mr.save();
+
+      await statusHistoryService.record(
+        'MaterialRequest',
+        mr._id,
+        fromStatus,
+        'REJECTED',
+        req.user._id,
+        remark
+      );
+
+      await notificationService.notifyUser(mr.requestedByUserId, {
+        title: 'Indent rejected by store',
+        body: `${mr.indentNumber} was not approved: ${remark}`,
+        relatedEntityType: 'MaterialRequest',
+        relatedEntityId: mr._id,
+      });
+
       const populated = await MaterialRequest.findById(mr._id).populate(populateFields);
-      res.json({ data: serializeMaterialRequest(populated) });
+      res.json({ data: await serializeMaterialRequestEnriched(populated) });
     } catch (err) {
+      if (err.statusCode) {
+        return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
+      }
       next(err);
     }
   }
@@ -488,21 +615,81 @@ router.post(
   param('id').isMongoId(),
   validate,
   async (req, res, next) => {
-    try {
+    return handleIdempotent(req, res, `mr-approve:${req.params.id}`, async () => {
       const mr = req._materialRequest || (await MaterialRequest.findById(req.params.id));
       if (!mr) {
-        return res.status(404).json({ statusCode: 404, message: 'Request not found' });
+        return { statusCode: 404, body: { statusCode: 404, message: 'Request not found' } };
       }
 
       const actingRole = req.approvalContext.principal.role;
+      const pmId = req.approvalContext.principal._id;
 
-      if (actingRole === UserRole.PROJECT_MANAGER && mr.status !== 'FORWARDED_TO_PM') {
-        return res.status(400).json({ statusCode: 400, message: 'Request not awaiting PM approval' });
+      if (actingRole === UserRole.PROJECT_MANAGER) {
+        if (mr.status !== 'FORWARDED_TO_PM') {
+          if (['PM_APPROVED', 'PURCHASE_REQUESTED', 'PENDING_HO'].includes(mr.status)) {
+            return { statusCode: 200, body: await mrEnrichedBody(mr._id) };
+          }
+          return { statusCode: 400, body: { statusCode: 400, message: 'Request not awaiting PM approval' } };
+        }
+
+        if (!mr.estimatedValue) mr.estimatedValue = estimateIndentAmount(mr);
+        const capCheck = await checkPmCanApprove(pmId, mr);
+
+        if (capCheck.wouldExceed) {
+          const fromStatus = mr.status;
+          mr.status = 'PENDING_HO';
+          mr.escalatedToHo = true;
+          mr.escalatedAt = new Date();
+          mr.pendingWithRole = 'EXECUTIVE';
+          await mr.save();
+
+          await statusHistoryService.record(
+            'MaterialRequest',
+            mr._id,
+            fromStatus,
+            'PENDING_HO',
+            req.user._id,
+            `Escalated: exceeds ₹${MR_PM_DAILY_MAX_INR.toLocaleString('en-IN')} daily limit`
+          );
+
+          const executives = await User.find({ role: UserRole.EXECUTIVE });
+          await notificationService.notifyUsers(
+            executives.map((u) => u._id),
+            {
+              title: 'Indent escalated to Head Office',
+              body: `${mr.indentNumber} exceeds PM daily approval cap.`,
+              relatedEntityType: 'MaterialRequest',
+              relatedEntityId: mr._id,
+            }
+          );
+
+          const enriched = await mrEnrichedBody(mr._id);
+          return {
+            statusCode: 409,
+            body: {
+              statusCode: 409,
+              message: `Escalated: exceeds ₹${MR_PM_DAILY_MAX_INR.toLocaleString('en-IN')} daily limit`,
+              escalated: true,
+              dailyApprovedTotal: capCheck.dailyApprovedTotal,
+              dailyCap: capCheck.dailyCap,
+              ...enriched,
+            },
+          };
+        }
+      } else if ([UserRole.EXECUTIVE, UserRole.COORDINATOR].includes(actingRole)) {
+        if (mr.status !== 'PENDING_HO') {
+          return { statusCode: 400, body: { statusCode: 400, message: 'Request not in Head Office queue' } };
+        }
+      } else if (actingRole === UserRole.CHAIRMAN) {
+        // Chairman final approval path (legacy)
+      } else {
+        return { statusCode: 403, body: { statusCode: 403, message: 'Forbidden' } };
       }
 
       const fromStatus = mr.status;
       const toStatus = actingRole === UserRole.CHAIRMAN ? 'CHAIRMAN_APPROVED' : 'PM_APPROVED';
       mr.status = toStatus;
+      if (!mr.estimatedValue) mr.estimatedValue = estimateIndentAmount(mr);
       await mr.save();
 
       const note = delegationService.formatApprovalNote('Approved', req.approvalContext);
@@ -530,11 +717,22 @@ router.post(
         await createPurchaseRequestForIndent(mrForPr, req.user._id);
       }
 
-      const populated = await MaterialRequest.findById(mr._id).populate(populateFields);
-      res.json({ data: serializeMaterialRequest(populated) });
-    } catch (err) {
-      next(err);
-    }
+      const dailyApprovedTotal =
+        actingRole === UserRole.PROJECT_MANAGER
+          ? await getPmDailyApprovedTotal(pmId)
+          : undefined;
+
+      const enriched = await mrEnrichedBody(mr._id);
+      return {
+        statusCode: 200,
+        body: {
+          ...enriched,
+          escalated: false,
+          dailyApprovedTotal,
+          dailyCap: MR_PM_DAILY_MAX_INR,
+        },
+      };
+    }, next);
   }
 );
 
@@ -556,6 +754,12 @@ router.post(
       const actingRole = req.approvalContext.principal.role;
       if (actingRole === UserRole.PROJECT_MANAGER && mr.status !== 'FORWARDED_TO_PM') {
         return res.status(400).json({ statusCode: 400, message: 'Request not awaiting PM action' });
+      }
+      if (
+        [UserRole.EXECUTIVE, UserRole.COORDINATOR].includes(actingRole) &&
+        mr.status !== 'PENDING_HO'
+      ) {
+        return res.status(400).json({ statusCode: 400, message: 'Request not in Head Office queue' });
       }
 
       const fromStatus = mr.status;

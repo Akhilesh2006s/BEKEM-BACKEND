@@ -12,6 +12,9 @@
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
     "seed": "node src/scripts/seed.js",
+    "backfill:uat": "node src/scripts/backfillUatData.js",
+    "seed:transactions": "node src/scripts/seedTransactionalDemo.js",
+    "uat:walk": "node src/scripts/uatSmokeWalk.js",
     "import:po-index": "node src/scripts/importPoIndex.js",
     "backfill:stock": "node src/scripts/backfillStock.js",
     "test": "node --test --test-concurrency=1 src/**/*.test.js"

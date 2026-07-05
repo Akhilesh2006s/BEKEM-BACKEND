@@ -84,7 +84,7 @@ describe('RBAC endpoint enforcement', () => {
     const res = await request(app)
       .post('/api/material-requests/507f1f77bcf86cd799439011/allocate')
       .set('Authorization', `Bearer ${token}`)
-      .send({ quantityAllocated: 1 });
+      .send({ decision: 'issue', remark: 'test' });
 
     assert.strictEqual(res.status, 403);
   });

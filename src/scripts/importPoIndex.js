@@ -14,7 +14,7 @@ const { syncMasterDataFromInventory } = require('../services/syncMasterDataFromI
 
 const DEFAULT_PATH = path.resolve(
   __dirname,
-  '../../data/PO INDEX - BEKEM INFRA -2025-26.xlsx'
+  '../../../../data/PO INDEX - BEKEM INFRA -2025-26.xlsx'
 );
 
 function excelSerialToDate(serial) {

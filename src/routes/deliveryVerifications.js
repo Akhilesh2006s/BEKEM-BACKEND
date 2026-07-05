@@ -10,8 +10,10 @@ const { authenticate } = require('../middleware/auth');
 const { requireCapability } = require('../middleware/rbac');
 const { validate } = require('../middleware/validate');
 const notificationService = require('../services/notificationService');
+const { recordPoDispatch } = require('../services/poTimelineService');
 const { UserRole } = require('@afios/shared');
 const { User } = require('../models');
+const { handleIdempotent } = require('../utils/idempotentHandler');
 
 const router = express.Router();
 router.use(authenticate);
@@ -52,24 +54,33 @@ router.post(
   ],
   validate,
   async (req, res, next) => {
-    try {
+    return handleIdempotent(req, res, `dv-create:${req.body.purchaseOrderId}`, async () => {
       const po = await PurchaseOrder.findById(req.body.purchaseOrderId).populate({
         path: 'purchaseRequestId',
         populate: { path: 'projectId' },
       });
-      if (!po) return res.status(404).json({ statusCode: 404, message: 'PO not found' });
+      if (!po) return { statusCode: 404, body: { statusCode: 404, message: 'PO not found' } };
       if (po.status !== 'APPROVED') {
-        return res.status(400).json({ statusCode: 400, message: 'PO must be approved before verification' });
+        return { statusCode: 400, body: { statusCode: 400, message: 'PO must be approved before verification' } };
       }
 
       const existing = await DeliveryVerification.findOne({ purchaseOrderId: po._id });
       if (existing) {
-        return res.status(400).json({ statusCode: 400, message: 'Delivery already verified for this PO' });
+        return {
+          statusCode: 200,
+          body: {
+            data: {
+              id: existing._id.toString(),
+              purchaseOrderId: po._id.toString(),
+              status: existing.status,
+            },
+          },
+        };
       }
 
       const siteId = req.user.assignedSiteId;
       if (!siteId) {
-        return res.status(400).json({ statusCode: 400, message: 'No assigned site for verification' });
+        return { statusCode: 400, body: { statusCode: 400, message: 'No assigned site for verification' } };
       }
 
       const verification = await DeliveryVerification.create({
@@ -96,16 +107,19 @@ router.post(
         }
       );
 
-      res.status(201).json({
-        data: {
-          id: verification._id.toString(),
-          purchaseOrderId: po._id.toString(),
-          status: verification.status,
+      await recordPoDispatch(po._id, req.user._id);
+
+      return {
+        statusCode: 201,
+        body: {
+          data: {
+            id: verification._id.toString(),
+            purchaseOrderId: po._id.toString(),
+            status: verification.status,
+          },
         },
-      });
-    } catch (err) {
-      next(err);
-    }
+      };
+    }, next);
   }
 );
 

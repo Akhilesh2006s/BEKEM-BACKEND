@@ -11,9 +11,10 @@ async function getProjectManagers(projectId) {
 
 function userManagesProject(user, projectId) {
   if (!user || !projectId) return false;
+  const pid = projectId._id ? projectId._id.toString() : projectId.toString();
   return (user.assignedProjectIds || [])
     .map((id) => id.toString())
-    .includes(projectId.toString());
+    .includes(pid);
 }
 
 function serializeTransferRow(t) {
@@ -29,24 +30,58 @@ function serializeTransferRow(t) {
     toProjectName: t.toProjectId?.name,
     fromSite: t.fromSiteId?.name,
     toSite: t.toSiteId?.name,
+    materialRequestId: t.materialRequestId?._id?.toString() || t.materialRequestId?.toString(),
+    coordinatorDecision: t.coordinatorDecision,
     itemCount: t.items.length,
     items: t.items.map((item) => ({
       materialId: item.materialId?._id?.toString(),
       materialName: item.materialId?.name,
       quantity: item.quantity,
+      quantityReceived: item.quantityReceived,
     })),
     note: t.note,
     rejectionNote: t.rejectionNote || '',
     requestedBy: t.requestedByUserId?.name,
     requestedByUserId: t.requestedByUserId?._id?.toString() || t.requestedByUserId?.toString(),
-    destinationApprovedBy: t.destinationApprovedByUserId?.name,
-    sourceFinalApprovedBy: t.sourceFinalApprovedByUserId?.name,
+    pmApprovedBy: t.pmApprovedByUserId?.name,
+    pmApprovedAt: t.pmApprovedAt?.toISOString?.(),
+    coordinatorDecidedBy: t.coordinatorDecidedByUserId?.name,
+    coordinatorDecidedAt: t.coordinatorDecidedAt?.toISOString?.(),
+    transferredAt: t.transferredAt?.toISOString?.(),
     createdAt: t.createdAt?.toISOString?.(),
   };
+}
+
+function transferActionFlags(t, user) {
+  const toId = t.toProjectId?._id?.toString() || t.toProjectId?.toString();
+  const flags = {
+    canPmApprove: false,
+    canPmReject: false,
+    canCoordinatorDecide: false,
+    canExecute: false,
+  };
+
+  if (user.role === UserRole.PROJECT_MANAGER && t.status === 'REQUESTED') {
+    flags.canPmApprove = userManagesProject(user, toId);
+    flags.canPmReject = flags.canPmApprove;
+  }
+  if (user.role === UserRole.COORDINATOR && t.status === 'PM_APPROVED') {
+    flags.canCoordinatorDecide = true;
+  }
+  if (
+    user.role === UserRole.COORDINATOR &&
+    t.status === 'COORDINATOR_DECIDED' &&
+    t.coordinatorDecision === 'transfer'
+  ) {
+    flags.canExecute = true;
+  }
+
+  return flags;
 }
 
 module.exports = {
   getProjectManagers,
   userManagesProject,
   serializeTransferRow,
+  transferActionFlags,
 };

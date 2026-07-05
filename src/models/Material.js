@@ -7,8 +7,11 @@ const materialSchema = new mongoose.Schema(
     description: { type: String, default: '' },
     unit: { type: String, required: true },
     grade: { type: String, default: '' },
-    category: { type: String, default: 'General' },
+    category: { type: String, default: 'Consumables' },
+    categoryId: { type: mongoose.Schema.Types.ObjectId, ref: 'MaterialCategory' },
     hsnCode: { type: String, default: '' },
+    /** Default GST % for PO lines (e.g. 18). */
+    gstRate: { type: Number, default: 18 },
     isActive: { type: Boolean, default: true },
   },
   { timestamps: true }

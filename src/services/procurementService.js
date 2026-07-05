@@ -11,6 +11,7 @@ const {
 } = require('../models');
 const { UserRole } = require('@afios/shared');
 const statusHistoryService = require('./statusHistoryService');
+const { recordPoCreated } = require('./poTimelineService');
 const notificationService = require('./notificationService');
 const { generateRfqNumber, generatePoNumber, generateDraftPoRef } = require('./documentNumberService');
 const { getIndentLineItems } = require('./materialRequestHelpers');
@@ -34,24 +35,9 @@ async function resolveVendorsForIndent(materialIds) {
   return Vendor.find({ isActive: { $ne: false } }).limit(3);
 }
 
-async function buildConsigneeAddress(mr) {
-  const site = mr.siteId?._id ? mr.siteId : mr.siteId ? await Site.findById(mr.siteId) : null;
-  const siteId = site?._id || mr.siteId;
-  const storeUser = siteId
-    ? await User.findOne({ role: UserRole.STORE_INCHARGE, assignedSiteId: siteId })
-    : null;
-
-  const lines = ['BEKEM INFRA PROJECTS PVT. LTD.'];
-  if (site) {
-    lines.push(site.name);
-    if (site.chainageLabel) lines.push(site.chainageLabel);
-  }
-  if (storeUser) {
-    const phone = storeUser.phone || storeUser.contactInfo || '';
-    lines.push(`Store Manager: ${storeUser.name}${phone ? ` — ${phone}` : ''}`);
-  }
-  return lines.join('\n');
-}
+const { buildConsigneeAddress } = require('./consigneeAddressService');
+const { validatePoLinePayload, computePoLineTotals } = require('./poLineCalculation');
+const { resolveBillingAddress, resolveDeliveryAddress } = require('./addressResolutionService');
 
 async function buildLineItemsFromIndent(mr, budgetAmount) {
   const items = getIndentLineItems(mr);
@@ -77,10 +63,11 @@ async function buildLineItemsFromIndent(mr, budgetAmount) {
     lineItems.push({
       description: mat.description ? `${mat.name} — ${mat.description}` : mat.name,
       materialId: mat._id,
+      itemCode: mat.code,
       hsnCode: mat.hsnCode || '',
       quantity: qty,
       rate,
-      gstPercent: 18,
+      gstPercent: mat.gstRate ?? 18,
       amount,
     });
   }
@@ -139,25 +126,41 @@ function normalizeWizardLineItems(rawItems, mr, fallbackAmount) {
 
   for (let i = 0; i < rawItems.length; i++) {
     const row = rawItems[i];
-    const qty = Number(row.quantity) || 0;
-    const rate = Number(row.rate) || 0;
-    const gstPercent = row.gstPercent != null ? Number(row.gstPercent) : 18;
-    const amount = row.amount != null ? Number(row.amount) : qty * rate;
-    subtotal += amount;
     const indentLine = indentItems[i];
     const mat = indentLine?.materialId;
+    const gstPercent =
+      row.gstPercent != null
+        ? Number(row.gstPercent)
+        : mat && typeof mat === 'object'
+          ? mat.gstRate ?? 18
+          : 18;
+
+    const computed = validatePoLinePayload(
+      {
+        ...row,
+        gstPercent,
+        materialId: row.materialId || mat?._id || mat,
+      },
+      i
+    );
 
     lineItems.push({
       description:
         row.description ||
-        (mat && typeof mat === 'object' && mat.name ? mat.name : 'Item'),
+        (mat && typeof mat === 'object' && mat.name
+          ? mat.description
+            ? `${mat.name} — ${mat.description}`
+            : mat.name
+          : 'Item'),
       materialId: row.materialId || mat?._id || mat,
+      itemCode: (mat && typeof mat === 'object' ? mat.code : row.itemCode) || '',
       hsnCode: row.hsnCode || (mat && typeof mat === 'object' ? mat.hsnCode : '') || '',
-      quantity: qty,
-      rate,
+      quantity: Number(row.quantity),
+      rate: Number(row.rate),
       gstPercent,
-      amount,
+      amount: computed.amount,
     });
+    subtotal += computed.grandTotal;
   }
 
   return { lineItems, subtotal: subtotal || fallbackAmount };
@@ -169,7 +172,10 @@ async function createPurchaseOrderFromWizard({
   vendorId,
   paymentTerms,
   billingAddress,
+  billingAddressType,
   deliveryAddress: deliveryOverride,
+  deliveryAddressType,
+  deliveryAddressOtherText,
   expectedDeliveryDate,
   referenceNote,
   lineItems: lineItemsOverride,
@@ -233,7 +239,20 @@ async function createPurchaseOrderFromWizard({
   }
 
   const draftRef = await generateDraftPoRef(projectCode);
-  const deliveryAddress = deliveryOverride || (mr ? await buildConsigneeAddress(mr) : '');
+  const projectId = pr.projectId?._id || pr.projectId;
+  const resolvedBilling =
+    (await resolveBillingAddress({
+      billingAddressType: billingAddressType || 'registered_office',
+      projectId,
+      overrideText: billingAddress,
+    })) || BEKEM_BUYER_ADDRESS;
+  const deliveryAddress =
+    deliveryOverride ||
+    (await resolveDeliveryAddress({
+      deliveryAddressType: deliveryAddressType || 'site',
+      deliveryAddressOtherText,
+      mr,
+    }));
   const { lineItems, subtotal } = normalizeWizardLineItems(
     lineItemsOverride,
     mr,
@@ -262,8 +281,11 @@ async function createPurchaseOrderFromWizard({
     quotationId: quotation._id,
     amount: poAmount,
     paymentTerms: paymentTerms || quotation.terms,
-    billingAddress: billingAddress || BEKEM_BUYER_ADDRESS,
+    billingAddress: resolvedBilling,
+    billingAddressType: billingAddressType || 'registered_office',
     deliveryAddress,
+    deliveryAddressType: deliveryAddressType || 'site',
+    deliveryAddressOtherText: deliveryAddressOtherText || '',
     expectedDeliveryDate: expectedDeliveryDate ? new Date(expectedDeliveryDate) : undefined,
     referenceNote: referenceNote || (mr?.indentNumber ? `Indent ${mr.indentNumber}` : ''),
     lineItems,
@@ -281,6 +303,8 @@ async function createPurchaseOrderFromWizard({
       ? 'PO created — pending Project Manager approval (under ₹5,000)'
       : 'PO created — pending coordinator review'
   );
+
+  await recordPoCreated(po._id, actorUserId);
 
   if (requiresPmApproval(poAmount) && pr.projectId) {
     const projectId = pr.projectId._id || pr.projectId;
@@ -341,7 +365,10 @@ async function createPurchaseOrdersFromWizardBatch({
   orders,
   paymentTerms,
   billingAddress,
+  billingAddressType,
   deliveryAddress,
+  deliveryAddressType,
+  deliveryAddressOtherText,
   expectedDeliveryDate,
   referenceNote,
   actorUserId,
@@ -359,7 +386,10 @@ async function createPurchaseOrdersFromWizardBatch({
       vendorId: order.vendorId,
       paymentTerms: order.paymentTerms || paymentTerms,
       billingAddress,
+      billingAddressType,
       deliveryAddress,
+      deliveryAddressType,
+      deliveryAddressOtherText,
       expectedDeliveryDate: order.expectedDeliveryDate || expectedDeliveryDate,
       referenceNote,
       lineItems: order.lineItems,
@@ -376,6 +406,5 @@ module.exports = {
   ensureRfqAndQuotations,
   createPurchaseOrderFromWizard,
   createPurchaseOrdersFromWizardBatch,
-  buildConsigneeAddress,
   buildLineItemsFromIndent,
 };

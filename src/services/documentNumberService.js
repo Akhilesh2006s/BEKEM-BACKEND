@@ -28,12 +28,25 @@ async function generateRfqNumber(projectCode) {
 }
 
 async function generateDraftPoRef(projectCode) {
-  const now = new Date();
-  const fyStart = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
-  const fy = `${String(fyStart).slice(-2)}-${String(fyStart + 1).slice(-2)}`;
-  const prefix = `DRAFT/PO/${projectCode}/FY${fy}/`;
+  const { getFinancialYear, buildDraftProcurementRef } = require('./procurementReferenceService');
   const { PurchaseOrder } = require('../models');
-  return nextSequence(PurchaseOrder, 'draftRef', prefix);
+  const fy = getFinancialYear();
+  const proj = String(projectCode || 'PRJ')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    .slice(0, 5) || 'PRJ';
+  const prefix = `BEKEM-DRAFT/${proj}/`;
+  const last = await PurchaseOrder.findOne({ draftRef: { $regex: `^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}` } })
+    .sort({ draftRef: -1 })
+    .select('draftRef');
+  let seq = 1;
+  if (last?.draftRef) {
+    const parts = last.draftRef.split('/');
+    const n = parseInt(parts[2], 10);
+    if (Number.isFinite(n)) seq = n + 1;
+  }
+  return buildDraftProcurementRef({ projectCode: proj, draftSeq: seq, financialYear: fy });
 }
 
 async function generatePoNumber(projectCode) {
