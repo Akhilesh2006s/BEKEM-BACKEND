@@ -199,12 +199,62 @@ export interface PoGrnListItemDto {
   varianceDetails?: { lines: Array<Record<string, unknown>> } | null;
   invoiceNo?: string;
   receivedAt: string;
+  billNumber?: string;
+  invoiceValue?: number;
+  paidAmount?: number;
+  outstandingAmount?: number;
+  paymentStatus?: string;
+  tallySyncStatus?: string;
+}
+
+export interface PoPaymentSummaryDto {
+  totalInvoiced: number;
+  totalPaid: number;
+  totalOutstanding: number;
+  paymentStatus: string;
+  billCount: number;
 }
 
 export interface PoGrnsDto {
   fulfillmentStatus: 'open_partial' | 'closed_complete';
   lineSummary: PoGrnLineSummaryDto[];
   grns: PoGrnListItemDto[];
+  paymentSummary?: PoPaymentSummaryDto;
+}
+
+export interface PaymentBillDto {
+  id: string;
+  billNumber: string;
+  purchaseOrderId?: string;
+  grnId?: string;
+  vendorName: string;
+  projectCode: string;
+  projectName?: string;
+  invoiceNumber: string;
+  invoiceDate: string | null;
+  invoiceValue: number;
+  outstandingAmount: number;
+  paidAmount: number;
+  paymentStatus: string;
+  invoiceStatus: string;
+  tallySyncStatus: string;
+  tallyVoucherId: string;
+  dueDate: string | null;
+  paidDate: string | null;
+  agingDays: number;
+  paymentRemark?: string;
+}
+
+export interface FinanceSummaryDto {
+  pending: number;
+  partial: number;
+  overdue: number;
+  paid: number;
+  outstandingTotal: number;
+  paidTotal: number;
+  tallyPending: number;
+  tallySynced: number;
+  total: number;
 }
 
 export interface DeliveryAlertDto {

@@ -134,13 +134,23 @@ async function syncPoFulfillment(po, actorUserId) {
 }
 
 async function listPoGrns(poId) {
+  const { PaymentBill } = require('../models');
+  const { summarizePayments } = require('./financeService');
+
   const [po, grns] = await Promise.all([
     PurchaseOrder.findById(poId).lean(),
     GoodsReceiptNote.find({ purchaseOrderId: poId }).sort({ receivedAt: -1, createdAt: -1 }).lean(),
   ]);
   if (!po) return null;
 
-  const cumulative = await getCumulativeReceivedByLine(poId);
+  const grnIds = grns.map((g) => g._id);
+  const [cumulative, bills] = await Promise.all([
+    getCumulativeReceivedByLine(poId),
+    PaymentBill.find({ grnId: { $in: grnIds } }).lean(),
+  ]);
+  const billByGrn = new Map(bills.map((b) => [b.grnId.toString(), b]));
+  const poBills = await PaymentBill.find({ purchaseOrderId: poId }).lean();
+
   const lineSummary = (po.lineItems || []).map((line, index) => {
     const key = buildLineKey(line, index);
     const ordered = Number(line.quantity);
@@ -159,17 +169,30 @@ async function listPoGrns(poId) {
   return {
     fulfillmentStatus: po.fulfillmentStatus || 'open_partial',
     lineSummary,
-    grns: grns.map((g) => ({
-      id: g._id.toString(),
-      grnNumber: g.grnNumber,
-      status: g.status,
-      receiveType: g.receiveType,
-      isPartialGrn: Boolean(g.isPartialGrn),
-      varianceDetails: g.varianceDetails,
-      invoiceNo: g.invoiceNo,
-      receivedAt: g.receivedAt?.toISOString?.() || g.createdAt?.toISOString?.() || '',
-      items: g.items,
-    })),
+    paymentSummary: {
+      ...summarizePayments(poBills),
+      billCount: poBills.length,
+    },
+    grns: grns.map((g) => {
+      const bill = billByGrn.get(g._id.toString());
+      return {
+        id: g._id.toString(),
+        grnNumber: g.grnNumber,
+        status: g.status,
+        receiveType: g.receiveType,
+        isPartialGrn: Boolean(g.isPartialGrn),
+        varianceDetails: g.varianceDetails,
+        invoiceNo: g.invoiceNo,
+        receivedAt: g.receivedAt?.toISOString?.() || g.createdAt?.toISOString?.() || '',
+        items: g.items,
+        billNumber: bill?.billNumber || '',
+        invoiceValue: bill?.invoiceValue,
+        paidAmount: bill?.paidAmount || 0,
+        outstandingAmount: bill?.outstandingAmount,
+        paymentStatus: bill?.paymentStatus || (bill ? 'PENDING' : undefined),
+        tallySyncStatus: bill?.tallySyncStatus,
+      };
+    }),
   };
 }
 

@@ -17,6 +17,7 @@ describe('Permission Matrix', () => {
     const caps = PERMISSION_MATRIX[UserRole.STORE_INCHARGE];
     assert.ok(caps.includes('ALLOCATE_MATERIAL_REQUEST'));
     assert.ok(caps.includes('FORWARD_MATERIAL_REQUEST'));
+    assert.ok(caps.includes('VIEW_FINANCE'));
     assert.ok(!caps.includes('CREATE_MATERIAL_REQUEST'));
     assert.ok(!caps.includes('CREATE_PO'));
     assert.ok(!caps.includes('VERIFY_RECORDS'));

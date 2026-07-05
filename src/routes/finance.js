@@ -8,7 +8,8 @@ const {
   serializePaymentBill,
   listPaymentBills,
   getFinanceSummary,
-  computePaymentStatus,
+  applyPaymentToBill,
+  assertCanAccessBill,
 } = require('../services/financeService');
 
 const router = express.Router();
@@ -17,7 +18,7 @@ router.use(requireCapability('VIEW_FINANCE'));
 
 router.get('/summary', async (req, res, next) => {
   try {
-    const summary = await getFinanceSummary();
+    const summary = await getFinanceSummary(req.user);
     res.json({ data: summary });
   } catch (err) {
     next(err);
@@ -29,7 +30,8 @@ router.get('/bills', async (req, res, next) => {
     const filter = {};
     if (req.query.paymentStatus) filter.paymentStatus = req.query.paymentStatus;
     if (req.query.tallySyncStatus) filter.tallySyncStatus = req.query.tallySyncStatus;
-    const bills = await listPaymentBills(filter);
+    if (req.query.purchaseOrderId) filter.purchaseOrderId = req.query.purchaseOrderId;
+    const bills = await listPaymentBills(req.user, filter);
     res.json({ data: bills.map(serializePaymentBill) });
   } catch (err) {
     next(err);
@@ -40,6 +42,7 @@ router.patch(
   '/bills/:id/payment',
   requireCapability('EDIT_COORDINATOR_RECORDS'),
   param('id').isMongoId(),
+  body('paymentAmount').optional().isFloat({ gt: 0 }),
   body('paidAmount').optional().isFloat({ min: 0 }),
   body('paidDate').optional().isISO8601(),
   body('paymentRemark').optional().trim().isLength({ max: 500 }),
@@ -54,26 +57,24 @@ router.patch(
         .populate('projectId', 'code name');
       if (!bill) return res.status(404).json({ statusCode: 404, message: 'Bill not found' });
 
-      if (req.body.paidAmount != null) {
-        bill.paidAmount = Number(req.body.paidAmount);
-        bill.outstandingAmount = Math.max(0, bill.invoiceValue - bill.paidAmount);
-        if (bill.paidAmount >= bill.invoiceValue) {
-          bill.paidDate = req.body.paidDate ? new Date(req.body.paidDate) : new Date();
-          bill.invoiceStatus = 'PAID';
-        }
-      }
-      if (req.body.paidDate) bill.paidDate = new Date(req.body.paidDate);
-      if (req.body.paymentRemark != null) bill.paymentRemark = req.body.paymentRemark;
-      if (req.body.tallySyncStatus) bill.tallySyncStatus = req.body.tallySyncStatus;
-      if (req.body.tallyVoucherId != null) bill.tallyVoucherId = req.body.tallyVoucherId;
-      if (req.body.invoiceStatus) bill.invoiceStatus = req.body.invoiceStatus;
+      assertCanAccessBill(req.user, bill);
 
-      bill.paymentStatus = computePaymentStatus(bill);
+      if (req.body.paymentAmount == null && req.body.paidAmount == null) {
+        return res.status(400).json({
+          statusCode: 400,
+          message: 'Provide paymentAmount (installment) or paidAmount (cumulative total)',
+        });
+      }
+
+      await applyPaymentToBill(bill, req.body);
       bill.processedByUserId = req.user._id;
       await bill.save();
 
       res.json({ data: serializePaymentBill(bill) });
     } catch (err) {
+      if (err.statusCode) {
+        return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
+      }
       next(err);
     }
   }
