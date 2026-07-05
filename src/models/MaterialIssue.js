@@ -29,6 +29,9 @@ const materialIssueSchema = new mongoose.Schema(
     status: { type: String, enum: ['ISSUED'], default: 'ISSUED' },
     issueReason: { type: String, enum: ISSUE_REASONS },
     issueReasonOtherText: { type: String, default: '' },
+    /** Who received the material at site (employee, contractor, or department). */
+    issuedToType: { type: String, enum: ['EMPLOYEE', 'CONTRACTOR', 'DEPARTMENT'] },
+    issuedToName: { type: String, default: '', trim: true },
     note: { type: String, default: '' },
     attachments: { type: [attachmentSchema], default: [] },
   },

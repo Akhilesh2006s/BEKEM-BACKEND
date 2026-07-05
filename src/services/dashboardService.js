@@ -333,19 +333,21 @@ async function getTodayActions(user) {
   }
 
   if (role === UserRole.EXECUTIVE) {
-    const openPrs = await PurchaseRequest.countDocuments({ status: 'OPEN' });
-    const pmApproved = await MaterialRequest.countDocuments({ status: 'PM_APPROVED' });
-    const readyForPo = openPrs + pmApproved;
-    if (readyForPo > 0) {
+    const {
+      countExecutivePendingPurchaseRequests,
+    } = require('./executivePurchaseRequestQueueService');
+    const pendingPrs = await countExecutivePendingPurchaseRequests();
+    if (pendingPrs > 0) {
       actions.push({
-        id: 'exec-po',
-        title: `Create PO for ${readyForPo} ready request${readyForPo > 1 ? 's' : ''}`,
-        subtitle: 'Start the purchase order wizard',
-        href: '/executive/po/new',
+        id: 'exec-pr-queue',
+        title: `Process ${pendingPrs} purchase request${pendingPrs > 1 ? 's' : ''}`,
+        subtitle: 'Review PM-forwarded indents and create PO or recommend branch transfer',
+        href: '/executive/purchase-requests',
         priority: 'high',
-        count: readyForPo,
+        count: pendingPrs,
       });
     }
+    const pmApproved = await MaterialRequest.countDocuments({ status: 'PM_APPROVED' });
     const pendingAccept = await WorkOrder.countDocuments({ status: 'PENDING_ACCEPTANCE' });
     if (pendingAccept > 0) {
       actions.push({
@@ -373,17 +375,13 @@ async function getTodayActions(user) {
   }
 
   if (role === UserRole.COORDINATOR) {
-    const pending = await PurchaseOrder.countDocuments({
-      status: { $in: ['PENDING_REVIEW', 'COORDINATOR_PENDING'] },
-    });
+    const { countCoordinatorVerifyPos } = require('./coordinatorPoQueueService');
+    const pending = await countCoordinatorVerifyPos();
     actions.push({
       id: 'coord-verify',
       title: pending > 0 ? `Verify ${pending} purchase order${pending > 1 ? 's' : ''}` : 'PO verification queue clear',
       subtitle: pending > 0 ? 'Review and approve purchase orders' : 'No POs awaiting verification',
-      href:
-        pending > 0
-          ? await firstPoDetailHref(['PENDING_REVIEW', 'COORDINATOR_PENDING'], '/coordinator')
-          : '/coordinator/verify-pos',
+      href: pending > 0 ? '/coordinator/verify-pos' : '/coordinator/verify-pos',
       priority: pending > 0 ? 'high' : 'low',
       count: pending,
     });
@@ -583,7 +581,7 @@ async function globalSearch(user, q) {
     .limit(8);
 
   const branchTransfers =
-    user.role === UserRole.SITE_INCHARGE
+    user.role === UserRole.SITE_INCHARGE || user.role === UserRole.STORE_INCHARGE
       ? []
       : await BranchTransfer.find({ transferNumber: regex }).sort({ createdAt: -1 }).limit(8);
 
@@ -620,8 +618,6 @@ async function globalSearch(user, q) {
   }
 
   function btHref(bt) {
-    if (user.role === UserRole.PROJECT_MANAGER) return `/pm/branch-transfers/${bt._id}`;
-    if (user.role === UserRole.STORE_INCHARGE) return `/store/branch-transfers/${bt._id}`;
     return `/branch-transfers/${bt._id}`;
   }
 
@@ -818,6 +814,7 @@ async function getUserAnalytics() {
 async function getDashboardWidgets(user) {
   const now = new Date();
   const role = user.role;
+  const { countPendingProcurementDecisions } = require('./procurementDecisionService');
 
   const pendingPoStatuses = [
     'DRAFT',
@@ -845,13 +842,38 @@ async function getDashboardWidgets(user) {
       }),
     ]);
 
+  const procurementCounts =
+    role === UserRole.EXECUTIVE ? await countPendingProcurementDecisions() : null;
+
+  const executivePrCount =
+    role === UserRole.EXECUTIVE
+      ? await require('./executivePurchaseRequestQueueService').countExecutivePendingPurchaseRequests()
+      : null;
+
+  const coordinatorVerifyCount =
+    role === UserRole.COORDINATOR
+      ? await require('./coordinatorPoQueueService').countCoordinatorVerifyPos()
+      : null;
+
   return {
     role,
     widgets: {
       pendingPo,
       pendingDeliveries,
       pendingMaterialReceipt,
-      pendingApprovals,
+      pendingApprovals:
+        coordinatorVerifyCount != null ? coordinatorVerifyCount : pendingApprovals,
+      ...(procurementCounts
+        ? {
+            pendingProcurementDecisions: procurementCounts.total,
+            pendingPoDecisions: procurementCounts.poPending,
+            pendingBtDecisions: procurementCounts.btPending,
+          }
+        : {}),
+      ...(executivePrCount != null ? { pendingPurchaseRequests: executivePrCount } : {}),
+      ...(coordinatorVerifyCount != null
+        ? { pendingPoVerification: coordinatorVerifyCount }
+        : {}),
     },
   };
 }

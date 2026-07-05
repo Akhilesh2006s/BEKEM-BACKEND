@@ -22,6 +22,15 @@ const vendorSchema = new mongoose.Schema(
     bankName: { type: String, default: '' },
     bankAccountNumber: { type: String, default: '' },
     ifscCode: { type: String, default: '' },
+    authorizationStatus: {
+      type: String,
+      enum: ['PENDING', 'AUTHORIZED', 'REJECTED'],
+      default: 'AUTHORIZED',
+    },
+    createdByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    authorizedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    authorizedAt: { type: Date },
+    authorizationRemark: { type: String, default: '' },
   },
   { timestamps: true }
 );

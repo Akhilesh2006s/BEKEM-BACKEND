@@ -30,4 +30,5 @@ module.exports = {
   ProjectGrnCounter: require('./ProjectGrnCounter'),
   MaterialCategory: require('./MaterialCategory'),
   IdempotencyRecord: require('./IdempotencyRecord'),
+  PaymentBill: require('./PaymentBill'),
 };

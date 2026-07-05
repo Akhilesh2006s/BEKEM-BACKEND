@@ -75,6 +75,7 @@ describe('Race & idempotency', () => {
       ],
       receiveType: 'PARTIAL',
       remarks: 'Idempotency test partial GRN',
+      invoiceDate: new Date().toISOString(),
     };
     const key = `test-grn-${po.id}`;
 

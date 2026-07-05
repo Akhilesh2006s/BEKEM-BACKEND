@@ -104,6 +104,9 @@ router.get('/catalog', async (req, res, next) => {
       .skip((page - 1) * limit)
       .limit(limit);
 
+    const { getLatestApprovedRates, attachUnitPrices } = require('../services/materialPricingService');
+    const rateByMaterial = await getLatestApprovedRates(materials.map((m) => m._id.toString()));
+
     // Stats across full filtered catalog (not only current page)
     const allIds = await Material.find(filter).select('_id').lean();
     let inStock = 0;
@@ -119,20 +122,23 @@ router.get('/catalog', async (req, res, next) => {
     }
 
     res.json({
-      data: materials.map((m) => {
-        const stock = stockByMaterial.get(m._id.toString());
-        const quantityOnHand = stock?.quantityOnHand ?? 0;
-        const lowStockThreshold = stock?.lowStockThreshold ?? 0;
-        return {
-          ...serializeMaterial(m),
-          stock: {
-            quantityOnHand,
-            lowStockThreshold,
-            isLowStock: quantityOnHand <= lowStockThreshold && lowStockThreshold > 0,
-            hasLedger: Boolean(stock?.hasLedger),
-          },
-        };
-      }),
+      data: attachUnitPrices(
+        materials.map((m) => {
+          const stock = stockByMaterial.get(m._id.toString());
+          const quantityOnHand = stock?.quantityOnHand ?? 0;
+          const lowStockThreshold = stock?.lowStockThreshold ?? 0;
+          return {
+            ...serializeMaterial(m),
+            stock: {
+              quantityOnHand,
+              lowStockThreshold,
+              isLowStock: quantityOnHand <= lowStockThreshold && lowStockThreshold > 0,
+              hasLedger: Boolean(stock?.hasLedger),
+            },
+          };
+        }),
+        rateByMaterial
+      ),
       meta: {
         siteId: resolvedSiteId || null,
         page,
@@ -153,7 +159,11 @@ router.get('/', async (req, res, next) => {
     const { search } = req.query;
     const filter = buildMaterialFilter(search);
     const materials = await Material.find(filter).sort({ name: 1 }).limit(80);
-    res.json({ data: materials.map(serializeMaterial) });
+    const { getLatestApprovedRates, attachUnitPrices } = require('../services/materialPricingService');
+    const rateByMaterial = await getLatestApprovedRates(materials.map((m) => m._id.toString()));
+    res.json({
+      data: attachUnitPrices(materials.map(serializeMaterial), rateByMaterial),
+    });
   } catch (err) {
     next(err);
   }
@@ -191,7 +201,8 @@ router.post(
     body('grade').optional().trim(),
     body('categoryId').optional().isMongoId(),
     body('category').optional().trim(),
-    body('hsnCode').optional().trim(),
+    body('hsnCode').trim().notEmpty().withMessage('HSN code is required').isLength({ min: 4, max: 8 }),
+    body('gstRate').optional().isFloat({ min: 0, max: 28 }),
     body('siteId').optional().isMongoId(),
     body('initialQuantity').optional().isFloat({ min: 0 }),
     body('lowStockThreshold').optional().isFloat({ min: 0 }),
@@ -199,15 +210,25 @@ router.post(
   validate,
   async (req, res, next) => {
     try {
-      const existing = await Material.findOne({ code: req.body.code });
+      const { findMaterialDuplicate } = require('../services/materialDedupService');
+      const duplicate = await findMaterialDuplicate({
+        code: req.body.code,
+        name: req.body.name,
+        hsnCode: req.body.hsnCode,
+      });
+      if (duplicate) {
+        return res.status(400).json({ statusCode: 400, message: 'Material already exists.' });
+      }
+      const existing = await Material.findOne({ code: req.body.code.toUpperCase() });
       if (existing) {
-        return res.status(400).json({ statusCode: 400, message: 'Item code already exists' });
+        return res.status(400).json({ statusCode: 400, message: 'Material already exists.' });
       }
       const { siteId, initialQuantity, lowStockThreshold, categoryId, category, ...materialData } =
         req.body;
       const cat = await resolveMaterialCategory({ categoryId, category });
       const material = await Material.create({
         ...materialData,
+        code: String(materialData.code || '').toUpperCase(),
         categoryId: cat._id,
         category: cat.name,
       });
@@ -258,11 +279,27 @@ router.patch(
       }
 
       if (req.body.code && req.body.code.toUpperCase() !== material.code) {
-        const duplicate = await Material.findOne({ code: req.body.code.toUpperCase() });
+        const { findMaterialDuplicate } = require('../services/materialDedupService');
+        const duplicate = await findMaterialDuplicate({
+          code: req.body.code,
+          name: req.body.name || material.name,
+          hsnCode: req.body.hsnCode ?? material.hsnCode,
+          excludeId: material._id,
+        });
         if (duplicate) {
-          return res.status(400).json({ statusCode: 400, message: 'Item code already exists' });
+          return res.status(400).json({ statusCode: 400, message: 'Material already exists.' });
         }
         material.code = req.body.code.toUpperCase();
+      } else if (req.body.name || req.body.hsnCode !== undefined) {
+        const { findMaterialDuplicate } = require('../services/materialDedupService');
+        const duplicate = await findMaterialDuplicate({
+          name: req.body.name || material.name,
+          hsnCode: req.body.hsnCode ?? material.hsnCode,
+          excludeId: material._id,
+        });
+        if (duplicate) {
+          return res.status(400).json({ statusCode: 400, message: 'Material already exists.' });
+        }
       }
       if (req.body.name) material.name = req.body.name;
       if (req.body.unit) material.unit = req.body.unit;

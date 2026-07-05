@@ -32,6 +32,9 @@ function serializeVendor(v) {
     bankName: v.bankName || '',
     bankAccountNumber: v.bankAccountNumber || '',
     ifscCode: v.ifscCode || '',
+    authorizationStatus: v.authorizationStatus || 'AUTHORIZED',
+    createdByUserId: v.createdByUserId?.toString?.() || v.createdByUserId || undefined,
+    authorizedAt: v.authorizedAt?.toISOString?.() || undefined,
   };
   if (v.materialIds?.length && typeof v.materialIds[0] === 'object' && v.materialIds[0].code) {
     base.materials = v.materialIds.map((m) => ({

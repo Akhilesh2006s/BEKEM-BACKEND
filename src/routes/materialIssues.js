@@ -61,6 +61,8 @@ function serializeIssue(issue) {
     issuedBy: issue.issuedByUserId?.name
       ? { id: issue.issuedByUserId._id.toString(), name: issue.issuedByUserId.name }
       : undefined,
+    issuedToType: issue.issuedToType,
+    issuedToName: issue.issuedToName || '',
     note: issue.note,
     issueReason: issue.issueReason,
     issueReasonOtherText: issue.issueReasonOtherText || '',
@@ -100,6 +102,8 @@ router.post(
     body('items.*.materialId').optional().isMongoId(),
     body('items.*.quantity').optional().isFloat({ min: 0.01 }),
     body('reason').isIn(ISSUE_REASONS).withMessage('Issue reason is required'),
+    body('issuedToType').isIn(['EMPLOYEE', 'CONTRACTOR', 'DEPARTMENT']).withMessage('Issued to type is required'),
+    body('issuedToName').trim().notEmpty().withMessage('Issued to name is required'),
     body('reasonOtherText').optional().trim(),
     body('note').optional().trim(),
     body('remark').optional().trim(),
@@ -152,6 +156,8 @@ router.post(
         issuedByUserId: req.user._id,
         issueReason: reason,
         issueReasonOtherText: reason === 'other' ? String(req.body.reasonOtherText || '').trim() : '',
+        issuedToType: req.body.issuedToType,
+        issuedToName: req.body.issuedToName.trim(),
         note: req.body.note || req.body.remark || '',
         attachments: Array.isArray(req.body.attachments)
           ? req.body.attachments

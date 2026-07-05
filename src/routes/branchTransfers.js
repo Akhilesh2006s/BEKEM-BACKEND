@@ -18,7 +18,6 @@ const {
 } = require('../services/branchTransferService');
 const { handleIdempotent } = require('../utils/idempotentHandler');
 
-const PM_APPROVED_BT = ['PM_APPROVED', 'COORDINATOR_DECIDED', 'RAISE_PO_INSTEAD', 'TRANSFERRED'];
 const COORDINATOR_DECIDED_BT = ['COORDINATOR_DECIDED', 'RAISE_PO_INSTEAD', 'TRANSFERRED'];
 
 async function btResponse(transferId) {
@@ -67,17 +66,19 @@ router.get('/', async (req, res, next) => {
       });
     }
 
+    if (req.user.role === UserRole.STORE_INCHARGE) {
+      return res.status(403).json({
+        statusCode: 403,
+        message: 'Store cannot access branch transfers — contact your Project Manager',
+      });
+    }
+
     const filter = {};
     if (req.user.role === UserRole.PROJECT_MANAGER) {
       filter.$or = [
         { fromProjectId: { $in: req.user.assignedProjectIds } },
         { toProjectId: { $in: req.user.assignedProjectIds } },
       ];
-    } else if (req.user.role === UserRole.STORE_INCHARGE && req.user.assignedSiteId) {
-      const site = await Site.findById(req.user.assignedSiteId).select('projectId');
-      if (site?.projectId) {
-        filter.$or = [{ fromProjectId: site.projectId }, { toProjectId: site.projectId }];
-      }
     } else if (req.query.status) {
       filter.status = req.query.status;
     }
@@ -130,18 +131,53 @@ router.post(
       let { fromProjectId, toProjectId, items, note, materialRequestId } = req.body;
 
       if (req.user.role === UserRole.STORE_INCHARGE) {
-        if (!req.user.assignedSiteId) {
-          return { statusCode: 400, body: { statusCode: 400, message: 'Store user has no assigned site' } };
+        return {
+          statusCode: 403,
+          body: {
+            statusCode: 403,
+            message: 'Store cannot initiate branch transfers — Project Manager must request a transfer',
+          },
+        };
+      }
+
+      if (req.user.role === UserRole.PROJECT_MANAGER) {
+        if (!materialRequestId) {
+          return {
+            statusCode: 400,
+            body: { statusCode: 400, message: 'Branch transfer must be linked to a forwarded indent' },
+          };
         }
-        const site = await Site.findById(req.user.assignedSiteId).select('projectId');
-        if (!site?.projectId) {
-          return { statusCode: 400, body: { statusCode: 400, message: 'Store site has no project' } };
+
+        const mr = await MaterialRequest.findById(materialRequestId);
+        if (!mr) {
+          return { statusCode: 404, body: { statusCode: 404, message: 'Linked indent not found' } };
         }
-        toProjectId = site.projectId.toString();
+        if (mr.status !== 'FORWARDED_TO_PM') {
+          return {
+            statusCode: 400,
+            body: { statusCode: 400, message: 'Indent is not awaiting PM review' },
+          };
+        }
+
+        const destProjectId = (mr.projectId?._id || mr.projectId).toString();
+        toProjectId = destProjectId;
+
+        if (!userManagesProject(req.user, toProjectId)) {
+          return {
+            statusCode: 403,
+            body: { statusCode: 403, message: 'You do not manage the requesting project' },
+          };
+        }
+        if (!userManagesProject(req.user, fromProjectId)) {
+          return {
+            statusCode: 403,
+            body: { statusCode: 403, message: 'You do not manage the source project' },
+          };
+        }
       } else {
         return {
           statusCode: 403,
-          body: { statusCode: 403, message: 'Only store users can initiate branch transfers' },
+          body: { statusCode: 403, message: 'Only Project Managers can initiate branch transfers' },
         };
       }
 
@@ -153,13 +189,28 @@ router.post(
       }
 
       const { userCanAccessProject } = require('../utils/serialize');
-      if (!userCanAccessProject(req.user, toProjectId)) {
+      if (!userCanAccessProject(req.user, toProjectId) || !userCanAccessProject(req.user, fromProjectId)) {
         return { statusCode: 403, body: { statusCode: 403, message: 'Forbidden — project out of scope' } };
       }
 
-      if (materialRequestId) {
-        const mr = await MaterialRequest.findById(materialRequestId);
-        if (!mr) return { statusCode: 404, body: { statusCode: 404, message: 'Linked indent not found' } };
+      const mr = materialRequestId ? await MaterialRequest.findById(materialRequestId) : null;
+      if (materialRequestId && !mr) {
+        return { statusCode: 404, body: { statusCode: 404, message: 'Linked indent not found' } };
+      }
+
+      const existingBt = await BranchTransfer.findOne({
+        materialRequestId,
+        status: { $nin: ['REJECTED', 'RAISE_PO_INSTEAD', 'TRANSFERRED'] },
+      });
+      if (existingBt) {
+        return {
+          statusCode: 409,
+          body: {
+            statusCode: 409,
+            message: 'A branch transfer is already in progress for this indent',
+            data: { id: existingBt._id.toString(), transferNumber: existingBt.transferNumber },
+          },
+        };
       }
 
       const transferNumber = await generateTransferNumber();
@@ -180,14 +231,41 @@ router.post(
         null,
         'REQUESTED',
         req.user._id,
-        `Branch transfer ${transferNumber} requested`
+        note?.trim()
+          ? `Branch transfer ${transferNumber} requested by PM: ${note.trim()}`
+          : `Branch transfer ${transferNumber} requested by PM`
       );
 
+      if (materialRequestId && mr) {
+        const prev = mr.status;
+        mr.status = 'BRANCH_TRANSFER_REQUESTED';
+        mr.pendingWithRole = 'PROJECT_MANAGER';
+        await mr.save();
+        await statusHistoryService.record(
+          'MaterialRequest',
+          mr._id,
+          prev,
+          'BRANCH_TRANSFER_REQUESTED',
+          req.user._id,
+          `Branch transfer ${transferNumber} requested — no purchase order`
+        );
+      }
+
       const destinationPms = await getProjectManagers(toProjectId);
+      const { User } = require('../models');
+      const coordinators = await User.find({ role: UserRole.COORDINATOR });
+      for (const c of coordinators) {
+        await notificationService.notifyUser(c._id, {
+          title: 'Branch transfer request — Head Office review',
+          body: `${transferNumber}: PM requested stock from another project — approve or reject.`,
+          relatedEntityType: 'BranchTransfer',
+          relatedEntityId: transfer._id,
+        });
+      }
       for (const pm of destinationPms) {
         await notificationService.notifyUser(pm._id, {
-          title: 'Branch transfer awaiting PM approval',
-          body: `${transferNumber}: stock requested from another project — review and approve.`,
+          title: 'Branch transfer submitted',
+          body: `${transferNumber} sent to Head Office for approval — you will be notified when decided.`,
           relatedEntityType: 'BranchTransfer',
           relatedEntityId: transfer._id,
         });
@@ -209,74 +287,45 @@ router.post(
 
 router.post(
   '/:id/pm-approve',
-  requireCapability('APPROVE_MATERIAL_REQUEST'),
-  [param('id').isMongoId(), body('note').optional().trim()],
+  [param('id').isMongoId()],
   validate,
-  loadTransfer,
-  async (req, res, next) => {
-    return handleIdempotent(req, res, `bt-pm-approve:${req.params.id}`, async () => {
-      const transfer = req.branchTransfer;
-      if (transfer.status !== 'REQUESTED') {
-        if (PM_APPROVED_BT.includes(transfer.status)) {
-          return { statusCode: 200, body: { data: { id: transfer._id.toString(), status: transfer.status } } };
-        }
-        return { statusCode: 400, body: { statusCode: 400, message: 'Transfer not awaiting PM approval' } };
-      }
-      if (!userManagesProject(req.user, transfer.toProjectId)) {
-        return { statusCode: 403, body: { statusCode: 403, message: 'Only destination project PM can approve' } };
-      }
-
-      const fromStatus = transfer.status;
-      transfer.status = 'PM_APPROVED';
-      transfer.pmApprovedByUserId = req.user._id;
-      transfer.pmApprovedAt = new Date();
-      await transfer.save();
-
-      await statusHistoryService.record(
-        'BranchTransfer',
-        transfer._id,
-        fromStatus,
-        transfer.status,
-        req.user._id,
-        req.body.note || 'PM approved branch transfer'
-      );
-
-      const { User } = require('../models');
-      const coordinators = await User.find({ role: UserRole.COORDINATOR });
-      for (const c of coordinators) {
-        await notificationService.notifyUser(c._id, {
-          title: 'Branch transfer decision required',
-          body: `${transfer.transferNumber}: PM approved — confirm transfer or raise PO instead.`,
-          relatedEntityType: 'BranchTransfer',
-          relatedEntityId: transfer._id,
-        });
-      }
-
-      return { statusCode: 200, body: { data: { id: transfer._id.toString(), status: transfer.status } } };
-    }, next);
+  async (_req, res) => {
+    return res.status(403).json({
+      statusCode: 403,
+      message: 'Branch transfer approval is a Head Office responsibility — Project Managers cannot approve',
+    });
   }
 );
 
 router.post(
   '/:id/pm-reject',
-  requireCapability('APPROVE_MATERIAL_REQUEST'),
+  [param('id').isMongoId()],
+  validate,
+  async (_req, res) => {
+    return res.status(403).json({
+      statusCode: 403,
+      message: 'Branch transfer rejection is a Head Office responsibility — Project Managers cannot reject',
+    });
+  }
+);
+
+router.post(
+  '/:id/coordinator-reject',
+  requireCapability('VERIFY_RECORDS'),
   [param('id').isMongoId(), body('note').optional().trim()],
   validate,
   loadTransfer,
   async (req, res, next) => {
     try {
       const transfer = req.branchTransfer;
-      if (transfer.status !== 'REQUESTED') {
-        return res.status(400).json({ statusCode: 400, message: 'Transfer not awaiting PM approval' });
-      }
-      if (!userManagesProject(req.user, transfer.toProjectId)) {
-        return res.status(403).json({ statusCode: 403, message: 'Only destination project PM can reject' });
+      if (!['REQUESTED', 'PM_APPROVED'].includes(transfer.status)) {
+        return res.status(400).json({ statusCode: 400, message: 'Transfer not awaiting Head Office review' });
       }
 
       const fromStatus = transfer.status;
       transfer.status = 'REJECTED';
       transfer.rejectedByUserId = req.user._id;
-      transfer.rejectionNote = req.body.note || 'Rejected by project manager';
+      transfer.rejectionNote = req.body.note?.trim() || 'Rejected by Head Office';
       await transfer.save();
 
       await statusHistoryService.record(
@@ -290,7 +339,7 @@ router.post(
 
       await notificationService.notifyUser(transfer.requestedByUserId, {
         title: 'Branch transfer rejected',
-        body: `${transfer.transferNumber} was rejected by the project manager.`,
+        body: `${transfer.transferNumber} was rejected by Head Office.`,
         relatedEntityType: 'BranchTransfer',
         relatedEntityId: transfer._id,
       });
@@ -320,7 +369,7 @@ router.post(
   async (req, res, next) => {
     return handleIdempotent(req, res, `bt-coordinator-decide:${req.params.id}:${req.body.decision}`, async () => {
       const transfer = req.branchTransfer;
-      if (transfer.status !== 'PM_APPROVED') {
+      if (!['REQUESTED', 'PM_APPROVED'].includes(transfer.status)) {
         if (COORDINATOR_DECIDED_BT.includes(transfer.status)) {
           let redirect = null;
           if (transfer.status === 'RAISE_PO_INSTEAD' && transfer.materialRequestId) {
@@ -344,7 +393,7 @@ router.post(
             },
           };
         }
-        return { statusCode: 400, body: { statusCode: 400, message: 'Transfer not awaiting coordinator decision' } };
+        return { statusCode: 400, body: { statusCode: 400, message: 'Transfer not awaiting Head Office review' } };
       }
 
       if (req.body.fromProjectId) transfer.fromProjectId = req.body.fromProjectId;

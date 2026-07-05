@@ -8,6 +8,7 @@ export interface UserDto {
   avatarColor: string;
   locale?: import('./locales').AppLocale;
   notificationPrefs?: NotificationPrefsDto;
+  isSystemAdmin?: boolean;
 }
 
 export interface NotificationPrefsDto {
@@ -99,7 +100,64 @@ export interface DashboardWidgetsDto {
     pendingDeliveries: number;
     pendingMaterialReceipt: number;
     pendingApprovals: number;
+    pendingProcurementDecisions?: number;
+    pendingPoDecisions?: number;
+    pendingBtDecisions?: number;
+    pendingPoVerification?: number;
+    pendingPurchaseRequests?: number;
   };
+}
+
+export interface ProcurementDecisionListItemDto {
+  id: string;
+  indentNumber: string;
+  indentDate: string | null;
+  status: string;
+  projectCode?: string;
+  projectName?: string;
+  estimatedValue: number;
+  executiveProcurementMethod: 'PURCHASE_ORDER' | 'BRANCH_TRANSFER' | null;
+}
+
+export interface EnterpriseStockRowDto {
+  projectId: string;
+  projectCode: string;
+  projectName: string;
+  siteName: string;
+  availableQty: number;
+}
+
+export interface ProcurementDecisionItemDto {
+  id: string;
+  materialId: string;
+  materialName: string;
+  unit: string;
+  requestedQty: number;
+  availableQty: number;
+  requiredQty: number;
+  enterpriseStock: EnterpriseStockRowDto[];
+}
+
+export interface ProcurementDecisionDto {
+  id: string;
+  indentNumber: string;
+  indentDate: string | null;
+  status: string;
+  projectId?: string;
+  projectCode?: string;
+  projectName?: string;
+  requestedBy?: string;
+  pmRemarks: string;
+  estimatedValue: number;
+  items: ProcurementDecisionItemDto[];
+  executiveProcurementMethod: 'PURCHASE_ORDER' | 'BRANCH_TRANSFER' | null;
+  executiveDecisionRemark: string;
+  executiveDecidedBy: string | null;
+  executiveDecidedAt: string | null;
+  coordinatorProcurementMethod: 'PURCHASE_ORDER' | 'BRANCH_TRANSFER' | null;
+  coordinatorProcurementRemark: string;
+  canExecutiveDecide: boolean;
+  canCoordinatorReview: boolean;
 }
 
 export interface PoTimelineStageDto {
@@ -191,6 +249,8 @@ export interface MaterialDto {
   categoryId?: string;
   hsnCode?: string;
   gstRate?: number;
+  /** Latest approved purchase rate (reference only). */
+  unitPrice?: number | null;
 }
 
 export interface MaterialCategoryDto {
@@ -213,6 +273,7 @@ export interface MaterialSearchResultDto {
   gstRate: number;
   unit: string;
   category?: string;
+  unitPrice?: number | null;
 }
 
 export interface IndentLineItemDto {
@@ -227,11 +288,11 @@ export interface IndentLineItemDto {
   /** Stock comparison fields (server-computed). */
   requestedQty?: number;
   availableQty?: number;
-  existingStock?: number;
   requiredQty?: number;
 }
 
 export interface CreateIndentDto {
+  purpose: string;
   items: Array<{
     materialId?: string;
     /** Free-text product when not in catalog — created on submit. */
@@ -386,6 +447,7 @@ export interface VendorDto {
   bankName?: string;
   bankAccountNumber?: string;
   ifscCode?: string;
+  authorizationStatus?: 'PENDING' | 'AUTHORIZED' | 'REJECTED';
 }
 
 export interface MsmeCertificateUploadDto {
@@ -426,6 +488,25 @@ export interface PurchaseRequestDto {
   createdAt: string;
   project?: { id: string; code: string; name: string };
   materialRequest?: { id: string; indentNumber: string; status: string };
+  pmName?: string | null;
+  materialsSummary?: string;
+  totalValue?: number;
+  requestDate?: string | null;
+  priority?: 'HIGH' | 'MEDIUM' | 'NORMAL';
+  pmRemarks?: string;
+  requestedBy?: string | null;
+  indentDate?: string | null;
+  executiveRecommendation?: 'PURCHASE_ORDER' | 'BRANCH_TRANSFER' | null;
+  executiveRecommendationRemark?: string;
+  executiveRecommendedAt?: string | null;
+  canExecutiveDecide?: boolean;
+  items?: Array<{
+    id: string;
+    materialId: string;
+    materialName: string;
+    unit: string;
+    quantityRequested: number;
+  }>;
 }
 
 export interface QuotationDto {
@@ -850,6 +931,7 @@ export interface BranchTransferDto {
   canPmApprove?: boolean;
   canPmReject?: boolean;
   canCoordinatorDecide?: boolean;
+  canCoordinatorReject?: boolean;
   canExecute?: boolean;
 }
 

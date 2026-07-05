@@ -2,7 +2,7 @@ const express = require('express');
 const { body, param, query } = require('express-validator');
 const { Vendor, Material } = require('../models');
 const { authenticate } = require('../middleware/auth');
-const { requireCapability } = require('../middleware/rbac');
+const { requireCapability, hasCapability } = require('../middleware/rbac');
 const { validate } = require('../middleware/validate');
 const { serializeVendor } = require('../utils/serializeProcurement');
 const vendorScorecardService = require('../services/vendorScorecardService');
@@ -12,19 +12,19 @@ router.use(authenticate);
 
 async function vendorsForMaterial(materialId, { strict = false } = {}) {
   const material = await Material.findById(materialId);
-  if (!material) return Vendor.find({ isActive: { $ne: false } }).populate('materialIds');
+  if (!material) return Vendor.find({ isActive: { $ne: false }, authorizationStatus: { $in: ['AUTHORIZED', null] } }).populate('materialIds');
+
+  const baseFilter = {
+    isActive: { $ne: false },
+    authorizationStatus: { $in: ['AUTHORIZED', null] },
+  };
 
   if (strict) {
-    return Vendor.find({
-      isActive: { $ne: false },
-      materialIds: materialId,
-    })
-      .populate('materialIds')
-      .sort({ name: 1 });
+    return Vendor.find({ ...baseFilter, materialIds: materialId }).populate('materialIds').sort({ name: 1 });
   }
 
   return Vendor.find({
-    isActive: { $ne: false },
+    ...baseFilter,
     $or: [
       { materialIds: materialId },
       { suppliedCategories: material.category },
@@ -81,16 +81,28 @@ router.get('/search', async (req, res, next) => {
   }
 });
 
+router.get('/pending-authorization', requireCapability('MANAGE_VENDORS'), async (req, res, next) => {
+  try {
+    const vendors = await Vendor.find({ authorizationStatus: 'PENDING' }).sort({ createdAt: -1 });
+    res.json({ data: vendors.map(serializeVendor) });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get('/', async (req, res, next) => {
   try {
-    const { materialId, search, strict } = req.query;
+    const { materialId, search, strict, includePending } = req.query;
     let vendors;
     if (materialId) {
       vendors = await vendorsForMaterial(materialId, {
         strict: strict === 'true' || strict === '1',
       });
     } else {
-      const filter = { isActive: { $ne: false } };
+      const filter =
+        includePending === 'true' && hasCapability(req.user.role, 'MANAGE_VENDORS')
+          ? {}
+          : { isActive: { $ne: false }, authorizationStatus: { $in: ['AUTHORIZED', null] } };
       if (search) {
         const term = search.trim();
         filter.$or = [
@@ -193,20 +205,27 @@ async function buildVendorPayload(body) {
 
 router.post(
   '/',
-  requireCapability('MANAGE_VENDORS'),
+  (req, res, next) => {
+    const canManage = hasCapability(req.user.role, 'MANAGE_VENDORS');
+    const canCreate = hasCapability(req.user.role, 'CREATE_VENDOR');
+    if (!canManage && !canCreate) {
+      return res.status(403).json({ statusCode: 403, message: 'Forbidden' });
+    }
+    next();
+  },
   [
     body('name').trim().notEmpty(),
     body('isMsme').isBoolean(),
     body('code').optional().trim(),
     body('address').optional().trim(),
     body('gstNumber').optional().trim(),
-    body('panNumber').optional().trim(),
+    body('panNumber').trim().notEmpty().withMessage('PAN is required'),
     body('email').optional().trim(),
-    body('contactPerson').optional().trim(),
-    body('phone').optional().trim(),
-    body('bankName').optional().trim(),
-    body('bankAccountNumber').optional().trim(),
-    body('ifscCode').optional().trim(),
+    body('contactPerson').trim().notEmpty(),
+    body('phone').trim().notEmpty(),
+    body('bankName').trim().notEmpty(),
+    body('bankAccountNumber').trim().notEmpty(),
+    body('ifscCode').trim().notEmpty(),
     body('msmeNumber').optional().trim(),
     body('msmeCertificate').optional().isObject(),
     body('category').optional().trim(),
@@ -216,14 +235,81 @@ router.post(
   validate,
   async (req, res, next) => {
     try {
+      const isCoordinator = hasCapability(req.user.role, 'MANAGE_VENDORS');
       const payload = await buildVendorPayload(req.body);
-      const vendor = await Vendor.create(payload);
+      const vendor = await Vendor.create({
+        ...payload,
+        authorizationStatus: isCoordinator ? 'AUTHORIZED' : 'PENDING',
+        isActive: isCoordinator,
+        createdByUserId: req.user._id,
+        authorizedByUserId: isCoordinator ? req.user._id : undefined,
+        authorizedAt: isCoordinator ? new Date() : undefined,
+      });
+
+      if (!isCoordinator) {
+        const { User } = require('../models');
+        const { UserRole } = require('@afios/shared');
+        const notificationService = require('../services/notificationService');
+        const coordinators = await User.find({ role: UserRole.COORDINATOR });
+        await notificationService.notifyUsers(
+          coordinators.map((u) => u._id),
+          {
+            title: 'New vendor pending authorization',
+            body: `${vendor.name} submitted by Executive — review and authorize.`,
+            relatedEntityType: 'Vendor',
+            relatedEntityId: vendor._id,
+          }
+        );
+      }
+
       const populated = await Vendor.findById(vendor._id).populate('materialIds');
       res.status(201).json({ data: serializeVendor(populated) });
     } catch (err) {
       if (err.statusCode) {
         return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
       }
+      next(err);
+    }
+  }
+);
+
+router.post(
+  '/:id/authorize',
+  requireCapability('MANAGE_VENDORS'),
+  [
+    param('id').isMongoId(),
+    body('action').isIn(['authorize', 'reject']),
+    body('remark').optional().trim(),
+  ],
+  validate,
+  async (req, res, next) => {
+    try {
+      const vendor = await Vendor.findById(req.params.id);
+      if (!vendor) return res.status(404).json({ statusCode: 404, message: 'Not found' });
+      if (vendor.authorizationStatus === 'AUTHORIZED') {
+        return res.status(400).json({ statusCode: 400, message: 'Vendor already authorized' });
+      }
+
+      if (req.body.action === 'reject') {
+        vendor.authorizationStatus = 'REJECTED';
+        vendor.isActive = false;
+        vendor.authorizationRemark = req.body.remark || '';
+        vendor.authorizedByUserId = req.user._id;
+        vendor.authorizedAt = new Date();
+        await vendor.save();
+        return res.json({ data: serializeVendor(vendor) });
+      }
+
+      vendor.authorizationStatus = 'AUTHORIZED';
+      vendor.isActive = true;
+      vendor.authorizationRemark = req.body.remark || '';
+      vendor.authorizedByUserId = req.user._id;
+      vendor.authorizedAt = new Date();
+      await vendor.save();
+
+      const populated = await Vendor.findById(vendor._id).populate('materialIds');
+      res.json({ data: serializeVendor(populated) });
+    } catch (err) {
       next(err);
     }
   }
@@ -274,16 +360,16 @@ router.patch(
           'bankAccountNumber',
           'ifscCode',
           'category',
-          'suppliedCategories',
-          'materialIds',
+          'code',
         ];
-        for (const f of fields) {
-          if (req.body[f] !== undefined) vendor[f] = req.body[f];
+        for (const field of fields) {
+          if (req.body[field] !== undefined) vendor[field] = req.body[field];
         }
+        if (req.body.suppliedCategories) vendor.suppliedCategories = req.body.suppliedCategories;
+        if (req.body.materialIds) vendor.materialIds = req.body.materialIds;
+        vendor.contactInfo = vendor.phone || vendor.email || '';
       }
-      if (req.body.phone || req.body.email) {
-        vendor.contactInfo = req.body.phone || req.body.email || vendor.contactInfo;
-      }
+
       await vendor.save();
       const populated = await Vendor.findById(vendor._id).populate('materialIds');
       res.json({ data: serializeVendor(populated) });
@@ -307,7 +393,7 @@ router.delete(
       if (!vendor) return res.status(404).json({ statusCode: 404, message: 'Not found' });
       vendor.isActive = false;
       await vendor.save();
-      res.json({ data: { id: vendor._id.toString(), deleted: true } });
+      res.json({ data: { id: vendor._id.toString() } });
     } catch (err) {
       next(err);
     }
@@ -319,9 +405,8 @@ router.post(
   requireCapability('EDIT_PROCUREMENT'),
   [
     param('id').isMongoId(),
-    body('deliveryScore').isInt({ min: 1, max: 5 }),
-    body('qualityScore').isInt({ min: 1, max: 5 }),
-    body('note').optional().trim(),
+    body('rating').isFloat({ min: 1, max: 5 }),
+    body('comment').optional().trim(),
   ],
   validate,
   async (req, res, next) => {
@@ -329,16 +414,13 @@ router.post(
       const vendor = await Vendor.findById(req.params.id);
       if (!vendor) return res.status(404).json({ statusCode: 404, message: 'Vendor not found' });
 
-      await vendorScorecardService.addVendorReview(vendor._id, req.user._id, req.body);
-      const scorecard = await vendorScorecardService.getVendorScorecard(vendor._id);
-      const updated = await Vendor.findById(vendor._id).populate('materialIds');
-
-      res.status(201).json({
-        data: {
-          vendor: serializeVendor(updated),
-          ...scorecard,
-        },
+      const review = await vendorScorecardService.addReview(vendor._id, {
+        rating: req.body.rating,
+        comment: req.body.comment || '',
+        reviewerUserId: req.user._id,
       });
+
+      res.status(201).json({ data: review });
     } catch (err) {
       next(err);
     }

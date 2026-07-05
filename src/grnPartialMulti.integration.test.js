@@ -53,6 +53,7 @@ describe('GRN partial & multi receipt integration', () => {
         ],
         receiveType: 'PARTIAL',
         remarks: 'First partial — quantity variance',
+        invoiceDate: new Date().toISOString(),
       });
     assert.strictEqual(first.status, 201);
     assert.ok(first.body.data.isPartialGrn || first.body.data.status === 'PARTIALLY_RECEIVED');
@@ -78,6 +79,7 @@ describe('GRN partial & multi receipt integration', () => {
         ],
         receiveType: 'PARTIAL',
         remarks: 'Second partial — price variance',
+        invoiceDate: new Date().toISOString(),
       });
     assert.strictEqual(second.status, 201);
 

@@ -38,6 +38,7 @@ const grnSchema = new mongoose.Schema(
     isPartialGrn: { type: Boolean, default: false },
     varianceDetails: { type: mongoose.Schema.Types.Mixed, default: null },
     invoiceNo: { type: String, default: '' },
+    invoiceDate: { type: Date },
     invoiceValue: { type: Number, default: 0 },
     challanNo: { type: String, default: '' },
     vehicleNo: { type: String, default: '' },

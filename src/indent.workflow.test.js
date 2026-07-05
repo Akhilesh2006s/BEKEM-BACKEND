@@ -36,6 +36,7 @@ describe('Indent workflow v2', () => {
       .post('/api/material-requests')
       .set('Authorization', `Bearer ${siteToken}`)
       .send({
+        purpose: 'UAT test reason',
         items: [{ materialId: material._id.toString(), quantityRequested: 1 }],
       });
     assert.strictEqual(createRes.status, 201);
@@ -54,6 +55,7 @@ describe('Indent workflow v2', () => {
       .post('/api/material-requests')
       .set('Authorization', `Bearer ${siteToken}`)
       .send({
+        purpose: 'UAT test reason',
         items: [{ materialId: material._id.toString(), quantityRequested: 5 }],
       });
     const mrId = createRes.body.data.id;
@@ -66,9 +68,10 @@ describe('Indent workflow v2', () => {
     const item = detail.body.data.items[0];
     assert.ok('requestedQty' in item);
     assert.ok('availableQty' in item);
-    assert.ok('existingStock' in item);
     assert.ok('requiredQty' in item);
+    assert.ok(!('existingStock' in item));
     assert.strictEqual(item.requestedQty, 5);
+    assert.strictEqual(item.requiredQty, Math.max(0, item.requestedQty - item.availableQty));
   });
 
   it('forwards entire indent when any line is short (no partial issue)', async () => {
@@ -76,6 +79,7 @@ describe('Indent workflow v2', () => {
       .post('/api/material-requests')
       .set('Authorization', `Bearer ${siteToken}`)
       .send({
+        purpose: 'UAT test reason',
         items: [
           { materialId: material._id.toString(), quantityRequested: 1 },
           { customName: 'Nonexistent-Product-XYZ-999', unit: 'Nos', quantityRequested: 99999 },
@@ -118,6 +122,7 @@ describe('Indent workflow v2', () => {
         .post('/api/material-requests')
         .set('Authorization', `Bearer ${siteToken}`)
         .send({
+          purpose: 'PM daily cap test',
           items: [{ materialId: material._id.toString(), quantityRequested: 1 }],
         });
       const mrId = createRes.body.data.id;

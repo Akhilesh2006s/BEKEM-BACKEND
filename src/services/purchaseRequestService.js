@@ -13,7 +13,7 @@ function estimateIndentAmount(mr) {
   return items.reduce((sum, item) => sum + (item.quantityRequested || 1) * 5000, 0);
 }
 
-async function createPurchaseRequestForIndent(mr, actorUserId, amountEstimate) {
+async function createPurchaseRequestForIndent(mr, actorUserId, amountEstimate, historyNote) {
   const existing = await PurchaseRequest.findOne({ materialRequestId: mr._id });
   if (existing) return existing;
 
@@ -43,7 +43,7 @@ async function createPurchaseRequestForIndent(mr, actorUserId, amountEstimate) {
     fromStatus,
     'PURCHASE_REQUESTED',
     actorUserId,
-    `PR ${prNumber} created`
+    historyNote || `PR ${prNumber} created`
   );
 
   const executives = await User.find({ role: UserRole.EXECUTIVE });
@@ -51,7 +51,7 @@ async function createPurchaseRequestForIndent(mr, actorUserId, amountEstimate) {
     executives.map((u) => u._id),
     {
       title: 'New purchase request',
-      body: `${prNumber} ready for procurement.`,
+      body: `${prNumber} is in your Pending Purchase Requests queue.`,
       relatedEntityType: 'PurchaseRequest',
       relatedEntityId: pr._id,
     }

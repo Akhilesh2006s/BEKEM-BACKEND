@@ -59,6 +59,7 @@ function serializeUser(user) {
       emailDigest: !!user.notificationPrefs?.emailDigest,
       sms: !!user.notificationPrefs?.sms,
     },
+    isSystemAdmin: !!user.isSystemAdmin,
   };
 }
 
@@ -75,6 +76,7 @@ function serializeMaterial(m) {
     categoryId: m.categoryId?.toString?.() || m.categoryId || undefined,
     hsnCode: m.hsnCode || '',
     gstRate: m.gstRate ?? 18,
+    unitPrice: m.unitPrice ?? undefined,
   };
 }
 
@@ -95,7 +97,6 @@ function serializeLineItem(item, stockFields) {
   if (stockFields) {
     base.requestedQty = stockFields.requestedQty;
     base.availableQty = stockFields.availableQty;
-    base.existingStock = stockFields.existingStock;
     base.requiredQty = stockFields.requiredQty;
   }
   return base;

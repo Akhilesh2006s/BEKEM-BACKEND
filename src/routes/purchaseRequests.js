@@ -1,7 +1,7 @@
 const express = require('express');
 const { body, param } = require('express-validator');
 const { UserRole } = require('@afios/shared');
-const { PurchaseRequest, MaterialRequest, PurchaseOrder } = require('../models');
+const { PurchaseRequest, MaterialRequest } = require('../models');
 const { authenticate } = require('../middleware/auth');
 const { requireCapability } = require('../middleware/rbac');
 const { validate } = require('../middleware/validate');
@@ -11,6 +11,15 @@ const {
   createPurchaseRequestForIndent,
   estimateIndentAmount,
 } = require('../services/purchaseRequestService');
+const {
+  listExecutivePendingPurchaseRequests,
+  countExecutivePendingPurchaseRequests,
+} = require('../services/executivePurchaseRequestQueueService');
+const {
+  serializeExecutivePurchaseRequestListItem,
+  enrichPurchaseRequestDetail,
+} = require('../services/purchaseRequestSerializeService');
+const { executiveDecidePurchaseRequest } = require('../services/purchaseRequestExecutiveService');
 
 const router = express.Router();
 router.use(authenticate);
@@ -20,8 +29,37 @@ const populateFields = [
   { path: 'materialRequestId' },
 ];
 
+const detailPopulateFields = [
+  { path: 'projectId' },
+  {
+    path: 'materialRequestId',
+    populate: [
+      { path: 'projectId' },
+      { path: 'requestedByUserId', select: 'name' },
+      { path: 'items.materialId' },
+      { path: 'materialId' },
+    ],
+  },
+  { path: 'executiveRecommendedByUserId', select: 'name' },
+];
+
 router.get('/', async (req, res, next) => {
   try {
+    const isExecutiveQueue =
+      req.user.role === UserRole.EXECUTIVE &&
+      (req.query.queue === 'pending-po' ||
+        req.query.readyForPo === 'true' ||
+        req.query.readyForPo === '1');
+
+    if (isExecutiveQueue) {
+      const items = await listExecutivePendingPurchaseRequests();
+      const data = await Promise.all(items.map(serializeExecutivePurchaseRequestListItem));
+      return res.json({
+        data,
+        meta: { count: await countExecutivePendingPurchaseRequests() },
+      });
+    }
+
     const filter = {};
     if (req.user.role === UserRole.PROJECT_MANAGER) {
       filter.projectId = { $in: req.user.assignedProjectIds };
@@ -29,20 +67,10 @@ router.get('/', async (req, res, next) => {
     if (req.query.status) {
       filter.status = req.query.status;
     }
-    let items = await PurchaseRequest.find(filter)
+
+    const items = await PurchaseRequest.find(filter)
       .sort({ createdAt: -1 })
       .populate(populateFields);
-
-    // Exclude PRs that already have a non-rejected PO (prevents duplicate orders)
-    if (req.query.readyForPo === 'true' || req.query.readyForPo === '1') {
-      const prIds = items.map((pr) => pr._id);
-      const orderedPrIds = await PurchaseOrder.distinct('purchaseRequestId', {
-        purchaseRequestId: { $in: prIds },
-        status: { $ne: 'REJECTED' },
-      });
-      const orderedSet = new Set(orderedPrIds.map((id) => id.toString()));
-      items = items.filter((pr) => !orderedSet.has(pr._id.toString()));
-    }
 
     res.json({ data: items.map(serializePurchaseRequest) });
   } catch (err) {
@@ -52,16 +80,45 @@ router.get('/', async (req, res, next) => {
 
 router.get('/:id', param('id').isMongoId(), validate, async (req, res, next) => {
   try {
-    const pr = await PurchaseRequest.findById(req.params.id).populate(populateFields);
+    const pr = await PurchaseRequest.findById(req.params.id).populate(detailPopulateFields);
     if (!pr) return res.status(404).json({ statusCode: 404, message: 'Not found' });
     if (req.user.role === UserRole.PROJECT_MANAGER && !userCanAccessProject(req.user, pr.projectId)) {
       return res.status(403).json({ statusCode: 403, message: 'Forbidden' });
     }
-    res.json({ data: serializePurchaseRequest(pr) });
+    res.json({ data: await enrichPurchaseRequestDetail(pr) });
   } catch (err) {
     next(err);
   }
 });
+
+router.post(
+  '/:id/executive-decide',
+  requireCapability('CREATE_PURCHASE_ORDER'),
+  param('id').isMongoId(),
+  body('method').isIn(['PURCHASE_ORDER', 'BRANCH_TRANSFER']),
+  body('remark').optional().isString().trim(),
+  validate,
+  async (req, res, next) => {
+    try {
+      const pr = await PurchaseRequest.findById(req.params.id).populate(detailPopulateFields);
+      if (!pr) return res.status(404).json({ statusCode: 404, message: 'Not found' });
+
+      const updated = await executiveDecidePurchaseRequest(pr, req.user, {
+        method: req.body.method,
+        remark: req.body.remark || '',
+      });
+
+      req.auditEntityType = 'PurchaseRequest';
+      req.auditEntityId = updated._id;
+
+      const populated = await PurchaseRequest.findById(updated._id).populate(detailPopulateFields);
+      res.json({ data: await enrichPurchaseRequestDetail(populated) });
+    } catch (err) {
+      if (err.statusCode) return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
+      next(err);
+    }
+  }
+);
 
 router.post(
   '/',

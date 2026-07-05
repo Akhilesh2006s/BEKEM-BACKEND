@@ -47,6 +47,7 @@ const workOrderRoutes = require('./routes/workOrders');
 const goodsReceiptRoutes = require('./routes/goodsReceipts');
 const materialIssueRoutes = require('./routes/materialIssues');
 const branchTransferRoutes = require('./routes/branchTransfers');
+const procurementDecisionRoutes = require('./routes/procurementDecisions');
 const incidentRoutes = require('./routes/incidents');
 const fileRoutes = require('./routes/files');
 
@@ -99,7 +100,9 @@ function mountApiRoutes(app, prefix) {
   app.use(`${prefix}/delivery-verifications`, require('./routes/deliveryVerifications'));
   app.use(`${prefix}/material-issues`, materialIssueRoutes);
   app.use(`${prefix}/branch-transfers`, branchTransferRoutes);
+  app.use(`${prefix}/procurement-decisions`, procurementDecisionRoutes);
   app.use(`${prefix}/incidents`, incidentRoutes);
+  app.use(`${prefix}/finance`, require('./routes/finance'));
 
 }
 

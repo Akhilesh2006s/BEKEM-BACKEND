@@ -8,10 +8,29 @@ const {
   getSeedContext,
   getApp,
 } = require('./test/helpers');
-const { BranchTransfer, StockLedger, Site, Project } = require('./models');
+const { BranchTransfer, StockLedger, Site, Project, MaterialRequest } = require('./models');
+
+async function createForwardedIndent(app, siteToken, storeToken, materialId) {
+  const createRes = await request(app)
+    .post('/api/material-requests')
+    .set('Authorization', `Bearer ${siteToken}`)
+    .send({ purpose: 'UAT test reason', items: [{ materialId: materialId.toString(), quantityRequested: 99999 }] });
+  assert.strictEqual(createRes.status, 201);
+  const mrId = createRes.body.data.id;
+
+  const forwardRes = await request(app)
+    .post(`/api/material-requests/${mrId}/allocate`)
+    .set('Authorization', `Bearer ${storeToken}`)
+    .send({ decision: 'forward', remark: 'Stock short — forwarded entire indent to PM' });
+  assert.strictEqual(forwardRes.status, 200);
+  assert.strictEqual(forwardRes.body.data.status, 'FORWARDED_TO_PM');
+
+  return MaterialRequest.findById(mrId);
+}
 
 describe('Branch transfer workflow', () => {
   let app;
+  let siteToken;
   let storeToken;
   let pmToken;
   let coordinatorToken;
@@ -23,6 +42,7 @@ describe('Branch transfer workflow', () => {
   before(async () => {
     await setupTestDb();
     app = getApp();
+    siteToken = await loginAs('request@bekem.com');
     storeToken = await loginAs('storeincharge@bekem.com');
     pmToken = await loginAs('pm@bekem.com');
     coordinatorToken = await loginAs('coordinator@bekem.com');
@@ -37,7 +57,7 @@ describe('Branch transfer workflow', () => {
     await teardownTestDb();
   });
 
-  it('runs Store → PM → Coordinator → Transfer without PO side effects', async () => {
+  it('runs PM request → Head Office → Transfer without PO side effects', async () => {
     const sourceBefore = await StockLedger.findOne({
       siteId: sourceSite._id,
       materialId: material._id,
@@ -49,24 +69,19 @@ describe('Branch transfer workflow', () => {
     });
 
     const qty = 2;
+    const mr = await createForwardedIndent(app, siteToken, storeToken, material._id);
     const createRes = await request(app)
       .post('/api/branch-transfers')
-      .set('Authorization', `Bearer ${storeToken}`)
+      .set('Authorization', `Bearer ${pmToken}`)
       .send({
         fromProjectId: sourceProject._id.toString(),
+        materialRequestId: mr._id.toString(),
         items: [{ materialId: material._id.toString(), quantity: qty }],
-        note: 'Need stock from other project',
+        note: 'Need stock from other supervised project',
       });
     assert.strictEqual(createRes.status, 201);
     assert.strictEqual(createRes.body.data.status, 'REQUESTED');
     const transferId = createRes.body.data.id;
-
-    const pmRes = await request(app)
-      .post(`/api/branch-transfers/${transferId}/pm-approve`)
-      .set('Authorization', `Bearer ${pmToken}`)
-      .send({ note: 'Approved' });
-    assert.strictEqual(pmRes.status, 200);
-    assert.strictEqual(pmRes.body.data.status, 'PM_APPROVED');
 
     const decideRes = await request(app)
       .post(`/api/branch-transfers/${transferId}/coordinator-decide`)
@@ -98,20 +113,47 @@ describe('Branch transfer workflow', () => {
     assert.strictEqual(destAfter.quantityOnHand, destBefore.quantityOnHand + qty);
   });
 
-  it('coordinator can choose raise_po_instead', async () => {
-    const createRes = await request(app)
+  it('store cannot initiate branch transfers', async () => {
+    const res = await request(app)
       .post('/api/branch-transfers')
       .set('Authorization', `Bearer ${storeToken}`)
       .send({
         fromProjectId: sourceProject._id.toString(),
         items: [{ materialId: material._id.toString(), quantity: 1 }],
       });
+    assert.strictEqual(res.status, 403);
+  });
+
+  it('project manager cannot approve branch transfers', async () => {
+    const mr = await createForwardedIndent(app, siteToken, storeToken, material._id);
+    const createRes = await request(app)
+      .post('/api/branch-transfers')
+      .set('Authorization', `Bearer ${pmToken}`)
+      .send({
+        fromProjectId: sourceProject._id.toString(),
+        materialRequestId: mr._id.toString(),
+        items: [{ materialId: material._id.toString(), quantity: 1 }],
+      });
     const transferId = createRes.body.data.id;
 
-    await request(app)
+    const pmRes = await request(app)
       .post(`/api/branch-transfers/${transferId}/pm-approve`)
       .set('Authorization', `Bearer ${pmToken}`)
-      .send({});
+      .send({ note: 'Should fail' });
+    assert.strictEqual(pmRes.status, 403);
+  });
+
+  it('coordinator can choose raise_po_instead', async () => {
+    const mr = await createForwardedIndent(app, siteToken, storeToken, material._id);
+    const createRes = await request(app)
+      .post('/api/branch-transfers')
+      .set('Authorization', `Bearer ${pmToken}`)
+      .send({
+        fromProjectId: sourceProject._id.toString(),
+        materialRequestId: mr._id.toString(),
+        items: [{ materialId: material._id.toString(), quantity: 1 }],
+      });
+    const transferId = createRes.body.data.id;
 
     const decideRes = await request(app)
       .post(`/api/branch-transfers/${transferId}/coordinator-decide`)

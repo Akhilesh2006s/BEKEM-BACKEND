@@ -15,6 +15,12 @@ const { authenticate } = require('../middleware/auth');
 const { userCanAccessSite } = require('../utils/serialize');
 const { getFinancialYear } = require('../services/procurementReferenceService');
 const { validate } = require('../middleware/validate');
+const {
+  resolveInventoryScope,
+  assertProjectQueryAllowed,
+  assertRecordProjectAllowed,
+  buildInventoryProjectFilter,
+} = require('../services/inventoryAccessService');
 
 const router = express.Router();
 
@@ -277,8 +283,13 @@ router.get('/inventory', async (req, res, next) => {
     const project = (req.query.project || '').trim();
     const financialYear = (req.query.financialYear || '25-26').trim();
 
-    const filter = { financialYear };
-    if (project) filter.project = new RegExp(project, 'i');
+    const scope = await resolveInventoryScope(req.user);
+    assertProjectQueryAllowed(scope, project);
+
+    const filter = {
+      financialYear,
+      ...buildInventoryProjectFilter(scope, project),
+    };
     if (search) {
       filter.$or = [
         { poNo: { $regex: search, $options: 'i' } },
@@ -290,6 +301,8 @@ router.get('/inventory', async (req, res, next) => {
       ];
     }
 
+    const projectsFilter = { financialYear, ...buildInventoryProjectFilter(scope, '') };
+
     const [total, records, projects, latestImport] = await Promise.all([
       StockInventoryRecord.countDocuments(filter),
       StockInventoryRecord.find(filter)
@@ -297,7 +310,7 @@ router.get('/inventory', async (req, res, next) => {
         .skip((page - 1) * limit)
         .limit(limit)
         .populate('delayReasonByUserId', 'name'),
-      StockInventoryRecord.distinct('project', { financialYear }),
+      StockInventoryRecord.distinct('project', projectsFilter),
       StockInventoryRecord.findOne({ financialYear }).sort({ createdAt: -1 }).select('createdAt'),
     ]);
 
@@ -315,9 +328,15 @@ router.get('/inventory', async (req, res, next) => {
         ledgerType: 'historical',
         liveLedgerPath: '/store',
         fieldAccess: fullAccess ? 'full' : 'through_delivery_date',
+        inventoryScope: scope.mode,
+        assignedProjectName: scope.primaryProjectName,
+        assignedProjects: scope.projects,
       },
     });
   } catch (err) {
+    if (err.statusCode) {
+      return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
+    }
     next(err);
   }
 });
@@ -391,6 +410,20 @@ router.patch(
         return res.status(404).json({ statusCode: 404, message: 'Record not found' });
       }
 
+      const scope = await resolveInventoryScope(req.user);
+      assertRecordProjectAllowed(scope, record.project);
+
+      if (
+        req.body.project !== undefined &&
+        String(req.body.project).trim() !== String(record.project || '').trim() &&
+        scope.mode !== 'all'
+      ) {
+        return res.status(403).json({
+          statusCode: 403,
+          message: 'Cannot reassign inventory to another project',
+        });
+      }
+
       for (const field of editableFields) {
         if (req.body[field] !== undefined) {
           record[field] = req.body[field];
@@ -416,6 +449,9 @@ router.patch(
       await record.populate('delayReasonByUserId', 'name');
       res.json({ data: serializeInventoryRecord(record, req.user.role) });
     } catch (err) {
+      if (err.statusCode) {
+        return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
+      }
       next(err);
     }
   }

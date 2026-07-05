@@ -39,4 +39,24 @@ describe('UAT regression fixes', () => {
 
     assert.strictEqual(res.status, 403);
   });
+
+  it('Store cannot list or create branch-transfers', async () => {
+    const app = getApp();
+    const token = await loginAs('storeincharge@bekem.com');
+
+    const list = await request(app)
+      .get('/api/branch-transfers')
+      .set('Authorization', `Bearer ${token}`);
+    assert.strictEqual(list.status, 403);
+
+    const create = await request(app)
+      .post('/api/branch-transfers')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        fromProjectId: '507f1f77bcf86cd799439011',
+        toProjectId: '507f1f77bcf86cd799439012',
+        items: [{ materialId: '507f1f77bcf86cd799439013', quantity: 1 }],
+      });
+    assert.strictEqual(create.status, 403);
+  });
 });

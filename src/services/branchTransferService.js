@@ -53,20 +53,19 @@ function serializeTransferRow(t) {
 }
 
 function transferActionFlags(t, user) {
-  const toId = t.toProjectId?._id?.toString() || t.toProjectId?.toString();
   const flags = {
     canPmApprove: false,
     canPmReject: false,
     canCoordinatorDecide: false,
+    canCoordinatorReject: false,
     canExecute: false,
   };
 
-  if (user.role === UserRole.PROJECT_MANAGER && t.status === 'REQUESTED') {
-    flags.canPmApprove = userManagesProject(user, toId);
-    flags.canPmReject = flags.canPmApprove;
-  }
-  if (user.role === UserRole.COORDINATOR && t.status === 'PM_APPROVED') {
+  const awaitingHoReview = ['REQUESTED', 'PM_APPROVED'].includes(t.status);
+
+  if (user.role === UserRole.COORDINATOR && awaitingHoReview) {
     flags.canCoordinatorDecide = true;
+    flags.canCoordinatorReject = true;
   }
   if (
     user.role === UserRole.COORDINATOR &&

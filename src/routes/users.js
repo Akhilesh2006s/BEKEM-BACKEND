@@ -5,13 +5,14 @@ const { UserRole } = require('@afios/shared');
 const { User, Project, Site } = require('../models');
 const { authenticate } = require('../middleware/auth');
 const { requireCapability } = require('../middleware/rbac');
+const { requireSystemAdmin } = require('../middleware/systemAdmin');
 const { validate } = require('../middleware/validate');
 const { serializeUser } = require('../utils/serialize');
 const { applyRoleAssignments, isAllProjectsRole } = require('../services/userAssignmentService');
 
 const router = express.Router();
 router.use(authenticate);
-router.use(requireCapability('MANAGE_USERS'));
+router.use(requireSystemAdmin);
 
 const ROLES = Object.values(UserRole);
 

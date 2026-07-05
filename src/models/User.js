@@ -26,6 +26,8 @@ const userSchema = new mongoose.Schema(
       emailDigest: { type: Boolean, default: false },
       sms: { type: Boolean, default: false },
     },
+    /** System administrator — only role that may manage users. */
+    isSystemAdmin: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

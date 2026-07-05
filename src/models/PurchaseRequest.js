@@ -8,6 +8,14 @@ const purchaseRequestSchema = new mongoose.Schema(
     status: { type: String, default: 'DRAFT' },
     createdByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     amountEstimate: { type: Number, default: 0 },
+    executiveRecommendation: {
+      type: String,
+      enum: ['PURCHASE_ORDER', 'BRANCH_TRANSFER', null],
+      default: null,
+    },
+    executiveRecommendationRemark: { type: String, default: '' },
+    executiveRecommendedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    executiveRecommendedAt: { type: Date },
   },
   { timestamps: true }
 );

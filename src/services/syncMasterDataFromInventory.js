@@ -27,6 +27,7 @@ const {
   materialCodeFromItem,
   ensureUniqueCode,
 } = require('./codeGenerators');
+const { normalizeName } = require('./materialDedupService');
 const { getFinancialYear } = require('./procurementReferenceService');
 
 /**
@@ -113,8 +114,8 @@ async function syncMasterDataFromInventory({ financialYear = '25-26', clearProcu
   const materialKeys = [];
   const seenMaterialKeys = new Set();
   for (const r of records) {
-    const key = `${(r.itemCode || '').toUpperCase()}||${(r.itemDescription || '').toUpperCase()}`;
-    if (seenMaterialKeys.has(key)) continue;
+    const key = normalizeName(r.itemDescription || r.itemCode);
+    if (!key || seenMaterialKeys.has(key)) continue;
     seenMaterialKeys.add(key);
     materialKeys.push(key);
     const base = materialCodeFromItem(r.itemCode, r.itemDescription);
@@ -165,7 +166,7 @@ async function syncMasterDataFromInventory({ financialYear = '25-26', clearProcu
   const projectIds = projects.map((p) => p._id);
   const firstSite = await Site.findOne({ projectId: projectIds[0] }).sort({ createdAt: 1 });
 
-  // Site Manager / Project Manager: one project. Store Manager: all (can be narrowed in admin).
+  // Site Manager / Project Manager: one project. Store Manager: site project only.
   // Executive / Coordinator / Chairman: all projects.
   const firstProjectId = projectIds[0] ? [projectIds[0]] : [];
   await User.updateMany(
@@ -173,7 +174,7 @@ async function syncMasterDataFromInventory({ financialYear = '25-26', clearProcu
     { $set: { assignedProjectIds: firstProjectId } }
   );
   await User.updateMany(
-    { role: { $in: ['STORE_INCHARGE', 'COORDINATOR', 'CHAIRMAN', 'EXECUTIVE'] } },
+    { role: { $in: ['COORDINATOR', 'CHAIRMAN', 'EXECUTIVE'] } },
     { $set: { assignedProjectIds: projectIds } }
   );
   if (firstSite) {
@@ -182,7 +183,7 @@ async function syncMasterDataFromInventory({ financialYear = '25-26', clearProcu
       { $set: { assignedSiteId: firstSite._id } }
     );
     await User.updateMany(
-      { role: 'SITE_INCHARGE' },
+      { role: 'STORE_INCHARGE' },
       { $set: { assignedProjectIds: [firstSite.projectId] } }
     );
   }

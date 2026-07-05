@@ -31,6 +31,7 @@ const {
 } = require('../utils/serialize');
 const { enrichIndentWithStock } = require('../services/indentStockService');
 const { estimateIndentAmount } = require('../services/purchaseRequestService');
+const { queueForExecutiveDecision } = require('../services/procurementDecisionService');
 const { checkPmCanApprove, getPmDailyApprovedTotal, MR_PM_DAILY_MAX_INR } = require('../services/pmApprovalCapService');
 const { handleIdempotent } = require('../utils/idempotentHandler');
 
@@ -248,7 +249,7 @@ router.post(
     body('items.*.quantityRequested').optional().isFloat({ min: 0.01 }),
     body('materialId').optional().isMongoId(),
     body('quantityRequested').optional().isFloat({ min: 0.01 }),
-    body('purpose').optional().trim(),
+    body('purpose').trim().notEmpty().withMessage('Reason for request is required').isLength({ max: 500 }),
     body('requiredByDate').optional().isISO8601(),
   ],
   validate,
@@ -287,6 +288,8 @@ router.post(
         siteId: site._id,
         items: resolvedItems,
         requestedByUserId: req.user._id,
+        purpose: req.body.purpose.trim(),
+        requiredByDate: req.body.requiredByDate ? new Date(req.body.requiredByDate) : undefined,
         status: 'PENDING_STORE',
         pendingWithRole: 'STORE_INCHARGE',
       });
@@ -626,7 +629,7 @@ router.post(
 
       if (actingRole === UserRole.PROJECT_MANAGER) {
         if (mr.status !== 'FORWARDED_TO_PM') {
-          if (['PM_APPROVED', 'PURCHASE_REQUESTED', 'PENDING_HO'].includes(mr.status)) {
+          if (['PM_APPROVED', 'PURCHASE_REQUESTED', 'PENDING_HO', 'PENDING_EXECUTIVE_DECISION'].includes(mr.status)) {
             return { statusCode: 200, body: await mrEnrichedBody(mr._id) };
           }
           return { statusCode: 400, body: { statusCode: 400, message: 'Request not awaiting PM approval' } };
@@ -656,9 +659,9 @@ router.post(
           await notificationService.notifyUsers(
             executives.map((u) => u._id),
             {
-              title: 'Indent escalated to Head Office',
+              title: 'New Procurement Decision Pending',
               body: `${mr.indentNumber} exceeds PM daily approval cap.`,
-              relatedEntityType: 'MaterialRequest',
+              relatedEntityType: 'ProcurementDecision',
               relatedEntityId: mr._id,
             }
           );
@@ -677,9 +680,13 @@ router.post(
           };
         }
       } else if ([UserRole.EXECUTIVE, UserRole.COORDINATOR].includes(actingRole)) {
-        if (mr.status !== 'PENDING_HO') {
-          return { statusCode: 400, body: { statusCode: 400, message: 'Request not in Head Office queue' } };
-        }
+        return {
+          statusCode: 400,
+          body: {
+            statusCode: 400,
+            message: 'Use Procurement Decisions to review indents forwarded to Head Office',
+          },
+        };
       } else if (actingRole === UserRole.CHAIRMAN) {
         // Chairman final approval path (legacy)
       } else {
@@ -789,6 +796,152 @@ router.post(
     } catch (err) {
       next(err);
     }
+  }
+);
+
+router.post(
+  '/:id/pm-local-close',
+  requirePmApproval(),
+  [
+    param('id').isMongoId(),
+    body('remark').trim().notEmpty().withMessage('Remark is required'),
+  ],
+  validate,
+  async (req, res, next) => {
+    return handleIdempotent(req, res, `mr-pm-close:${req.params.id}`, async () => {
+      const mr = req._materialRequest || (await MaterialRequest.findById(req.params.id));
+      if (!mr) {
+        return { statusCode: 404, body: { statusCode: 404, message: 'Request not found' } };
+      }
+
+      if (req.approvalContext.principal.role !== UserRole.PROJECT_MANAGER) {
+        return { statusCode: 403, body: { statusCode: 403, message: 'Only Project Managers can approve locally' } };
+      }
+
+      if (mr.status !== 'FORWARDED_TO_PM') {
+        return { statusCode: 400, body: { statusCode: 400, message: 'Indent is not awaiting PM review' } };
+      }
+
+      if (!mr.estimatedValue) mr.estimatedValue = estimateIndentAmount(mr);
+      const pmId = req.approvalContext.principal._id;
+      const capCheck = await checkPmCanApprove(pmId, mr);
+      if (capCheck.wouldExceed) {
+        return {
+          statusCode: 409,
+          body: {
+            statusCode: 409,
+            message: `Cannot close locally — exceeds ₹${MR_PM_DAILY_MAX_INR.toLocaleString('en-IN')} daily limit. Forward to Head Office instead.`,
+            escalated: true,
+          },
+        };
+      }
+
+      const remark = requireRemark(req.body.remark);
+      const fromStatus = mr.status;
+      mr.status = 'PM_APPROVED';
+      mr.pmForwardRemark = remark;
+      mr.pendingWithRole = 'STORE_INCHARGE';
+      await mr.save();
+
+      await statusHistoryService.record(
+        'MaterialRequest',
+        mr._id,
+        fromStatus,
+        'PM_APPROVED',
+        req.user._id,
+        `PM approved & closed locally (no HO escalation): ${remark}`
+      );
+
+      const storeUsers = await User.find({
+        role: UserRole.STORE_INCHARGE,
+        assignedSiteId: mr.siteId,
+      });
+      await notificationService.notifyUsers(
+        storeUsers.map((u) => u._id),
+        {
+          title: 'Indent approved by PM',
+          body: `${mr.indentNumber} approved locally — proceed with issue or local fulfillment.`,
+          relatedEntityType: 'MaterialRequest',
+          relatedEntityId: mr._id,
+        }
+      );
+
+      await notificationService.notifyUser(mr.requestedByUserId, {
+        title: 'Indent approved',
+        body: `Your request ${mr.indentNumber} was approved by the Project Manager.`,
+        relatedEntityType: 'MaterialRequest',
+        relatedEntityId: mr._id,
+      });
+
+      return { statusCode: 200, body: await mrEnrichedBody(mr._id) };
+    }, next);
+  }
+);
+
+router.post(
+  '/:id/forward-to-ho',
+  requirePmApproval(),
+  [
+    param('id').isMongoId(),
+    body('remark').trim().notEmpty().withMessage('Remark is required'),
+  ],
+  validate,
+  async (req, res, next) => {
+    return handleIdempotent(req, res, `mr-forward-ho:${req.params.id}`, async () => {
+      const mr = req._materialRequest || (await MaterialRequest.findById(req.params.id));
+      if (!mr) {
+        return { statusCode: 404, body: { statusCode: 404, message: 'Request not found' } };
+      }
+
+      if (req.approvalContext.principal.role !== UserRole.PROJECT_MANAGER) {
+        return { statusCode: 403, body: { statusCode: 403, message: 'Only Project Managers can forward to Head Office' } };
+      }
+
+      if (mr.status !== 'FORWARDED_TO_PM') {
+        if (
+          [
+            'PURCHASE_REQUESTED',
+            'PENDING_HO',
+            'PENDING_EXECUTIVE_DECISION',
+            'EXECUTIVE_DECISION_PO',
+            'EXECUTIVE_DECISION_BRANCH_TRANSFER',
+            'PM_APPROVED',
+          ].includes(mr.status)
+        ) {
+          return { statusCode: 200, body: await mrEnrichedBody(mr._id) };
+        }
+        return {
+          statusCode: 400,
+          body: { statusCode: 400, message: 'Indent is not awaiting PM review' },
+        };
+      }
+
+      const remark = requireRemark(req.body.remark);
+      if (!mr.estimatedValue) mr.estimatedValue = estimateIndentAmount(mr);
+
+      await queueForExecutiveDecision(
+        mr,
+        req.user._id,
+        remark,
+        `Forwarded to Head Office (insufficient stock): ${remark}`
+      );
+
+      await notificationService.notifyUser(mr.requestedByUserId, {
+        title: 'Indent forwarded to Head Office',
+        body: `${mr.indentNumber} — awaiting executive procurement decision.`,
+        relatedEntityType: 'MaterialRequest',
+        relatedEntityId: mr._id,
+      });
+
+      const enriched = await mrEnrichedBody(mr._id);
+      return {
+        statusCode: 200,
+        body: {
+          ...enriched,
+          message: 'Forwarded to Head Office — awaiting executive procurement decision',
+        },
+      };
+    }, next);
   }
 );
 

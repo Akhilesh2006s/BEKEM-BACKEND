@@ -71,9 +71,17 @@ router.get('/', async (req, res, next) => {
     const filter = {};
 
     if (queue === 'coordinator') {
-      filter.status = { $in: ['PENDING_REVIEW', 'COORDINATOR_PENDING'] };
+      const {
+        listCoordinatorVerifyPos,
+        countCoordinatorVerifyPos,
+      } = require('../services/coordinatorPoQueueService');
+      const orders = await listCoordinatorVerifyPos();
+      return res.json({
+        data: orders.map(serializePurchaseOrder),
+        meta: { count: await countCoordinatorVerifyPos() },
+      });
     } else if (queue === 'chairman') {
-      filter.status = { $in: ['PENDING_APPROVAL', 'CHAIRMAN_PENDING'] };
+      filter.status = 'CHAIRMAN_PENDING';
     } else if (queue === 'pm') {
       filter.status = 'PM_PENDING';
     } else if (queue === 'executive') {

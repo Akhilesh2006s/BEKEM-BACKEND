@@ -45,3 +45,10 @@ export function getGreeting(): string {
 export function getFirstName(fullName: string): string {
   return fullName.split(' ')[0] || fullName;
 }
+
+/** Shortfall quantity for indent stock comparison (never negative). */
+export function computeRequiredQty(requestedQty: number, availableQty: number): number {
+  const requested = Math.max(0, Number(requestedQty) || 0);
+  const available = Math.max(0, Number(availableQty) || 0);
+  return available >= requested ? 0 : requested - available;
+}

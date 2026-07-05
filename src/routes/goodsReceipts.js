@@ -96,6 +96,7 @@ router.post(
     body('note').optional().trim(),
     body('remarks').optional().trim(),
     body('invoiceNo').optional().trim(),
+    body('invoiceDate').isISO8601().withMessage('Invoice date is required'),
     body('invoiceValue').optional().isFloat({ min: 0 }),
     body('challanNo').optional().trim(),
     body('vehicleNo').optional().trim(),
@@ -214,6 +215,7 @@ router.post(
         isPartialGrn: isPartial,
         varianceDetails: isPartial ? { lines: varianceLines } : null,
         invoiceNo: req.body.invoiceNo || '',
+        invoiceDate: new Date(req.body.invoiceDate),
         invoiceValue,
         challanNo: req.body.challanNo || '',
         vehicleNo,
@@ -286,6 +288,18 @@ router.post(
             }
           );
         }
+      }
+
+      if (!saveDraft && status !== 'REJECTED') {
+        const populatedPo = await PurchaseOrder.findById(po._id).populate('vendorId');
+        const { createBillFromGrn } = require('../services/financeService');
+        await createBillFromGrn(
+          grn,
+          populatedPo,
+          populatedPo?.vendorId,
+          projectId,
+          req.user._id
+        );
       }
 
       const populated = await GoodsReceiptNote.findById(grn._id)

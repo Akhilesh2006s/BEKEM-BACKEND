@@ -345,16 +345,19 @@ async function createPurchaseOrderFromWizard({
     await pr.save();
   }
 
-  const coordinators = await User.find({ role: UserRole.COORDINATOR });
-  await notificationService.notifyUsers(
-    coordinators.map((u) => u._id),
-    {
-      title: 'PO pending review',
-      body: `${draftRef} requires coordinator review.`,
-      relatedEntityType: 'PurchaseOrder',
-      relatedEntityId: po._id,
-    }
-  );
+  const { poRequiresCoordinatorVerification } = require('./coordinatorPoQueueService');
+  if (poRequiresCoordinatorVerification(initialStatus)) {
+    const coordinators = await User.find({ role: UserRole.COORDINATOR });
+    await notificationService.notifyUsers(
+      coordinators.map((u) => u._id),
+      {
+        title: 'PO pending review',
+        body: `${draftRef} requires coordinator review.`,
+        relatedEntityType: 'PurchaseOrder',
+        relatedEntityId: po._id,
+      }
+    );
+  }
 
   return { po, rfq, quotation, quotations };
 }

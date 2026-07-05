@@ -49,6 +49,12 @@ describe('PO approval & vendor MSME', () => {
         isMsme: false,
         gstNumber: '29BBBBB0000B1Z5',
         code: 'PLN',
+        panNumber: 'AABCP1234A',
+        contactPerson: 'Raj',
+        phone: '9876543210',
+        bankName: 'HDFC Bank',
+        bankAccountNumber: '123456789012',
+        ifscCode: 'HDFC0001234',
       });
     assert.strictEqual(res.status, 201);
     assert.strictEqual(res.body.data.isMsme, false);

@@ -225,11 +225,14 @@ GST No.: 29AADCB5671Q1ZY`,
     }
     if (u.role === 'STORE_INCHARGE') {
       data.assignedSiteId = site._id;
-      data.assignedProjectIds = [project._id, project2._id];
+      data.assignedProjectIds = [project._id];
     }
-    if (u.role === 'PROJECT_MANAGER') data.assignedProjectIds = [project._id];
+    if (u.role === 'PROJECT_MANAGER') data.assignedProjectIds = [project._id, project2._id];
     if (u.role === 'EXECUTIVE') data.assignedProjectIds = [project._id, project2._id];
-    if (u.role === 'COORDINATOR') data.assignedProjectIds = [project._id, project2._id];
+    if (u.role === 'COORDINATOR') {
+      data.assignedProjectIds = [project._id, project2._id];
+      data.isSystemAdmin = true;
+    }
     if (u.role === 'CHAIRMAN') data.assignedProjectIds = [project._id, project2._id];
     const created = await User.create(data);
     userMap[u.role] = created;
@@ -804,6 +807,33 @@ async function seed() {
   } catch (err) {
     console.warn('\nUAT transactional seed failed:', err.message);
     console.warn('Run manually: npm run seed:transactions\n');
+  }
+
+  try {
+    const { Material } = require('../models');
+    const missingHsn = await Material.find({
+      $or: [{ hsnCode: '' }, { hsnCode: null }, { hsnCode: { $exists: false } }],
+    });
+    for (const mat of missingHsn) {
+      mat.hsnCode = '99999999';
+      if (mat.gstRate == null) mat.gstRate = 18;
+      await mat.save();
+    }
+    if (missingHsn.length) {
+      console.log(`\n✅ Backfilled HSN on ${missingHsn.length} materials\n`);
+    }
+  } catch (err) {
+    console.warn('\nHSN backfill skipped:', err.message);
+  }
+
+  try {
+    const { dedupeAllMaterials } = require('../services/materialDedupService');
+    const { merged, remaining } = await dedupeAllMaterials();
+    if (merged > 0) {
+      console.log(`\n✅ Merged ${merged} duplicate materials (${remaining} unique names remain)\n`);
+    }
+  } catch (err) {
+    console.warn('\nMaterial dedupe skipped:', err.message);
   }
 
   await mongoose.disconnect();
