@@ -585,7 +585,7 @@ router.post(
 router.post(
   '/:id/approve-override',
   requireCapability('VERIFY_RECORDS'),
-  [param('id').isMongoId(), body('remark').trim().isLength({ min: 1, max: 300 })],
+  [param('id').isMongoId(), body('remark').trim().isLength({ min: 30, max: 300 })],
   validate,
   async (req, res, next) => {
     try {

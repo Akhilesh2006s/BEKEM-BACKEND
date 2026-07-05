@@ -77,10 +77,11 @@ function serializeMaterial(m) {
     hsnCode: m.hsnCode || '',
     gstRate: m.gstRate ?? 18,
     unitPrice: m.unitPrice ?? undefined,
+    referenceUnitPrice: m.referenceUnitPrice ?? undefined,
   };
 }
 
-function serializeLineItem(item, stockFields) {
+function serializeLineItem(item, stockFields, pricingFields) {
   const mat = item.materialId;
   const unit = item.unit || mat?.unit || '';
   const material = mat?.name ? serializeMaterial(mat) : undefined;
@@ -99,16 +100,21 @@ function serializeLineItem(item, stockFields) {
     base.availableQty = stockFields.availableQty;
     base.requiredQty = stockFields.requiredQty;
   }
+  if (pricingFields) {
+    base.unitPrice = pricingFields.unitPrice;
+    base.lineTotal = pricingFields.lineTotal;
+  }
   return base;
 }
 
-function serializeMaterialRequest(mr, stockContext) {
+function serializeMaterialRequest(mr, stockContext, pricingContext) {
   const lineItems = getIndentLineItems(mr);
   const first = lineItems[0];
   const firstMat = first?.materialId;
   const stockByItemId = new Map(
     (stockContext?.stockByLine || []).map((s) => [s.itemId, s])
   );
+  const pricingByItemId = pricingContext?.byItemId || new Map();
 
   const base = {
     id: mr._id.toString(),
@@ -116,7 +122,11 @@ function serializeMaterialRequest(mr, stockContext) {
     projectId: resolveId(mr.projectId),
     siteId: resolveId(mr.siteId),
     items: lineItems.map((item) =>
-      serializeLineItem(item, stockByItemId.get(item._id.toString()))
+      serializeLineItem(
+        item,
+        stockByItemId.get(item._id.toString()),
+        pricingByItemId.get(item._id.toString())
+      )
     ),
     itemCount: lineItems.length,
     materialId: resolveId(firstMat),
@@ -127,7 +137,7 @@ function serializeMaterialRequest(mr, stockContext) {
     requestedByUserId: resolveId(mr.requestedByUserId),
     status: mr.status,
     pendingWith: pendingWithLabel(mr.status),
-    estimatedValue: mr.estimatedValue || 0,
+    estimatedValue: (pricingContext?.totalEstimatedValue ?? mr.estimatedValue) || 0,
     escalatedToHo: !!mr.escalatedToHo,
     canFullyIssue: stockContext?.canFullyIssue,
     hasShortfall: stockContext?.hasShortfall,
@@ -170,8 +180,12 @@ function serializeMaterialRequest(mr, stockContext) {
 
 async function serializeMaterialRequestEnriched(mr) {
   const { enrichIndentWithStock } = require('../services/indentStockService');
-  const stockContext = await enrichIndentWithStock(mr);
-  return serializeMaterialRequest(mr, stockContext);
+  const { computeIndentPricing } = require('../services/indentPricingService');
+  const [stockContext, pricingContext] = await Promise.all([
+    enrichIndentWithStock(mr),
+    computeIndentPricing(mr),
+  ]);
+  return serializeMaterialRequest(mr, stockContext, pricingContext);
 }
 
 module.exports = {

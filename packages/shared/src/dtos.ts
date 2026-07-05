@@ -111,10 +111,13 @@ export interface DashboardWidgetsDto {
 export interface ProcurementDecisionListItemDto {
   id: string;
   indentNumber: string;
+  prNumber?: string | null;
   indentDate: string | null;
   status: string;
   projectCode?: string;
   projectName?: string;
+  purpose?: string;
+  priority?: 'HIGH' | 'MEDIUM' | 'NORMAL';
   estimatedValue: number;
   executiveProcurementMethod: 'PURCHASE_ORDER' | 'BRANCH_TRANSFER' | null;
 }
@@ -147,8 +150,12 @@ export interface ProcurementDecisionDto {
   projectCode?: string;
   projectName?: string;
   requestedBy?: string;
+  purpose?: string;
+  priority?: 'HIGH' | 'MEDIUM' | 'NORMAL';
   pmRemarks: string;
   estimatedValue: number;
+  purchaseRequestId?: string | null;
+  prNumber?: string | null;
   items: ProcurementDecisionItemDto[];
   executiveProcurementMethod: 'PURCHASE_ORDER' | 'BRANCH_TRANSFER' | null;
   executiveDecisionRemark: string;
@@ -158,6 +165,7 @@ export interface ProcurementDecisionDto {
   coordinatorProcurementRemark: string;
   canExecutiveDecide: boolean;
   canCoordinatorReview: boolean;
+  redirect?: { type: string; path: string };
 }
 
 export interface PoTimelineStageDto {
@@ -251,6 +259,8 @@ export interface MaterialDto {
   gstRate?: number;
   /** Latest approved purchase rate (reference only). */
   unitPrice?: number | null;
+  /** Secondary line for indent/search pickers when names collide. */
+  pickerSubtitle?: string;
 }
 
 export interface MaterialCategoryDto {
@@ -289,17 +299,27 @@ export interface IndentLineItemDto {
   requestedQty?: number;
   availableQty?: number;
   requiredQty?: number;
+  /** Server-computed pricing (read-only). */
+  unitPrice?: number | null;
+  lineTotal?: number | null;
 }
 
 export interface CreateIndentDto {
   purpose: string;
   items: Array<{
     materialId?: string;
-    /** Free-text product when not in catalog — created on submit. */
+    /** @deprecated Use materialId after POST /materials/site-request */
     customName?: string;
     unit?: string;
     quantityRequested: number;
   }>;
+}
+
+export interface CreateSiteMaterialDto {
+  name: string;
+  unit: string;
+  category?: 'Raw Material' | 'Consumables' | 'Consumable';
+  description?: string;
 }
 
 export interface MaterialRequestDto {
@@ -327,6 +347,16 @@ export interface MaterialRequestDto {
   escalatedToHo?: boolean;
   canFullyIssue?: boolean;
   hasShortfall?: boolean;
+  crossProjectStock?: Array<{
+    materialId: string;
+    materialName?: string;
+    projects: Array<{
+      projectId: string;
+      projectCode: string;
+      projectName: string;
+      availableQty: number;
+    }>;
+  }>;
 }
 
 export interface PmDailyCapDto {
@@ -747,6 +777,18 @@ export interface ExplorerProjectDto {
   code: string;
   name: string;
   status: string;
+  storeNames: string[];
+  storeCount: number;
+  projectManagers: string[];
+  projectManager: string;
+  procurementStatus: string;
+  pendingMaterialRequests: number;
+  pendingPurchaseRequests: number;
+  pendingPurchaseOrders: number;
+  pendingGrns: number;
+  pendingBranchTransfers: number;
+  inventoryHealth: string;
+  budgetStatus: string;
   budgetTotal: number;
   budgetSpent: number;
   deployPct: number;
@@ -932,6 +974,8 @@ export interface BranchTransferDto {
   canPmReject?: boolean;
   canCoordinatorDecide?: boolean;
   canCoordinatorReject?: boolean;
+  canExecutiveApprove?: boolean;
+  canExecutiveReject?: boolean;
   canExecute?: boolean;
 }
 

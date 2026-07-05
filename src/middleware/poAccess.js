@@ -55,8 +55,8 @@ async function assertCanViewPurchaseOrder(user, po) {
       err.statusCode = 403;
       throw err;
     }
-    if (po.status !== 'PM_PENDING') {
-      const err = new Error('Project managers may only view POs pending their approval');
+    if (!['APPROVED', 'PM_PENDING'].includes(po.status)) {
+      const err = new Error('Project managers may only view approved POs or those pending PM approval');
       err.statusCode = 403;
       throw err;
     }
@@ -66,6 +66,11 @@ async function assertCanViewPurchaseOrder(user, po) {
   if (user.role === UserRole.STORE_INCHARGE) {
     if (!userCanAccessProject(user, projectId)) {
       const err = new Error('Forbidden — project out of scope');
+      err.statusCode = 403;
+      throw err;
+    }
+    if (po.status !== 'APPROVED') {
+      const err = new Error('Store managers may only view approved purchase orders');
       err.statusCode = 403;
       throw err;
     }
@@ -107,7 +112,11 @@ async function purchaseOrderListFilter(user, baseFilter = {}) {
     const prIds = await require('../models').PurchaseRequest.find({
       projectId: { $in: projectIds },
     }).distinct('_id');
-    return { ...baseFilter, purchaseRequestId: { $in: prIds } };
+    return {
+      ...baseFilter,
+      purchaseRequestId: { $in: prIds },
+      status: baseFilter.status || 'APPROVED',
+    };
   }
 
   return { _id: null };

@@ -9,7 +9,7 @@ const {
   getApp,
 } = require('./test/helpers');
 const mongoose = require('mongoose');
-const { MaterialRequest, StatusHistory, Notification, PurchaseRequest } = require('./models');
+const { MaterialRequest, StatusHistory, Notification, PurchaseRequest, Material } = require('./models');
 
 describe('Full chain integration', () => {
   before(async () => {
@@ -22,7 +22,9 @@ describe('Full chain integration', () => {
 
   it('walks material request through all 6 roles end-to-end', async () => {
     const app = getApp();
-    const { site, material } = await getSeedContext();
+    const { site } = await getSeedContext();
+    const cement = await Material.findOne({ code: 'MAT-CEMENT-OPC53' });
+    assert.ok(cement, 'seed cement material required');
 
     const siteToken = await loginAs('request@bekem.com');
     const storeToken = await loginAs('storeincharge@bekem.com');
@@ -34,8 +36,7 @@ describe('Full chain integration', () => {
       .post('/api/material-requests')
       .set('Authorization', `Bearer ${siteToken}`)
       .send({
-        materialId: material._id.toString(),
-        quantityRequested: 1,
+        items: [{ materialId: cement._id.toString(), quantityRequested: 1 }],
         purpose: 'Integration test pour',
         requiredByDate: new Date(Date.now() + 7 * 86400000).toISOString(),
       });
@@ -87,8 +88,15 @@ describe('Full chain integration', () => {
 
     assert.strictEqual(verifyRes.status, 200);
     let poStatus = verifyRes.body.data.status;
-    // Above ₹10k routes to Chairman; Coordinator band (₹5k–₹10k) is final.
-    if (poStatus === 'CHAIRMAN_PENDING') {
+    if (poStatus === 'PM_PENDING') {
+      const pmPoRes = await request(app)
+        .post(`/api/purchase-orders/${poId}/pm-approve`)
+        .set('Authorization', `Bearer ${pmToken}`)
+        .send({ note: 'PM final approval — under ₹5,000 band' });
+      assert.strictEqual(pmPoRes.status, 200);
+      poStatus = pmPoRes.body.data.status;
+      assert.ok(pmPoRes.body.data.poNumber, 'official PO number assigned on PM approval');
+    } else if (poStatus === 'CHAIRMAN_PENDING') {
       const chairmanToken = await loginAs('chairman@bekem.com');
       const chairRes = await request(app)
         .post(`/api/purchase-orders/${poId}/approve`)

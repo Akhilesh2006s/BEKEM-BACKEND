@@ -1,4 +1,4 @@
-const { StatusHistory } = require('../models');
+const { StatusHistory, MaterialRequest } = require('../models');
 const { UserRole } = require('@afios/shared');
 const { MR_PM_DAILY_MAX_INR, APP_TIMEZONE } = require('../constants/indentPolicy');
 const { estimateIndentAmount } = require('./purchaseRequestService');
@@ -36,16 +36,15 @@ async function getPmDailyApprovedTotal(pmUserId, date = new Date()) {
     actorUserId: pmUserId,
     toStatus: 'PM_APPROVED',
     timestamp: { $gte: start, $lte: end },
-  }).populate({
-    path: 'entityId',
-    select: 'estimatedValue items quantityRequested materialId',
-  });
+  }).select('entityId');
 
   let total = 0;
   for (const entry of approvals) {
-    const mr = entry.entityId;
+    const mr = await MaterialRequest.findById(entry.entityId).select(
+      'estimatedValue items quantityRequested materialId'
+    );
     if (!mr) continue;
-    total += mr.estimatedValue ?? estimateIndentAmount(mr);
+    total += mr.estimatedValue ?? (await estimateIndentAmount(mr));
   }
   return Math.round(total);
 }
@@ -55,7 +54,7 @@ function wouldExceedPmDailyCap(currentTotal, requestValue) {
 }
 
 async function checkPmCanApprove(pmUserId, mr) {
-  const requestValue = mr.estimatedValue ?? estimateIndentAmount(mr);
+  const requestValue = mr.estimatedValue ?? (await estimateIndentAmount(mr));
   const dailyApprovedTotal = await getPmDailyApprovedTotal(pmUserId);
   const wouldExceed = wouldExceedPmDailyCap(dailyApprovedTotal, requestValue);
   return {

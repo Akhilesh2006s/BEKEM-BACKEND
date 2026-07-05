@@ -184,58 +184,26 @@ router.get('/:id', param('id').isMongoId(), validate, async (req, res, next) => 
       }
     }
 
-    res.json({ data: await serializeMaterialRequestEnriched(mr) });
+    const data = await serializeMaterialRequestEnriched(mr);
+    if (req.user.role === UserRole.PROJECT_MANAGER) {
+      const { enrichIndentWithCrossProjectStock } = require('../services/pmCrossProjectStockService');
+      const cross = await enrichIndentWithCrossProjectStock(mr, req.user);
+      const lineItems = data.items || [];
+      data.crossProjectStock = (cross || []).map((row) => {
+        const item = lineItems.find((l) => l.materialId === row.materialId);
+        return { ...row, materialName: item?.material?.name || row.materialName };
+      });
+    }
+
+    res.json({ data });
   } catch (err) {
     next(err);
   }
 });
 
-async function resolveIndentLineItems(rawItems) {
-  const { Material } = require('../models');
-  const { materialCodeFromItem, ensureUniqueCode } = require('../services/codeGenerators');
-  const resolved = [];
-  const usedCodes = new Set(
-    (await Material.find().select('code').lean()).map((m) => m.code.toUpperCase())
-  );
-
-  for (const item of rawItems) {
-    const qty = Number(item.quantityRequested);
-    if (!Number.isFinite(qty) || qty <= 0) continue;
-    const unit = String(item.unit || 'Nos').trim() || 'Nos';
-
-    if (item.materialId) {
-      const catalog = await Material.findById(item.materialId).select('unit');
-      resolved.push({
-        materialId: item.materialId,
-        quantityRequested: qty,
-        unit: unit || catalog?.unit || 'Nos',
-      });
-      continue;
-    }
-
-    const name = String(item.customName || item.name || '').trim();
-    if (!name) continue;
-
-    let mat = await Material.findOne({
-      name: { $regex: `^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' },
-    });
-
-    if (!mat) {
-      const code = ensureUniqueCode(materialCodeFromItem(name, name).slice(0, 36) || 'SITE-REQ', usedCodes);
-      mat = await Material.create({
-        code,
-        name,
-        unit,
-        category: 'Site request',
-        description: 'Requested from site — not previously in catalog',
-        isActive: true,
-      });
-    }
-
-    resolved.push({ materialId: mat._id, quantityRequested: qty, unit });
-  }
-
-  return resolved;
+async function resolveIndentLineItems(rawItems, createdByUserId) {
+  const { resolveIndentLineItems: resolveItems } = require('../services/siteMaterialService');
+  return resolveItems(rawItems, { createdByUserId });
 }
 
 router.post(
@@ -271,7 +239,7 @@ router.post(
         items = [{ materialId: req.body.materialId, quantityRequested: req.body.quantityRequested }];
       }
 
-      const resolvedItems = await resolveIndentLineItems(items);
+      const resolvedItems = await resolveIndentLineItems(items, req.user._id);
       if (!resolvedItems.length) {
         return res.status(400).json({
           statusCode: 400,
@@ -365,7 +333,7 @@ router.post(
         const fromStatus = mr.status;
         mr.status = 'FORWARDED_TO_PM';
         mr.pendingWithRole = 'PROJECT_MANAGER';
-        mr.estimatedValue = estimateIndentAmount(mr);
+        mr.estimatedValue = await estimateIndentAmount(mr);
         await mr.save();
 
         await statusHistoryService.record(
@@ -514,7 +482,7 @@ router.post(
       const fromStatus = mr.status;
       mr.status = 'FORWARDED_TO_PM';
       mr.pendingWithRole = 'PROJECT_MANAGER';
-      mr.estimatedValue = estimateIndentAmount(mr);
+      mr.estimatedValue = await estimateIndentAmount(mr);
       await mr.save();
 
       try {
@@ -635,7 +603,7 @@ router.post(
           return { statusCode: 400, body: { statusCode: 400, message: 'Request not awaiting PM approval' } };
         }
 
-        if (!mr.estimatedValue) mr.estimatedValue = estimateIndentAmount(mr);
+        if (!mr.estimatedValue) mr.estimatedValue = await estimateIndentAmount(mr);
         const capCheck = await checkPmCanApprove(pmId, mr);
 
         if (capCheck.wouldExceed) {
@@ -696,7 +664,7 @@ router.post(
       const fromStatus = mr.status;
       const toStatus = actingRole === UserRole.CHAIRMAN ? 'CHAIRMAN_APPROVED' : 'PM_APPROVED';
       mr.status = toStatus;
-      if (!mr.estimatedValue) mr.estimatedValue = estimateIndentAmount(mr);
+      if (!mr.estimatedValue) mr.estimatedValue = await estimateIndentAmount(mr);
       await mr.save();
 
       const note = delegationService.formatApprovalNote('Approved', req.approvalContext);
@@ -822,7 +790,7 @@ router.post(
         return { statusCode: 400, body: { statusCode: 400, message: 'Indent is not awaiting PM review' } };
       }
 
-      if (!mr.estimatedValue) mr.estimatedValue = estimateIndentAmount(mr);
+      if (!mr.estimatedValue) mr.estimatedValue = await estimateIndentAmount(mr);
       const pmId = req.approvalContext.principal._id;
       const capCheck = await checkPmCanApprove(pmId, mr);
       if (capCheck.wouldExceed) {
@@ -917,7 +885,7 @@ router.post(
       }
 
       const remark = requireRemark(req.body.remark);
-      if (!mr.estimatedValue) mr.estimatedValue = estimateIndentAmount(mr);
+      if (!mr.estimatedValue) mr.estimatedValue = await estimateIndentAmount(mr);
 
       await queueForExecutiveDecision(
         mr,

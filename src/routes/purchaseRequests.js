@@ -93,7 +93,7 @@ router.get('/:id', param('id').isMongoId(), validate, async (req, res, next) => 
 
 router.post(
   '/:id/executive-decide',
-  requireCapability('CREATE_PURCHASE_ORDER'),
+  requireCapability('CREATE_PO'),
   param('id').isMongoId(),
   body('method').isIn(['PURCHASE_ORDER', 'BRANCH_TRANSFER']),
   body('remark').optional().isString().trim(),
@@ -152,7 +152,7 @@ router.post(
       const pr = await createPurchaseRequestForIndent(
         mr,
         req.user._id,
-        req.body.amountEstimate ?? estimateIndentAmount(mr)
+        req.body.amountEstimate ?? (await estimateIndentAmount(mr))
       );
 
       req.auditEntityType = 'PurchaseRequest';

@@ -692,22 +692,9 @@ async function getTallySyncStatus() {
   };
 }
 
-const { CANONICAL_CODE } = require('./projectDeduplicationService');
-
-async function getExplorerProjects() {
-  const projects = await Project.find({ code: { $regex: CANONICAL_CODE } }).sort({ code: 1 });
-  const sites = await Site.find().populate('projectId');
-  return projects.map((p) => ({
-    id: p._id.toString(),
-    code: p.code,
-    name: p.name,
-    status: p.status,
-    budgetTotal: p.budgetTotal,
-    budgetSpent: p.budgetSpent,
-    deployPct: p.budgetTotal > 0 ? Math.round((p.budgetSpent / p.budgetTotal) * 100) : 0,
-    healthScore: p.healthScore,
-    siteCount: sites.filter((s) => s.projectId?._id?.toString() === p._id.toString()).length,
-  }));
+async function getExplorerProjects(user) {
+  const { getExplorerProjects: loadExplorerProjects } = require('./explorerService');
+  return loadExplorerProjects(user);
 }
 
 function withAge(item) {

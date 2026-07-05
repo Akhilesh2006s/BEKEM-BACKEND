@@ -19,6 +19,7 @@ const LEGACY_CATEGORY_MAP = {
 function mapLegacyCategory(value) {
   if (!value) return 'Consumables';
   const key = String(value).trim().toLowerCase();
+  if (key === 'consumable') return 'Consumables';
   if (PHASE_CATEGORIES.some((c) => c.toLowerCase() === key)) return value.trim();
   return LEGACY_CATEGORY_MAP[key] || 'Consumables';
 }
@@ -59,9 +60,30 @@ async function listMaterialCategories() {
   return MaterialCategory.find({ isActive: true }).sort({ sortOrder: 1, name: 1 }).lean();
 }
 
+async function resolveMaterialCategory({ categoryId, category }) {
+  if (categoryId) {
+    const cat = await MaterialCategory.findOne({ _id: categoryId, isActive: true });
+    if (!cat) {
+      const err = new Error('Invalid material category');
+      err.statusCode = 400;
+      throw err;
+    }
+    return cat;
+  }
+  const name = mapLegacyCategory(category);
+  const cat = await MaterialCategory.findOne({ name, isActive: true });
+  if (!cat) {
+    const err = new Error('Invalid material category');
+    err.statusCode = 400;
+    throw err;
+  }
+  return cat;
+}
+
 module.exports = {
   ensureMaterialCategories,
   listMaterialCategories,
   mapLegacyCategory,
+  resolveMaterialCategory,
   PHASE_CATEGORIES,
 };

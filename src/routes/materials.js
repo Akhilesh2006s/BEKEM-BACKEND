@@ -98,22 +98,24 @@ router.get('/catalog', async (req, res, next) => {
       addLedgers(await StockLedger.find());
     }
 
-    const total = await Material.countDocuments(filter);
-    const materials = await Material.find(filter)
-      .sort({ code: 1 })
-      .skip((page - 1) * limit)
-      .limit(limit);
+    const { dedupeMaterialListResults } = require('../services/materialDedupService');
+    const allMatching = await Material.find(filter).sort({ code: 1 }).lean();
+    const deduped = dedupeMaterialListResults(
+      allMatching.map((m) => serializeMaterial(m)),
+      { collapseDuplicateNames: false }
+    );
+    const total = deduped.length;
+    const materials = deduped.slice((page - 1) * limit, page * limit);
 
     const { getLatestApprovedRates, attachUnitPrices } = require('../services/materialPricingService');
-    const rateByMaterial = await getLatestApprovedRates(materials.map((m) => m._id.toString()));
+    const rateByMaterial = await getLatestApprovedRates(materials.map((m) => m.id));
 
     // Stats across full filtered catalog (not only current page)
-    const allIds = await Material.find(filter).select('_id').lean();
     let inStock = 0;
     let lowStock = 0;
     let totalQty = 0;
-    for (const m of allIds) {
-      const stock = stockByMaterial.get(m._id.toString());
+    for (const m of deduped) {
+      const stock = stockByMaterial.get(m.id);
       const qty = stock?.quantityOnHand ?? 0;
       const threshold = stock?.lowStockThreshold ?? 0;
       totalQty += qty;
@@ -124,11 +126,11 @@ router.get('/catalog', async (req, res, next) => {
     res.json({
       data: attachUnitPrices(
         materials.map((m) => {
-          const stock = stockByMaterial.get(m._id.toString());
+          const stock = stockByMaterial.get(m.id);
           const quantityOnHand = stock?.quantityOnHand ?? 0;
           const lowStockThreshold = stock?.lowStockThreshold ?? 0;
           return {
-            ...serializeMaterial(m),
+            ...m,
             stock: {
               quantityOnHand,
               lowStockThreshold,
@@ -157,12 +159,14 @@ router.get('/catalog', async (req, res, next) => {
 router.get('/', async (req, res, next) => {
   try {
     const { search } = req.query;
+    const { dedupeMaterialListResults } = require('../services/materialDedupService');
     const filter = buildMaterialFilter(search);
-    const materials = await Material.find(filter).sort({ name: 1 }).limit(80);
+    const materials = await Material.find(filter).sort({ name: 1, code: 1 }).limit(200);
     const { getLatestApprovedRates, attachUnitPrices } = require('../services/materialPricingService');
     const rateByMaterial = await getLatestApprovedRates(materials.map((m) => m._id.toString()));
+    const priced = attachUnitPrices(materials.map(serializeMaterial), rateByMaterial);
     res.json({
-      data: attachUnitPrices(materials.map(serializeMaterial), rateByMaterial),
+      data: dedupeMaterialListResults(priced, { collapseDuplicateNames: true }),
     });
   } catch (err) {
     next(err);
@@ -170,25 +174,39 @@ router.get('/', async (req, res, next) => {
 });
 
 async function resolveMaterialCategory(body) {
-  const { mapLegacyCategory } = require('../services/materialCategoryService');
-  if (body.categoryId) {
-    const cat = await MaterialCategory.findOne({ _id: body.categoryId, isActive: true });
-    if (!cat) {
-      const err = new Error('Invalid material category');
-      err.statusCode = 400;
-      throw err;
-    }
-    return cat;
-  }
-  const name = mapLegacyCategory(body.category);
-  const cat = await MaterialCategory.findOne({ name, isActive: true });
-  if (!cat) {
-    const err = new Error('Invalid material category');
-    err.statusCode = 400;
-    throw err;
-  }
-  return cat;
+  const { resolveMaterialCategory: resolveCategory } = require('../services/materialCategoryService');
+  return resolveCategory(body);
 }
+
+router.post(
+  '/site-request',
+  requireCapability('CREATE_MATERIAL_REQUEST'),
+  [
+    body('name').trim().notEmpty().isLength({ max: 200 }),
+    body('unit').trim().notEmpty().isLength({ max: 40 }),
+    body('category').optional().trim().isIn(['Raw Material', 'Consumables', 'Consumable']),
+    body('description').optional().trim().isLength({ max: 500 }),
+  ],
+  validate,
+  async (req, res, next) => {
+    try {
+      const { createOrResolveSiteMaterial } = require('../services/siteMaterialService');
+      const { material, created, reused } = await createOrResolveSiteMaterial({
+        name: req.body.name,
+        unit: req.body.unit,
+        category: req.body.category,
+        description: req.body.description,
+        createdByUserId: req.user._id,
+      });
+      res.status(created ? 201 : 200).json({
+        data: serializeMaterial(material),
+        meta: { created, reused },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 router.post(
   '/',

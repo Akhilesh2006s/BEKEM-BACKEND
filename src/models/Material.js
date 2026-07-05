@@ -12,7 +12,10 @@ const materialSchema = new mongoose.Schema(
     hsnCode: { type: String, default: '' },
     /** Default GST % for PO lines (e.g. 18). */
     gstRate: { type: Number, default: 18 },
+    /** Material Master reference unit price (₹) when no approved PO rate exists. */
+    referenceUnitPrice: { type: Number, default: null },
     isActive: { type: Boolean, default: true },
+    createdByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   },
   { timestamps: true }
 );

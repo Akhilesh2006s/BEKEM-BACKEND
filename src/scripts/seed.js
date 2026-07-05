@@ -27,6 +27,7 @@ const {
   DeliveryVerification,
   GoodsReceiptNote,
   IdempotencyRecord,
+  StockInventoryRecord,
 } = require('../models');
 
 const DEMO_PASSWORD = 'Bekem@Demo2026!';
@@ -59,6 +60,7 @@ const MATERIALS = [
     category: 'Cement',
     hsnCode: '25232930',
     description: 'Ordinary Portland Cement 53 grade — IS 12269',
+    referenceUnitPrice: 400,
   },
   {
     code: 'MAT-STEEL-12MM',
@@ -86,6 +88,7 @@ const MATERIALS = [
     category: 'Aggregates',
     hsnCode: '25059000',
     description: 'Fine aggregate for concrete and plaster',
+    referenceUnitPrice: 600,
   },
   {
     code: 'MAT-DIESEL',
@@ -95,6 +98,15 @@ const MATERIALS = [
     category: 'Fuel',
     hsnCode: '27101920',
     description: 'High speed diesel for plant and equipment',
+  },
+  {
+    code: 'MAT-LUGS-10SQ',
+    name: '10 Sqmm Cu P/T Lugs',
+    unit: 'Pkts',
+    category: 'Consumables',
+    hsnCode: '85369090',
+    description: 'Copper palm-type lugs 10 sq.mm',
+    referenceUnitPrice: 250,
   },
   {
     code: 'MAT-GEOTEXTILE',
@@ -158,9 +170,12 @@ async function seedDatabase() {
     DeliveryVerification.deleteMany({}),
     GoodsReceiptNote.deleteMany({}),
     IdempotencyRecord.deleteMany({}),
+    StockInventoryRecord.deleteMany({}),
   ]);
 
   await ensureDefaultAddresses();
+  const { ensureMaterialCategories } = require('../services/materialCategoryService');
+  await ensureMaterialCategories();
 
   const projectBillingAddr = await Address.create({
     type: 'project_billing',
@@ -173,7 +188,7 @@ GST No.: 29AADCB5671Q1ZY`,
 
   const project = await Project.create({
     code: 'PRJ-001',
-    name: 'Elevated Corridor - HMDA - SH01',
+    name: 'AMR POWER',
     location: 'Hyderabad — Bangalore Corridor',
     status: 'ACTIVE',
     startDate: new Date('2025-04-01'),
@@ -185,8 +200,8 @@ GST No.: 29AADCB5671Q1ZY`,
 
   const project2 = await Project.create({
     code: 'PRJ-002',
-    name: 'Metro Line Extension',
-    location: 'Chennai Phase II',
+    name: 'CHITRAVATHI',
+    location: 'Chitravathi basin — irrigation corridor',
     status: 'ACTIVE',
     startDate: new Date('2025-01-15'),
     targetEndDate: new Date('2028-06-30'),
@@ -194,6 +209,18 @@ GST No.: 29AADCB5671Q1ZY`,
     budgetSpent: 210000000,
     healthScore: 76,
     billingAddressId: projectBillingAddr._id,
+  });
+
+  const project3 = await Project.create({
+    code: 'PRJ-003',
+    name: 'KAIGA PROJECT',
+    location: 'Kaiga — coastal infrastructure',
+    status: 'ACTIVE',
+    startDate: new Date('2025-06-01'),
+    targetEndDate: new Date('2027-12-31'),
+    budgetTotal: 320000000,
+    budgetSpent: 45000000,
+    healthScore: 88,
   });
 
   const site = await Site.create({
@@ -210,8 +237,14 @@ GST No.: 29AADCB5671Q1ZY`,
 
   const siteMetro = await Site.create({
     projectId: project2._id,
-    name: 'Station Block C',
-    chainageLabel: 'Stn C — Elevated Section',
+    name: 'Chitravathi Main Store',
+    chainageLabel: 'Basin Section A',
+  });
+
+  const siteKaiga = await Site.create({
+    projectId: project3._id,
+    name: 'Kaiga Main Store',
+    chainageLabel: 'Coastal Block 1',
   });
 
   const passwordHash = await bcrypt.hash(DEMO_PASSWORD, 10);
@@ -227,13 +260,13 @@ GST No.: 29AADCB5671Q1ZY`,
       data.assignedSiteId = site._id;
       data.assignedProjectIds = [project._id];
     }
-    if (u.role === 'PROJECT_MANAGER') data.assignedProjectIds = [project._id, project2._id];
-    if (u.role === 'EXECUTIVE') data.assignedProjectIds = [project._id, project2._id];
+    if (u.role === 'PROJECT_MANAGER') data.assignedProjectIds = [project._id, project2._id, project3._id];
+    if (u.role === 'EXECUTIVE') data.assignedProjectIds = [project._id, project2._id, project3._id];
     if (u.role === 'COORDINATOR') {
-      data.assignedProjectIds = [project._id, project2._id];
+      data.assignedProjectIds = [project._id, project2._id, project3._id];
       data.isSystemAdmin = true;
     }
-    if (u.role === 'CHAIRMAN') data.assignedProjectIds = [project._id, project2._id];
+    if (u.role === 'CHAIRMAN') data.assignedProjectIds = [project._id, project2._id, project3._id];
     const created = await User.create(data);
     userMap[u.role] = created;
   }
@@ -244,6 +277,17 @@ GST No.: 29AADCB5671Q1ZY`,
     materialDocs.push(mat);
   }
 
+  const panelBoard = await Material.create({
+    code: 'PANEL-BOARD',
+    name: 'Panel Board',
+    unit: 'Nos',
+    category: 'Consumables',
+    hsnCode: '85371000',
+    description: 'Electrical distribution panel board',
+    referenceUnitPrice: 8500,
+  });
+  materialDocs.push(panelBoard);
+
   const stockConfig = [
     { siteId: site._id, qty: [120, 500, 85, 200, 150, 25, 40, 8, 600, 1200] },
     { siteId: site2._id, qty: [60, 200, 40, 100, 80, 12, 20, 4, 300, 600] },
@@ -251,7 +295,7 @@ GST No.: 29AADCB5671Q1ZY`,
   ];
 
   for (const cfg of stockConfig) {
-    for (let i = 0; i < materialDocs.length; i++) {
+    for (let i = 0; i < materialDocs.length - 1; i++) {
       const mat = materialDocs[i];
       const qty = cfg.qty[i] ?? 50;
       await StockLedger.create({
@@ -262,6 +306,25 @@ GST No.: 29AADCB5671Q1ZY`,
       });
     }
   }
+
+  await StockLedger.create({
+    siteId: site._id,
+    materialId: panelBoard._id,
+    quantityOnHand: 0,
+    lowStockThreshold: 5,
+  });
+  await StockLedger.create({
+    siteId: siteMetro._id,
+    materialId: panelBoard._id,
+    quantityOnHand: 50,
+    lowStockThreshold: 5,
+  });
+  await StockLedger.create({
+    siteId: siteKaiga._id,
+    materialId: panelBoard._id,
+    quantityOnHand: 120,
+    lowStockThreshold: 5,
+  });
 
   const vendors = [];
   const matByCode = Object.fromEntries(materialDocs.map((m) => [m.code, m._id]));
@@ -353,6 +416,8 @@ Store Manager: ${storeUser.name}`;
   const steel = materialDocs.find((m) => m.code === 'MAT-STEEL-12MM');
   const bitumen = materialDocs.find((m) => m.code === 'MAT-BITUMEN-VG30');
   const diesel = materialDocs.find((m) => m.code === 'MAT-DIESEL');
+  const sand = materialDocs.find((m) => m.code === 'MAT-SAND-RIVER');
+  const lugs = materialDocs.find((m) => m.code === 'MAT-LUGS-10SQ');
 
   const mrPending = await MaterialRequest.create({
     indentNumber: 'IND/FY25-26/PRJ-001/000001',
@@ -372,18 +437,35 @@ Store Manager: ${storeUser.name}`;
     indentNumber: 'IND/FY25-26/PRJ-001/000002',
     projectId: project._id,
     siteId: site._id,
-    items: [
-      { materialId: steel._id, quantityRequested: 12, quantityAllocated: 12 },
-      { materialId: bitumen._id, quantityRequested: 25, quantityAllocated: 25 },
-    ],
-    materialId: steel._id,
-    quantityRequested: 12,
-    quantityAllocated: 12,
-    purpose: 'DBM layer — Chainage 48-52',
+    items: [{ materialId: panelBoard._id, quantityRequested: 10, quantityAllocated: 0 }],
+    materialId: panelBoard._id,
+    quantityRequested: 10,
+    quantityAllocated: 0,
+    purpose: 'Construction',
     requiredByDate: new Date(Date.now() + 10 * 86400000),
     requestedByUserId: siteUser._id,
     status: 'FORWARDED_TO_PM',
     pendingWithRole: 'PROJECT_MANAGER',
+    estimatedValue: 85000,
+  });
+
+  const mrPmCostDemo = await MaterialRequest.create({
+    indentNumber: 'IND/FY25-26/PRJ-001/000004',
+    projectId: project._id,
+    siteId: site._id,
+    items: [
+      { materialId: lugs._id, quantityRequested: 10, quantityAllocated: 0, unit: 'Pkts' },
+      { materialId: cement._id, quantityRequested: 50, quantityAllocated: 0, unit: 'Mts' },
+      { materialId: sand._id, quantityRequested: 50, quantityAllocated: 0, unit: 'Mts' },
+    ],
+    purpose: 'Construction',
+    requiredByDate: new Date(Date.now() + 14 * 86400000),
+    requestedByUserId: siteUser._id,
+    status: 'PENDING_EXECUTIVE_DECISION',
+    pendingWithRole: 'EXECUTIVE',
+    pmForwardRemark: 'Insufficient stock — forwarded to Head Office for procurement',
+    escalatedToHo: true,
+    estimatedValue: 52500,
   });
 
   const mrApproved = await MaterialRequest.create({
@@ -432,6 +514,38 @@ Store Manager: ${storeUser.name}`;
     status: 'DRAFT',
     createdByUserId: pmUser._id,
     amountEstimate: 1850000,
+  });
+
+  const mrPoQueueDemo = await MaterialRequest.create({
+    indentNumber: 'IND/FY25-26/PRJ-001/000005',
+    projectId: project._id,
+    siteId: site._id,
+    items: [{ materialId: panelBoard._id, quantityRequested: 5, quantityAllocated: 0 }],
+    purpose: 'Panel boards for substation — executive PO queue demo',
+    requiredByDate: new Date(Date.now() + 7 * 86400000),
+    requestedByUserId: siteUser._id,
+    status: 'PURCHASE_REQUESTED',
+    pendingWithRole: 'EXECUTIVE',
+    pmForwardRemark: 'Forwarded to HO — proceed with PO',
+    escalatedToHo: true,
+    executiveProcurementMethod: 'PURCHASE_ORDER',
+    executiveDecisionRemark: 'Demo: queued for Create PO',
+    executiveDecidedByUserId: execUser._id,
+    executiveDecidedAt: new Date(),
+    estimatedValue: 42500,
+  });
+
+  await PurchaseRequest.create({
+    prNumber: 'PR/PRJ-001/FY25-26/0099',
+    materialRequestId: mrPoQueueDemo._id,
+    projectId: project._id,
+    status: 'OPEN',
+    createdByUserId: execUser._id,
+    amountEstimate: 42500,
+    executiveRecommendation: 'PURCHASE_ORDER',
+    executiveRecommendationRemark: 'Demo: ready in Create PO queue',
+    executiveRecommendedByUserId: execUser._id,
+    executiveRecommendedAt: new Date(),
   });
 
   const poDraft = await PurchaseOrder.create({
@@ -658,25 +772,65 @@ Store Manager: ${storeUser.name}`;
     fromSiteId: siteMetro._id,
     toProjectId: project._id,
     toSiteId: site._id,
-    items: [{ materialId: steel._id, quantity: 50 }],
+    materialRequestId: mrWithPm._id,
+    items: [{ materialId: panelBoard._id, quantity: 10 }],
     status: 'REQUESTED',
-    note: 'Demo: transfer steel from Metro to Highway section — awaiting destination PM',
-    requestedByUserId: storeUser._id,
+    note: 'Demo: Panel Board surplus at CHITRAVATHI — PM requested transfer to AMR POWER',
+    requestedByUserId: pmUser._id,
   });
 
   await BranchTransfer.create({
     transferNumber: 'BT/2026/0002',
-    fromProjectId: project._id,
-    fromSiteId: site2._id,
-    toProjectId: project2._id,
-    toSiteId: siteMetro._id,
-    items: [{ materialId: cement._id, quantity: 120 }],
-    status: 'PM_APPROVED',
-    note: 'Demo: cement transfer approved by PM — awaiting coordinator decision',
-    requestedByUserId: storeUser._id,
-    pmApprovedByUserId: pmUser._id,
+    fromProjectId: project3._id,
+    fromSiteId: siteKaiga._id,
+    toProjectId: project._id,
+    toSiteId: site._id,
+    items: [{ materialId: panelBoard._id, quantity: 20 }],
+    status: 'COORDINATOR_DECIDED',
+    coordinatorDecision: 'transfer',
+    note: 'Demo: Executive approved transfer from KAIGA — awaiting Coordinator execution',
+    requestedByUserId: pmUser._id,
+    pmApprovedByUserId: execUser._id,
     pmApprovedAt: new Date(Date.now() - 1 * 86400000),
+    coordinatorDecidedByUserId: execUser._id,
+    coordinatorDecidedAt: new Date(Date.now() - 12 * 3600000),
   });
+
+  await StockInventoryRecord.insertMany([
+    {
+      financialYear: '25-26',
+      sourceSheet: 'Stock Inventory',
+      poSlNo: 5727,
+      project: 'AMR POWER',
+      itemCode: 'PANEL-BOARD',
+      itemDescription: 'Panel Board',
+      qty: 0,
+      units: 'Nos',
+      poQty: '0 Nos',
+    },
+    {
+      financialYear: '25-26',
+      sourceSheet: 'Stock Inventory',
+      poSlNo: 5728,
+      project: 'CHITRAVATHI',
+      itemCode: 'PANEL-BOARD',
+      itemDescription: 'Panel Board',
+      qty: 50,
+      units: 'Nos',
+      poQty: '50 Nos',
+    },
+    {
+      financialYear: '25-26',
+      sourceSheet: 'Stock Inventory',
+      poSlNo: 5729,
+      project: 'KAIGA PROJECT',
+      itemCode: 'PANEL-BOARD',
+      itemDescription: 'Panel Board',
+      qty: 120,
+      units: 'Nos',
+      poQty: '120 Nos',
+    },
+  ]);
 
   await Incident.create({
     incidentNumber: 'INC/PRJ-001/0001',
@@ -743,6 +897,8 @@ Store Manager: ${storeUser.name}`;
   const notifications = [
     { userId: storeUser._id, title: 'New indent pending', body: `${mrPending.indentNumber} awaits store allocation.`, relatedEntityType: 'MaterialRequest', relatedEntityId: mrPending._id, isRead: false },
     { userId: pmUser._id, title: 'Indent forwarded', body: `${mrWithPm.indentNumber} needs your approval.`, relatedEntityType: 'MaterialRequest', relatedEntityId: mrWithPm._id, isRead: false },
+    { userId: pmUser._id, title: 'Indent forwarded', body: `${mrPmCostDemo.indentNumber} — multi-item cost breakdown demo.`, relatedEntityType: 'MaterialRequest', relatedEntityId: mrPmCostDemo._id, isRead: false },
+    { userId: execUser._id, title: 'Procurement review pending', body: `${mrPmCostDemo.indentNumber} — review and mark proceed with purchase order.`, relatedEntityType: 'ProcurementDecision', relatedEntityId: mrPmCostDemo._id, isRead: false },
     { userId: execUser._id, title: 'Ready for PO', body: `${mrApproved.indentNumber} approved — create purchase order.`, relatedEntityType: 'MaterialRequest', relatedEntityId: mrApproved._id, isRead: false },
     { userId: coordUser._id, title: 'PO verification', body: `${poPendingCoord.poNumber} requires coordinator review.`, relatedEntityType: 'PurchaseOrder', relatedEntityId: poPendingCoord._id, isRead: false },
     { userId: chairmanUser._id, title: 'WO awaiting approval', body: `${'WO-PRJ-002-2025-002'} needs Chairman sign-off.`, relatedEntityType: 'WorkOrder', relatedEntityId: poWoChairman._id, isRead: false },

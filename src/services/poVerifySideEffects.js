@@ -163,13 +163,19 @@ async function coordinatorVerifyPurchaseOrder(po, actorUserId, note) {
 
 async function coordinatorOverrideApprove(po, actorUserId, remark) {
   const text = String(remark || '').trim();
-  if (text.length < 1 || text.length > 300) {
-    const err = new Error('Override remark must be between 1 and 300 characters');
+  if (text.length < 30 || text.length > 300) {
+    const err = new Error('Override remark must be at least 30 characters (max 300)');
     err.statusCode = 400;
     throw err;
   }
-  if (po.status !== 'CHAIRMAN_PENDING') {
-    const err = new Error('PO is not awaiting Chairman approval');
+  if (!requiresChairmanApproval(po.amount)) {
+    const err = new Error('Emergency override applies only to POs above ₹10,000');
+    err.statusCode = 400;
+    throw err;
+  }
+  const allowedStatuses = ['CHAIRMAN_PENDING', 'COORDINATOR_PENDING', 'PENDING_REVIEW'];
+  if (!allowedStatuses.includes(po.status)) {
+    const err = new Error('PO is not awaiting Coordinator or Chairman approval');
     err.statusCode = 400;
     throw err;
   }

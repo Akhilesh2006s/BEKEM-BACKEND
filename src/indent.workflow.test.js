@@ -8,7 +8,7 @@ const {
   getSeedContext,
   getApp,
 } = require('./test/helpers');
-const { MaterialRequest } = require('./models');
+const { MaterialRequest, Material } = require('./models');
 
 describe('Indent workflow v2', () => {
   let app;
@@ -108,6 +108,8 @@ describe('Indent workflow v2', () => {
     const { User } = require('./models');
     const { getDayBounds } = require('./services/pmApprovalCapService');
     const pmUser = await User.findOne({ email: 'pm@bekem.com' });
+    const cement = await Material.findOne({ code: 'MAT-CEMENT-OPC53' });
+    assert.ok(cement, 'seed cement required for cap test');
     const { start, end } = getDayBounds();
     const { StatusHistory } = require('./models');
     await StatusHistory.deleteMany({
@@ -117,16 +119,15 @@ describe('Indent workflow v2', () => {
       timestamp: { $gte: start, $lte: end },
     });
 
-    const createAndForward = async (estimatedValue) => {
+    const createAndForward = async (quantityRequested) => {
       const createRes = await request(app)
         .post('/api/material-requests')
         .set('Authorization', `Bearer ${siteToken}`)
         .send({
           purpose: 'PM daily cap test',
-          items: [{ materialId: material._id.toString(), quantityRequested: 1 }],
+          items: [{ materialId: cement._id.toString(), quantityRequested }],
         });
       const mrId = createRes.body.data.id;
-      await MaterialRequest.findByIdAndUpdate(mrId, { estimatedValue });
       const fwd = await request(app)
         .post(`/api/material-requests/${mrId}/allocate`)
         .set('Authorization', `Bearer ${storeToken}`)
@@ -135,14 +136,14 @@ describe('Indent workflow v2', () => {
       return mrId;
     };
 
-    const mr1 = await createAndForward(4800);
+    const mr1 = await createAndForward(12);
     const approve1 = await request(app)
       .post(`/api/material-requests/${mr1}/approve`)
       .set('Authorization', `Bearer ${pmToken}`);
     assert.strictEqual(approve1.status, 200, JSON.stringify(approve1.body));
     assert.strictEqual(approve1.body.escalated, false);
 
-    const mr2 = await createAndForward(800);
+    const mr2 = await createAndForward(2);
     const approve2 = await request(app)
       .post(`/api/material-requests/${mr2}/approve`)
       .set('Authorization', `Bearer ${pmToken}`);

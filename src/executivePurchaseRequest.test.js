@@ -61,7 +61,10 @@ describe('Executive purchase request queue', () => {
   });
 
   it('executive can record purchase order recommendation on open PR', async () => {
-    const pr = await PurchaseRequest.findOne({ status: 'OPEN' });
+    const pr = await PurchaseRequest.findOne({
+      status: 'OPEN',
+      executiveRecommendation: null,
+    });
     if (!pr) return;
 
     const existingPo = await PurchaseOrder.findOne({

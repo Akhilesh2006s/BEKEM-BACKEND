@@ -28,7 +28,7 @@ describe('Final PO permission matrix (spec 41–42)', () => {
     executiveToken = await loginAs('executive@bekem.com');
     coordinatorToken = await loginAs('coordinator@bekem.com');
     chairmanToken = await loginAs('chairman@bekem.com');
-    const po = await PurchaseOrder.findOne();
+    const po = await PurchaseOrder.findOne({ status: 'APPROVED' });
     samplePoId = po?._id?.toString();
   });
 

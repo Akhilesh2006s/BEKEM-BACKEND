@@ -33,6 +33,7 @@ describe('Branch transfer workflow', () => {
   let siteToken;
   let storeToken;
   let pmToken;
+  let execToken;
   let coordinatorToken;
   let material;
   let sourceProject;
@@ -45,6 +46,7 @@ describe('Branch transfer workflow', () => {
     siteToken = await loginAs('request@bekem.com');
     storeToken = await loginAs('storeincharge@bekem.com');
     pmToken = await loginAs('pm@bekem.com');
+    execToken = await loginAs('executive@bekem.com');
     coordinatorToken = await loginAs('coordinator@bekem.com');
     const ctx = await getSeedContext();
     material = ctx.material;
@@ -84,9 +86,9 @@ describe('Branch transfer workflow', () => {
     const transferId = createRes.body.data.id;
 
     const decideRes = await request(app)
-      .post(`/api/branch-transfers/${transferId}/coordinator-decide`)
-      .set('Authorization', `Bearer ${coordinatorToken}`)
-      .send({ decision: 'transfer', note: 'Confirm transfer' });
+      .post(`/api/branch-transfers/${transferId}/executive-approve`)
+      .set('Authorization', `Bearer ${execToken}`)
+      .send({ note: 'Approve branch transfer' });
     assert.strictEqual(decideRes.status, 200);
     assert.strictEqual(decideRes.body.data.status, 'COORDINATOR_DECIDED');
 
@@ -143,7 +145,7 @@ describe('Branch transfer workflow', () => {
     assert.strictEqual(pmRes.status, 403);
   });
 
-  it('coordinator can choose raise_po_instead', async () => {
+  it('executive can reject branch transfer with mandatory note', async () => {
     const mr = await createForwardedIndent(app, siteToken, storeToken, material._id);
     const createRes = await request(app)
       .post('/api/branch-transfers')
@@ -155,13 +157,42 @@ describe('Branch transfer workflow', () => {
       });
     const transferId = createRes.body.data.id;
 
-    const decideRes = await request(app)
-      .post(`/api/branch-transfers/${transferId}/coordinator-decide`)
-      .set('Authorization', `Bearer ${coordinatorToken}`)
-      .send({ decision: 'raise_po_instead' });
+    const rejectRes = await request(app)
+      .post(`/api/branch-transfers/${transferId}/executive-reject`)
+      .set('Authorization', `Bearer ${execToken}`)
+      .send({ note: 'Procure fresh stock instead' });
 
-    assert.strictEqual(decideRes.status, 200);
-    assert.strictEqual(decideRes.body.data.status, 'RAISE_PO_INSTEAD');
-    assert.ok(decideRes.body.data.redirect);
+    assert.strictEqual(rejectRes.status, 200);
+    assert.strictEqual(rejectRes.body.data.status, 'REJECTED');
+  });
+
+  it('PM branch-transfer target search lists only supervised projects', async () => {
+    const extra = await Project.create({
+      code: 'PRJ-099',
+      name: 'UNSUPPORTED DEMO PROJECT',
+      location: 'Nowhere',
+      status: 'ACTIVE',
+      startDate: new Date(),
+      targetEndDate: new Date(Date.now() + 86400000 * 365),
+    });
+
+    const [pmRes, execRes] = await Promise.all([
+      request(app)
+        .get('/api/branch-transfers/targets/search')
+        .set('Authorization', `Bearer ${pmToken}`)
+        .query({ q: 'PRJ' }),
+      request(app)
+        .get('/api/branch-transfers/targets/search')
+        .set('Authorization', `Bearer ${execToken}`)
+        .query({ q: 'PRJ' }),
+    ]);
+
+    assert.strictEqual(pmRes.status, 200);
+    assert.strictEqual(execRes.status, 200);
+    assert.ok(!pmRes.body.data.some((p) => p.id === extra._id.toString()));
+    assert.ok(execRes.body.data.some((p) => p.id === extra._id.toString()));
+    for (const row of pmRes.body.data) {
+      assert.ok(['PRJ-001', 'PRJ-002', 'PRJ-003'].includes(row.code));
+    }
   });
 });

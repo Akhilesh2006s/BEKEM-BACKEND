@@ -2,7 +2,7 @@ const express = require('express');
 const { query } = require('express-validator');
 const { UserRole } = require('@afios/shared');
 const { authenticate } = require('../middleware/auth');
-const { requireCapability } = require('../middleware/rbac');
+const { requireCapability, hasCapability } = require('../middleware/rbac');
 const { validate } = require('../middleware/validate');
 const dashboardService = require('../services/dashboardService');
 
@@ -107,18 +107,20 @@ router.get(
   }
 );
 
-router.get(
-  '/explorer',
-  requireCapability('VIEW_ALL_PROJECTS'),
-  async (req, res, next) => {
-    try {
-      const data = await dashboardService.getExplorerProjects();
-      res.json({ data });
-    } catch (err) {
-      next(err);
+router.get('/explorer', async (req, res, next) => {
+  try {
+    const canView =
+      hasCapability(req.user.role, 'VIEW_ALL_PROJECTS') ||
+      hasCapability(req.user.role, 'VIEW_OWN_SCOPE');
+    if (!canView) {
+      return res.status(403).json({ statusCode: 403, message: 'Forbidden' });
     }
+    const data = await dashboardService.getExplorerProjects(req.user);
+    res.json({ data });
+  } catch (err) {
+    next(err);
   }
-);
+});
 
 router.get('/widgets', async (req, res, next) => {
   try {

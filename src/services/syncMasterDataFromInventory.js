@@ -114,13 +114,15 @@ async function syncMasterDataFromInventory({ financialYear = '25-26', clearProcu
   const materialKeys = [];
   const seenMaterialKeys = new Set();
   for (const r of records) {
-    const key = normalizeName(r.itemDescription || r.itemCode);
+    const description = String(r.itemDescription || '').trim();
+    const itemCode = String(r.itemCode || '').trim();
+    const key = normalizeName(description || itemCode);
     if (!key || seenMaterialKeys.has(key)) continue;
     seenMaterialKeys.add(key);
     materialKeys.push(key);
-    const base = materialCodeFromItem(r.itemCode, r.itemDescription);
+    const base = materialCodeFromItem(itemCode, description);
     const code = ensureUniqueCode(base, usedMaterialCodes);
-    const name = (r.itemCode || r.itemDescription || code).slice(0, 120);
+    const name = (description || itemCode || code).slice(0, 120);
     materialPayloads.push({
       code,
       name,
@@ -146,7 +148,7 @@ async function syncMasterDataFromInventory({ financialYear = '25-26', clearProcu
     if (!r.supplier) continue;
     const vendor = vendorByName.get(r.supplier);
     if (!vendor) continue;
-    const key = `${(r.itemCode || '').toUpperCase()}||${(r.itemDescription || '').toUpperCase()}`;
+    const key = normalizeName(r.itemDescription || r.itemCode);
     const mat = materialKeyToDoc.get(key);
     if (!mat) continue;
     if (!vendorMaterials.has(vendor._id.toString())) {
@@ -229,7 +231,7 @@ async function buildStockLedgersFromRecords(records, { materialKeyToDoc, project
 
   const stockMap = new Map();
   for (const r of records) {
-    const key = `${(r.itemCode || '').toUpperCase()}||${(r.itemDescription || '').toUpperCase()}`;
+    const key = normalizeName(r.itemDescription || r.itemCode);
     const mat = materialKeyToDoc.get(key);
     const project = projectByName.get(r.project);
     if (!mat || !project) continue;

@@ -61,6 +61,17 @@ describe('PO approval & vendor MSME', () => {
     assert.ok(!res.body.data.msmeNumber);
   });
 
+  it('rejects override remark under 30 characters', async () => {
+    const po = await PurchaseOrder.findOne({ status: 'COORDINATOR_PENDING', amount: { $gt: 10000 } });
+    assert.ok(po);
+
+    const res = await request(app)
+      .post(`/api/purchase-orders/${po._id}/approve-override`)
+      .set('Authorization', `Bearer ${coordToken}`)
+      .send({ remark: 'Too short remark' });
+    assert.strictEqual(res.status, 400);
+  });
+
   it('rejects override remark over 300 characters', async () => {
     const po = await PurchaseOrder.findOne({ status: 'COORDINATOR_PENDING' });
     assert.ok(po);
@@ -78,9 +89,31 @@ describe('PO approval & vendor MSME', () => {
     assert.strictEqual(res.status, 400);
   });
 
-  it('coordinator override approval records remark and dispatches once', async () => {
-    const po = await PurchaseOrder.findOne({ status: 'CHAIRMAN_PENDING' });
+  it('coordinator can emergency-approve >₹10k PO directly from verify queue', async () => {
+    const po = await PurchaseOrder.findOne({ poNumber: 'PO-PRJ-001-2025-008' });
     assert.ok(po);
+    po.status = 'COORDINATOR_PENDING';
+    po.amount = 216329.4;
+    await po.save();
+    const remark =
+      'Chairman is not on premises today — site pour cannot wait for final sign-off.';
+
+    const res = await request(app)
+      .post(`/api/purchase-orders/${po._id}/approve-override`)
+      .set('Authorization', `Bearer ${coordToken}`)
+      .send({ remark });
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.data.status, 'APPROVED');
+    assert.strictEqual(res.body.data.approvedAsChairmanOverride, true);
+    assert.strictEqual(res.body.data.overrideRemark, remark);
+  });
+
+  it('coordinator override approval records remark and dispatches once', async () => {
+    const po = await PurchaseOrder.findOne({ draftRef: 'DRAFT-PO-2025-014' });
+    assert.ok(po);
+    po.status = 'CHAIRMAN_PENDING';
+    po.amount = 1850000;
+    await po.save();
     const remark = 'Chairman travelling — emergency procurement required for site pour.';
 
     const first = await request(app)
@@ -105,9 +138,10 @@ describe('PO approval & vendor MSME', () => {
   });
 
   it('chairman approval is idempotent on double-click', async () => {
-    const draftPo = await PurchaseOrder.findOne({ status: 'DRAFT' });
+    const draftPo = await PurchaseOrder.findOne({ poNumber: 'PO-PRJ-002-2025-003' });
     assert.ok(draftPo);
     draftPo.status = 'CHAIRMAN_PENDING';
+    draftPo.approvalDispatchedAt = null;
     await draftPo.save();
 
     const first = await request(app)

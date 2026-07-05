@@ -274,6 +274,55 @@ function serializeInventoryRecord(r, role) {
   return limited;
 }
 
+router.get('/cross-project', async (req, res, next) => {
+  try {
+    if (req.user.role !== UserRole.PROJECT_MANAGER) {
+      return res.status(403).json({ statusCode: 403, message: 'Forbidden' });
+    }
+    const { materialId, search } = req.query;
+    const { Material } = require('../models');
+    const { getCrossProjectStockForMaterials } = require('../services/pmCrossProjectStockService');
+
+    let materialIds = [];
+    if (materialId) {
+      materialIds = [String(materialId)];
+    } else if (search && String(search).trim().length >= 2) {
+      const term = String(search).trim();
+      const mats = await Material.find({
+        isActive: { $ne: false },
+        $or: [
+          { name: { $regex: term, $options: 'i' } },
+          { code: { $regex: term, $options: 'i' } },
+        ],
+      })
+        .select('_id name code unit')
+        .limit(10)
+        .lean();
+      materialIds = mats.map((m) => m._id.toString());
+    } else {
+      return res.json({ data: [] });
+    }
+
+    const stock = await getCrossProjectStockForMaterials(req.user, materialIds);
+    const matDocs = await Material.find({ _id: { $in: materialIds } }).select('name code unit').lean();
+    const matById = new Map(matDocs.map((m) => [m._id.toString(), m]));
+
+    res.json({
+      data: stock.map((row) => {
+        const mat = matById.get(row.materialId);
+        return {
+          ...row,
+          materialName: mat?.name,
+          materialCode: mat?.code,
+          unit: mat?.unit,
+        };
+      }),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get('/inventory', async (req, res, next) => {
   try {
     const { StockInventoryRecord } = require('../models');

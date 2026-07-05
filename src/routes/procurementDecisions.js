@@ -58,7 +58,7 @@ router.post(
   requireRoles(UserRole.EXECUTIVE),
   [
     param('id').isMongoId(),
-    body('method').isIn(['PURCHASE_ORDER', 'BRANCH_TRANSFER']),
+    body('method').optional().isIn(['PURCHASE_ORDER', 'BRANCH_TRANSFER']),
     body('remark').trim().notEmpty().withMessage('Remark is required'),
   ],
   validate,
@@ -67,7 +67,7 @@ router.post(
       const mr = await loadDecisionIndent(req.params.id);
       if (!mr) return { statusCode: 404, body: { statusCode: 404, message: 'Not found' } };
       const data = await executiveDecide(mr, req.user, {
-        method: req.body.method,
+        method: req.body.method || 'PURCHASE_ORDER',
         remark: req.body.remark.trim(),
       });
       return { statusCode: 200, body: { data } };

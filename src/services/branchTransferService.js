@@ -56,17 +56,22 @@ function transferActionFlags(t, user) {
   const flags = {
     canPmApprove: false,
     canPmReject: false,
+    canExecutiveApprove: false,
+    canExecutiveReject: false,
     canCoordinatorDecide: false,
     canCoordinatorReject: false,
     canExecute: false,
   };
 
-  const awaitingHoReview = ['REQUESTED', 'PM_APPROVED'].includes(t.status);
+  if (user.role === UserRole.EXECUTIVE && t.status === 'REQUESTED') {
+    flags.canExecutiveApprove = true;
+    flags.canExecutiveReject = true;
+  }
 
-  if (user.role === UserRole.COORDINATOR && awaitingHoReview) {
-    flags.canCoordinatorDecide = true;
+  if (user.role === UserRole.COORDINATOR && t.status === 'REQUESTED') {
     flags.canCoordinatorReject = true;
   }
+
   if (
     user.role === UserRole.COORDINATOR &&
     t.status === 'COORDINATOR_DECIDED' &&

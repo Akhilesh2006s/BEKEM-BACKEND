@@ -73,41 +73,45 @@ describe('Executive procurement decision workflow', () => {
     assert.ok(listRes.body.data.some((row) => row.id === mrId));
   });
 
-  it('executive PO decision → coordinator approve creates purchase request', async () => {
+  it('executive proceed with PO queues Create PO without coordinator step', async () => {
     const mrId = await createForwardedIndent(app, siteToken, storeToken, material._id);
 
     await request(app)
       .post(`/api/material-requests/${mrId}/forward-to-ho`)
       .set('Authorization', `Bearer ${pmToken}`)
-      .send({ remark: 'No surplus anywhere — recommend PO' });
+      .send({ remark: 'No surplus anywhere — need procurement' });
 
     const execDecide = await request(app)
       .post(`/api/procurement-decisions/${mrId}/executive-decide`)
       .set('Authorization', `Bearer ${executiveToken}`)
-      .send({ method: 'PURCHASE_ORDER', remark: 'No surplus stock in other projects' });
+      .send({ method: 'PURCHASE_ORDER', remark: 'Proceed with purchase order' });
     assert.strictEqual(execDecide.status, 200);
-    assert.strictEqual(execDecide.body.data.status, 'EXECUTIVE_DECISION_PO');
+    assert.strictEqual(execDecide.body.data.status, 'PURCHASE_REQUESTED');
+    assert.ok(execDecide.body.data.purchaseRequestId);
+    assert.ok(execDecide.body.data.prNumber);
 
     const coordList = await request(app)
       .get('/api/procurement-decisions')
       .set('Authorization', `Bearer ${coordinatorToken}`);
-    assert.ok(coordList.body.data.some((row) => row.id === mrId));
+    assert.ok(!coordList.body.data.some((row) => row.id === mrId));
 
-    const coordApprove = await request(app)
-      .post(`/api/procurement-decisions/${mrId}/coordinator-review`)
-      .set('Authorization', `Bearer ${coordinatorToken}`)
-      .send({
-        action: 'approve',
-        method: 'PURCHASE_ORDER',
-        remark: 'Approved — proceed with purchase order',
-      });
-    assert.strictEqual(coordApprove.status, 200);
+    const poQueue = await request(app)
+      .get('/api/purchase-requests')
+      .set('Authorization', `Bearer ${executiveToken}`)
+      .query({ readyForPo: 'true' });
+    assert.strictEqual(poQueue.status, 200);
+    assert.ok(
+      poQueue.body.data.some((row) => row.materialRequestId === mrId),
+      'Create PO queue should include the purchase request'
+    );
 
     const mr = await MaterialRequest.findById(mrId);
     assert.strictEqual(mr.status, 'PURCHASE_REQUESTED');
 
     const pr = await PurchaseRequest.findOne({ materialRequestId: mrId });
     assert.ok(pr);
+    assert.strictEqual(pr.status, 'OPEN');
+    assert.strictEqual(pr.executiveRecommendation, 'PURCHASE_ORDER');
   });
 
   it('executive cannot approve via legacy material-request approve endpoint', async () => {

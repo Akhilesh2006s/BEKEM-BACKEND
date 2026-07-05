@@ -9,7 +9,7 @@ const {
 } = require('./test/helpers');
 const { Project, StockInventoryRecord } = require('./models');
 
-async function seedInventoryRows(projectA, projectB) {
+async function seedInventoryRows(projectA, projectB, projectC) {
   await StockInventoryRecord.deleteMany({ financialYear: '25-26' });
   await StockInventoryRecord.insertMany([
     {
@@ -28,6 +28,14 @@ async function seedInventoryRows(projectA, projectB) {
       itemDescription: 'Item for project B',
       financialYear: '25-26',
     },
+    {
+      poSlNo: 3,
+      project: projectC.name,
+      supplier: 'Vendor C',
+      poNo: 'PO-C-001',
+      itemDescription: 'Item for project C',
+      financialYear: '25-26',
+    },
   ]);
 }
 
@@ -38,6 +46,7 @@ describe('Stock inventory RBAC', () => {
   let coordinatorToken;
   let projectA;
   let projectB;
+  let projectC;
 
   before(async () => {
     await setupTestDb();
@@ -49,8 +58,9 @@ describe('Stock inventory RBAC', () => {
     const projects = await Project.find().sort({ code: 1 });
     projectA = projects[0];
     projectB = projects[1];
-    assert.ok(projectA && projectB, 'seed should include two projects');
-    await seedInventoryRows(projectA, projectB);
+    projectC = projects[2];
+    assert.ok(projectA && projectB && projectC, 'seed should include three projects');
+    await seedInventoryRows(projectA, projectB, projectC);
   });
 
   after(async () => {
@@ -91,8 +101,30 @@ describe('Stock inventory RBAC', () => {
     const projects = [...new Set(res.body.data.map((row) => row.project))];
     assert.ok(projects.includes(projectA.name));
     assert.ok(projects.includes(projectB.name));
+    assert.ok(projects.includes(projectC.name));
     assert.strictEqual(res.body.meta.inventoryScope, 'assigned');
-    assert.strictEqual(res.body.meta.projects.length, 2);
+    assert.ok(res.body.meta.assignedProjects.length >= 3, 'PM should have at least 3 assigned projects');
+  });
+
+  it('PM cross-project stock returns assigned project availability', async () => {
+    const res = await request(app)
+      .get('/api/stock/cross-project')
+      .set('Authorization', `Bearer ${pmToken}`)
+      .query({ search: 'Panel Board' });
+
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.body.data.length >= 1);
+    const row = res.body.data[0];
+    assert.ok(row.projects.length >= 3);
+    const amr = row.projects.find((p) => p.projectName === 'AMR POWER');
+    const chitravathi = row.projects.find((p) => p.projectName === 'CHITRAVATHI');
+    const kaiga = row.projects.find((p) => p.projectName === 'KAIGA PROJECT');
+    assert.ok(amr);
+    assert.strictEqual(amr.availableQty, 0);
+    assert.ok(chitravathi);
+    assert.strictEqual(chitravathi.availableQty, 50);
+    assert.ok(kaiga);
+    assert.strictEqual(kaiga.availableQty, 120);
   });
 
   it('Coordinator sees all project inventories', async () => {

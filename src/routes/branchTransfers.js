@@ -256,8 +256,17 @@ router.post(
       const coordinators = await User.find({ role: UserRole.COORDINATOR });
       for (const c of coordinators) {
         await notificationService.notifyUser(c._id, {
-          title: 'Branch transfer request — Head Office review',
-          body: `${transferNumber}: PM requested stock from another project — approve or reject.`,
+          title: 'Branch transfer request — Executive review',
+          body: `${transferNumber}: PM requested stock from another project — awaiting Executive approval.`,
+          relatedEntityType: 'BranchTransfer',
+          relatedEntityId: transfer._id,
+        });
+      }
+      const executives = await User.find({ role: UserRole.EXECUTIVE });
+      for (const exec of executives) {
+        await notificationService.notifyUser(exec._id, {
+          title: 'Branch transfer awaiting your approval',
+          body: `${transferNumber}: review and approve or reject — no modifications allowed.`,
           relatedEntityType: 'BranchTransfer',
           relatedEntityId: transfer._id,
         });
@@ -306,6 +315,96 @@ router.post(
       statusCode: 403,
       message: 'Branch transfer rejection is a Head Office responsibility — Project Managers cannot reject',
     });
+  }
+);
+
+router.post(
+  '/:id/executive-approve',
+  requireCapability('CREATE_PO'),
+  [param('id').isMongoId(), body('note').optional().trim()],
+  validate,
+  loadTransfer,
+  async (req, res, next) => {
+    try {
+      const transfer = req.branchTransfer;
+      if (transfer.status !== 'REQUESTED') {
+        return res.status(400).json({ statusCode: 400, message: 'Transfer not awaiting Executive review' });
+      }
+
+      const fromStatus = transfer.status;
+      transfer.status = 'COORDINATOR_DECIDED';
+      transfer.coordinatorDecision = 'transfer';
+      transfer.pmApprovedByUserId = req.user._id;
+      transfer.pmApprovedAt = new Date();
+      transfer.coordinatorDecidedByUserId = req.user._id;
+      transfer.coordinatorDecidedAt = new Date();
+      await transfer.save();
+
+      await statusHistoryService.record(
+        'BranchTransfer',
+        transfer._id,
+        fromStatus,
+        transfer.status,
+        req.user._id,
+        req.body.note?.trim() || 'Executive approved branch transfer — pending Coordinator execution'
+      );
+
+      const coordinators = await require('../models').User.find({ role: UserRole.COORDINATOR });
+      for (const c of coordinators) {
+        await notificationService.notifyUser(c._id, {
+          title: 'Execute branch transfer',
+          body: `${transfer.transferNumber} approved by Executive — execute stock movement when ready.`,
+          relatedEntityType: 'BranchTransfer',
+          relatedEntityId: transfer._id,
+        });
+      }
+
+      res.json({ data: { id: transfer._id.toString(), status: transfer.status } });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+router.post(
+  '/:id/executive-reject',
+  requireCapability('CREATE_PO'),
+  [param('id').isMongoId(), body('note').trim().notEmpty()],
+  validate,
+  loadTransfer,
+  async (req, res, next) => {
+    try {
+      const transfer = req.branchTransfer;
+      if (transfer.status !== 'REQUESTED') {
+        return res.status(400).json({ statusCode: 400, message: 'Transfer not awaiting Executive review' });
+      }
+
+      const fromStatus = transfer.status;
+      transfer.status = 'REJECTED';
+      transfer.rejectedByUserId = req.user._id;
+      transfer.rejectionNote = req.body.note.trim();
+      await transfer.save();
+
+      await statusHistoryService.record(
+        'BranchTransfer',
+        transfer._id,
+        fromStatus,
+        transfer.status,
+        req.user._id,
+        transfer.rejectionNote
+      );
+
+      await notificationService.notifyUser(transfer.requestedByUserId, {
+        title: 'Branch transfer rejected',
+        body: `${transfer.transferNumber} was rejected by Executive.`,
+        relatedEntityType: 'BranchTransfer',
+        relatedEntityId: transfer._id,
+      });
+
+      res.json({ data: { id: transfer._id.toString(), status: transfer.status } });
+    } catch (err) {
+      next(err);
+    }
   }
 );
 
@@ -369,7 +468,7 @@ router.post(
   async (req, res, next) => {
     return handleIdempotent(req, res, `bt-coordinator-decide:${req.params.id}:${req.body.decision}`, async () => {
       const transfer = req.branchTransfer;
-      if (!['REQUESTED', 'PM_APPROVED'].includes(transfer.status)) {
+      if (!['PM_APPROVED'].includes(transfer.status)) {
         if (COORDINATOR_DECIDED_BT.includes(transfer.status)) {
           let redirect = null;
           if (transfer.status === 'RAISE_PO_INSTEAD' && transfer.materialRequestId) {

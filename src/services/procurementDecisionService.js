@@ -9,7 +9,8 @@ const {
   BranchTransfer,
 } = require('../models');
 const { getIndentLineItems } = require('./materialRequestHelpers');
-const { createPurchaseRequestForIndent } = require('./purchaseRequestService');
+const { openPurchaseRequestForExecutivePo } = require('./purchaseRequestService');
+const { derivePriority } = require('./purchaseRequestSerializeService');
 const { generateTransferNumber } = require('./documentNumberService');
 const statusHistoryService = require('./statusHistoryService');
 const notificationService = require('./notificationService');
@@ -105,6 +106,11 @@ async function buildProcurementDecisionDto(mr) {
 
   const lastForward = mr.pmForwardRemark || '';
 
+  const { PurchaseRequest } = require('../models');
+  const linkedPr = await PurchaseRequest.findOne({ materialRequestId: mr._id })
+    .select('prNumber status')
+    .lean();
+
   return {
     id: mr._id.toString(),
     indentNumber: mr.indentNumber,
@@ -114,8 +120,12 @@ async function buildProcurementDecisionDto(mr) {
     projectCode: mr.projectId?.code,
     projectName: mr.projectId?.name,
     requestedBy: mr.requestedByUserId?.name,
+    purpose: mr.purpose || '',
+    priority: derivePriority(mr.estimatedValue, mr.escalatedToHo),
     pmRemarks: mr.pmForwardRemark || lastForward || '',
     estimatedValue: mr.estimatedValue || 0,
+    purchaseRequestId: linkedPr?._id?.toString() || null,
+    prNumber: linkedPr?.prNumber || null,
     items,
     executiveProcurementMethod: mr.executiveProcurementMethod || null,
     executiveDecisionRemark: mr.executiveDecisionRemark || '',
@@ -142,18 +152,31 @@ async function listProcurementDecisions(user) {
     return [];
   }
 
+  const { PurchaseRequest } = require('../models');
   const rows = await MaterialRequest.find(filter)
     .sort({ updatedAt: -1 })
     .populate('projectId', 'code name')
     .limit(100);
 
+  const mrIds = rows.map((mr) => mr._id);
+  const prByMr = new Map(
+    (
+      await PurchaseRequest.find({ materialRequestId: { $in: mrIds } })
+        .select('materialRequestId prNumber')
+        .lean()
+    ).map((pr) => [pr.materialRequestId.toString(), pr.prNumber])
+  );
+
   return rows.map((mr) => ({
     id: mr._id.toString(),
     indentNumber: mr.indentNumber,
+    prNumber: prByMr.get(mr._id.toString()) || null,
     indentDate: mr.createdAt?.toISOString?.() || null,
     status: mr.status,
     projectCode: mr.projectId?.code,
     projectName: mr.projectId?.name,
+    purpose: mr.purpose || '',
+    priority: derivePriority(mr.estimatedValue, mr.escalatedToHo),
     estimatedValue: mr.estimatedValue || 0,
     executiveProcurementMethod: mr.executiveProcurementMethod || null,
   }));
@@ -181,8 +204,8 @@ async function queueForExecutiveDecision(mr, actorUserId, remark, historyNote) {
   await notificationService.notifyUsers(
     executives.map((u) => u._id),
     {
-      title: 'New Procurement Decision Pending',
-      body: `${mr.indentNumber} — select purchase order or branch transfer.`,
+      title: 'Procurement review pending',
+      body: `${mr.indentNumber} — review and mark proceed with purchase order when ready.`,
       relatedEntityType: 'ProcurementDecision',
       relatedEntityId: mr._id,
     }
@@ -191,39 +214,58 @@ async function queueForExecutiveDecision(mr, actorUserId, remark, historyNote) {
 
 async function executiveDecide(mr, user, { method, remark }) {
   if (!EXECUTIVE_QUEUE_STATUSES.includes(mr.status)) {
-    const err = new Error('Indent is not awaiting executive procurement decision');
+    const err = new Error('Indent is not awaiting executive procurement review');
     err.statusCode = 400;
     throw err;
   }
-  if (!['PURCHASE_ORDER', 'BRANCH_TRANSFER'].includes(method)) {
+  const resolvedMethod = method || 'PURCHASE_ORDER';
+  if (!['PURCHASE_ORDER', 'BRANCH_TRANSFER'].includes(resolvedMethod)) {
     const err = new Error('Invalid procurement method');
     err.statusCode = 400;
     throw err;
   }
 
+  if (resolvedMethod === 'PURCHASE_ORDER') {
+    const populated = await MaterialRequest.findById(mr._id)
+      .populate('projectId')
+      .populate('items.materialId')
+      .populate('materialId');
+    const pr = await openPurchaseRequestForExecutivePo(populated, user._id, remark);
+    const refreshed = await loadDecisionIndent(mr._id);
+    const dto = await buildProcurementDecisionDto(refreshed);
+    return {
+      ...dto,
+      purchaseRequestId: pr._id.toString(),
+      prNumber: pr.prNumber,
+      redirect: { type: 'create_po', path: `/executive/po/new?purchaseRequestId=${pr._id}` },
+    };
+  }
+
   const fromStatus = mr.status;
-  const toStatus = executiveDecisionStatus(method);
+  const toStatus = executiveDecisionStatus(resolvedMethod);
   mr.status = toStatus;
   mr.pendingWithRole = 'COORDINATOR';
-  mr.executiveProcurementMethod = method;
+  mr.executiveProcurementMethod = resolvedMethod;
   mr.executiveDecisionRemark = remark;
   mr.executiveDecidedByUserId = user._id;
   mr.executiveDecidedAt = new Date();
   await mr.save();
 
-  const label =
-    method === 'BRANCH_TRANSFER'
-      ? 'Executive selected Branch Transfer'
-      : 'Executive selected Purchase Order';
-
-  await statusHistoryService.record('MaterialRequest', mr._id, fromStatus, toStatus, user._id, `${label}: ${remark}`);
+  await statusHistoryService.record(
+    'MaterialRequest',
+    mr._id,
+    fromStatus,
+    toStatus,
+    user._id,
+    `Executive selected Branch Transfer: ${remark}`
+  );
 
   const coordinators = await User.find({ role: UserRole.COORDINATOR });
   await notificationService.notifyUsers(
     coordinators.map((u) => u._id),
     {
       title: 'Procurement Decision Waiting for Approval',
-      body: `${mr.indentNumber} — executive recommended ${method === 'BRANCH_TRANSFER' ? 'branch transfer' : 'purchase order'}.`,
+      body: `${mr.indentNumber} — executive recommended branch transfer.`,
       relatedEntityType: 'ProcurementDecision',
       relatedEntityId: mr._id,
     }

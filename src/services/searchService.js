@@ -105,12 +105,13 @@ async function searchProjects(q, user) {
 async function searchBranchTransferTargets(q, user, { fromProjectId, excludeProjectId } = {}) {
   const term = String(q || '').trim();
   let filter = {};
-  const canSearchAll =
-    [UserRole.EXECUTIVE, UserRole.COORDINATOR, UserRole.CHAIRMAN, UserRole.PROJECT_MANAGER].includes(
-      user.role
-    );
+  const canSearchAll = [UserRole.EXECUTIVE, UserRole.COORDINATOR, UserRole.CHAIRMAN].includes(
+    user.role
+  );
   if (canSearchAll) {
     filter = {};
+  } else if (user.role === UserRole.PROJECT_MANAGER && user.assignedProjectIds?.length) {
+    filter = { _id: { $in: user.assignedProjectIds } };
   } else if (user.assignedProjectIds?.length) {
     filter = { _id: { $in: user.assignedProjectIds } };
   } else {
