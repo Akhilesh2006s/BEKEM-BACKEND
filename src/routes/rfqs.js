@@ -98,7 +98,7 @@ router.post(
   param('id').isMongoId(),
   [
     body('selectedVendorId').isMongoId(),
-    body('whyWeChoseThisVendor').trim().isLength({ min: 10 }),
+    body('whyWeChoseThisVendor').trim().notEmpty(),
     body('vendorSelectionReason').optional().isString(),
   ],
   validate,

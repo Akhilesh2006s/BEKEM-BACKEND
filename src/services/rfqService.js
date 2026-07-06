@@ -186,8 +186,8 @@ async function addRfqVendorQuotation(rfqId, user, body) {
 async function finalizeRfq(rfqId, user, { selectedVendorId, whyWeChoseThisVendor, vendorSelectionReason }) {
   assertRfqAccess(user);
   const why = String(whyWeChoseThisVendor || '').trim();
-  if (why.length < 10) {
-    const err = new Error('Why We Chose This Vendor is required (minimum 10 characters)');
+  if (!why) {
+    const err = new Error('Why We Chose This Vendor is required');
     err.statusCode = 400;
     throw err;
   }
@@ -205,8 +205,8 @@ async function finalizeRfq(rfqId, user, { selectedVendorId, whyWeChoseThisVendor
 
   if (!isL1) {
     const reason = String(vendorSelectionReason || '').trim();
-    if (reason.length < 10) {
-      const err = new Error('Reason for Selection is required when not choosing L1 (minimum 10 characters)');
+    if (!reason) {
+      const err = new Error('Reason for Selection is required when not choosing L1');
       err.statusCode = 400;
       throw err;
     }
@@ -287,7 +287,7 @@ async function validatePoVendorSelection(
   for (const vendorId of vendorIds) {
     if (l1VendorId && vendorId !== l1VendorId) {
       const reason = String(vendorSelectionReasons[vendorId] || rfq.vendorSelectionReason || '').trim();
-      if (reason.length < 10) {
+      if (!reason) {
         const err = new Error(
           'Reason for Selection is required when PO vendor is not L1 (lowest quote)'
         );
@@ -299,9 +299,9 @@ async function validatePoVendorSelection(
 
   if (rfq.status !== 'FINALIZED' || !rfq.whyWeChoseThisVendor?.trim()) {
     const why = String(whyWeChoseThisVendor || rfq.whyWeChoseThisVendor || '').trim();
-    if (why.length < 10) {
+    if (!why) {
       const err = new Error(
-        'Why We Chose This Vendor is required before generating PO (minimum 10 characters)'
+        'Why We Chose This Vendor is required before generating PO'
       );
       err.statusCode = 400;
       throw err;

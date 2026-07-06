@@ -100,7 +100,7 @@ describe('RFQ quotation comparison & vendor selection', () => {
       .set('Authorization', `Bearer ${execToken}`)
       .send({
         selectedVendorId: vendorIds[1],
-        whyWeChoseThisVendor: 'short',
+        whyWeChoseThisVendor: '   ',
       });
 
     assert.strictEqual(res.status, 400);
@@ -125,7 +125,7 @@ describe('RFQ quotation comparison & vendor selection', () => {
       .set('Authorization', `Bearer ${execToken}`)
       .send({
         selectedVendorId: vendorIds[1],
-        whyWeChoseThisVendor: 'Lowest final cost with acceptable delivery schedule',
+        whyWeChoseThisVendor: 'L1',
       });
 
     assert.strictEqual(res.status, 200);
@@ -133,7 +133,7 @@ describe('RFQ quotation comparison & vendor selection', () => {
 
     const rfq = await RFQ.findById(rfqId);
     assert.strictEqual(rfq.status, 'FINALIZED');
-    assert.ok(rfq.whyWeChoseThisVendor.length >= 10);
+    assert.strictEqual(rfq.whyWeChoseThisVendor, 'L1');
   });
 
   it('blocks PO when non-L1 vendor lacks selection reason', async () => {
