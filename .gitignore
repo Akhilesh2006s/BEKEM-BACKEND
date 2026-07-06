@@ -1,5 +1,4 @@
 node_modules
-packages/shared/dist
 .env
 .env.*
 !.env.example
