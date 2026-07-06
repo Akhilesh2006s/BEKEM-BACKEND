@@ -125,25 +125,45 @@ router.get('/gst-lookup/preview', async (req, res, next) => {
       lookupVendorByGstNumber,
       isGstLookupEnabled,
       normalizeGstNumber,
+      getLookupStatusMessage,
     } = require('../services/vendorGstLookupService');
     const gstNumber = normalizeGstNumber(req.query.gstNumber);
     if (!gstNumber) {
       return res.status(400).json({ statusCode: 400, message: 'gstNumber query required' });
     }
-    const result = await lookupVendorByGstNumber(gstNumber);
-    res.json({
-      data: {
-        available: isGstLookupEnabled() && !!result,
-        name: result?.name,
-        address: result?.address,
-        gstDetails: result?.gstDetails,
-        message: isGstLookupEnabled()
-          ? result
-            ? 'Vendor details fetched from GST registry'
-            : 'GST lookup enabled but no record found'
-          : 'GST auto-fetch will be available when the portal API is connected',
-      },
-    });
+
+    if (!isGstLookupEnabled()) {
+      return res.json({
+        data: {
+          available: false,
+          message: getLookupStatusMessage(),
+        },
+      });
+    }
+
+    try {
+      const result = await lookupVendorByGstNumber(gstNumber);
+      res.json({
+        data: {
+          available: true,
+          name: result?.name,
+          address: result?.address,
+          panNumber: result?.panNumber,
+          gstDetails: result?.gstDetails,
+          message: 'Vendor details fetched from GST registry',
+        },
+      });
+    } catch (lookupErr) {
+      if (lookupErr.statusCode === 404) {
+        return res.json({
+          data: {
+            available: false,
+            message: lookupErr.message || 'No taxpayer record found for this GSTIN',
+          },
+        });
+      }
+      throw lookupErr;
+    }
   } catch (err) {
     if (err.statusCode) return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
     next(err);

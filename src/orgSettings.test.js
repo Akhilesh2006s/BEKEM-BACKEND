@@ -69,13 +69,12 @@ describe('Org settings & configurable approval limits', () => {
     assert.strictEqual(res.status, 400);
   });
 
-  it('gst lookup preview returns future-ready message', async () => {
+  it('gst lookup preview returns configuration or registry result', async () => {
     const res = await request(app)
       .get('/api/vendors/gst-lookup/preview')
       .set('Authorization', `Bearer ${coordToken}`)
       .query({ gstNumber: '29AAAAA0000A1Z5' });
     assert.strictEqual(res.status, 200);
-    assert.strictEqual(res.body.data.available, false);
     assert.ok(res.body.data.message);
   });
 });

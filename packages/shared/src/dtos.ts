@@ -549,6 +549,12 @@ export interface VendorGstDetailsDto {
   tradeName?: string;
   status?: string;
   address?: string;
+  registrationDate?: string;
+  taxpayerType?: string;
+  stateJurisdiction?: string;
+  natureOfBusiness?: string[];
+  provider?: string;
+  gstin?: string;
   fetchedAt?: string;
   source?: 'MANUAL' | 'GST_PORTAL';
 }
