@@ -126,7 +126,10 @@ router.get('/:id/timeline', param('id').isMongoId(), validate, async (req, res, 
 
 router.get('/:id/grn-counter', param('id').isMongoId(), validate, async (req, res, next) => {
   try {
-    const po = await PurchaseOrder.findById(req.params.id);
+    const po = await PurchaseOrder.findById(req.params.id).populate({
+      path: 'purchaseRequestId',
+      select: 'projectId',
+    });
     if (!po) return res.status(404).json({ statusCode: 404, message: 'Not found' });
     await assertCanViewPurchaseOrder(req.user, po);
     const { peekNextPoGrnNumber } = require('../services/grnCounterService');
@@ -218,7 +221,7 @@ router.post(
         materialIds
       );
 
-      const { buildComparisonTable } = require('../services/quotationComparisonService');
+      const { buildComparisonTable, applyL1QuoteRatesToLineItems } = require('../services/quotationComparisonService');
       const { buildPurchaseHistoryRows } = require('../services/materialPricingService');
       const { getIndentLineItems } = require('../services/materialRequestHelpers');
 
@@ -247,8 +250,8 @@ router.post(
         if (mr) {
           deliveryAddress = await buildConsigneeAddress(mr);
           const built = await buildLineItemsFromIndent(mr, pr.amountEstimate);
-          lineItems = built.lineItems;
-          subtotal = built.subtotal;
+          lineItems = applyL1QuoteRatesToLineItems(built.lineItems, quotations);
+          subtotal = lineItems.reduce((s, row) => s + (row.amount || 0), 0) || built.subtotal;
         }
       }
 

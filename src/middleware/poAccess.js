@@ -1,6 +1,6 @@
 const { UserRole } = require('@afios/shared');
 const { userCanAccessProject } = require('../utils/serialize');
-const { Site } = require('../models');
+const { Site, PurchaseRequest } = require('../models');
 
 const HO_ROLES = new Set([UserRole.EXECUTIVE, UserRole.COORDINATOR, UserRole.CHAIRMAN]);
 
@@ -8,6 +8,17 @@ function poProjectId(po) {
   const pr = po.purchaseRequestId;
   if (!pr) return null;
   return pr.projectId?._id || pr.projectId || null;
+}
+
+/** Resolves project when purchaseRequestId is an unpopulated ObjectId (e.g. grn-counter). */
+async function resolvePoProjectId(po) {
+  const direct = poProjectId(po);
+  if (direct) return direct;
+  const prRef = po.purchaseRequestId;
+  if (!prRef) return null;
+  const prId = typeof prRef === 'object' && prRef._id ? prRef._id : prRef;
+  const pr = await PurchaseRequest.findById(prId).select('projectId').lean();
+  return pr?.projectId || null;
 }
 
 function rejectSitePoAccess(req, res, next) {
@@ -42,7 +53,7 @@ async function assertCanViewPurchaseOrder(user, po) {
 
   if (HO_ROLES.has(user.role)) return true;
 
-  const projectId = poProjectId(po);
+  const projectId = await resolvePoProjectId(po);
   if (!projectId) {
     const err = new Error('Forbidden — project out of scope');
     err.statusCode = 403;
@@ -144,5 +155,6 @@ module.exports = {
   purchaseOrderListFilter,
   filterPurchaseOrdersForUser,
   poProjectId,
+  resolvePoProjectId,
   HO_ROLES,
 };

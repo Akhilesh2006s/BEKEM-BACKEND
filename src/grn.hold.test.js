@@ -133,6 +133,16 @@ describe('GRN hold & approval workflow', () => {
     assert.ok(hold.holdReasons.includes('EWAY'));
   });
 
+  it('store can load grn-counter lines when purchaseRequest is not populated on PO', async () => {
+    const res = await request(app)
+      .get(`/api/purchase-orders/${po._id}/grn-counter`)
+      .set('Authorization', `Bearer ${storeToken}`);
+    assert.strictEqual(res.status, 200);
+    assert.ok(Array.isArray(res.body.data.lines));
+    assert.ok(res.body.data.lines.length > 0, 'expected receipt lines for GRN form');
+    assert.strictEqual(res.body.data.lines[0].orderedQty, line.quantity);
+  });
+
   it('creates ON_HOLD GRN without stock when e-way bill missing above threshold', async () => {
     const res = await request(app)
       .post('/api/goods-receipts')

@@ -98,10 +98,20 @@ async function ensureRfqAndQuotations(purchaseRequest, projectCode, actorUserId,
       'RFQ auto-generated during PO wizard'
     );
 
+    let totalQty = 1;
+    if (purchaseRequest.materialRequestId) {
+      const mr = await MaterialRequest.findById(purchaseRequest.materialRequestId);
+      if (mr) {
+        totalQty =
+          getIndentLineItems(mr).reduce((s, l) => s + (l.quantityRequested || 0), 0) || 1;
+      }
+    }
+
     for (const vendor of vendors.slice(0, 3)) {
       const baseAmount = purchaseRequest.amountEstimate || 100000;
       const variance = 0.9 + Math.random() * 0.2;
-      const rate = Math.round(baseAmount * variance);
+      const lineSubtotal = Math.round(baseAmount * variance);
+      const rate = Math.max(1, Math.round(lineSubtotal / totalQty));
       const { computeFinalCost } = require('./quotationComparisonService');
       await Quotation.create({
         rfqId: rfq._id,
@@ -110,7 +120,7 @@ async function ensureRfqAndQuotations(purchaseRequest, projectCode, actorUserId,
         gstPercent: 18,
         paymentTerms: '100% payment within 30 days from the date of supply',
         deliveryTerms: 'Delivery as per project schedule',
-        amount: computeFinalCost(rate, 1, 18),
+        amount: computeFinalCost(rate, totalQty, 18),
         terms: '100% payment within 30 days from the date of supply',
         submittedAt: new Date(),
       });

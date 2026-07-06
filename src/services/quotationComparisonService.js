@@ -115,7 +115,24 @@ async function ensureDefaultVendorQuotations(rfq, purchaseRequest, materialIds) 
   }
 
   const baseAmount = purchaseRequest?.amountEstimate || 100000;
-  const qty = 1;
+  let qty = 1;
+  const prId = purchaseRequest?._id || purchaseRequest;
+  if (prId) {
+    const { PurchaseRequest, MaterialRequest } = require('../models');
+    const { getIndentLineItems } = require('./materialRequestHelpers');
+    const pr =
+      typeof purchaseRequest === 'object' && purchaseRequest.materialRequestId
+        ? purchaseRequest
+        : await PurchaseRequest.findById(prId).lean();
+    if (pr?.materialRequestId) {
+      const mr = await MaterialRequest.findById(pr.materialRequestId);
+      if (mr) {
+        qty =
+          getIndentLineItems(mr).reduce((s, l) => s + (l.quantityRequested || 0), 0) || 1;
+      }
+    }
+  }
+  qty = Math.max(1, qty);
   const rows = [];
   const usedIds = new Set(existing.map((q) => (q.vendorId._id || q.vendorId).toString()));
 
@@ -123,9 +140,10 @@ async function ensureDefaultVendorQuotations(rfq, purchaseRequest, materialIds) 
     if (usedIds.has(vendor._id.toString())) continue;
     if (existing.length + rows.length >= 3) break;
     const variance = 0.9 + Math.random() * 0.2;
+    const lineSubtotal = Math.round(baseAmount * variance);
     rows.push({
       vendorId: vendor._id,
-      rate: Math.round((baseAmount * variance) / qty),
+      rate: Math.max(1, Math.round(lineSubtotal / qty)),
       gstPercent: 18,
       paymentTerms: '100% payment within 30 days from the date of supply',
       deliveryTerms: 'Delivery as per project schedule',
@@ -139,11 +157,25 @@ async function ensureDefaultVendorQuotations(rfq, purchaseRequest, materialIds) 
   return existing;
 }
 
+function applyL1QuoteRatesToLineItems(lineItems, quotations) {
+  if (!lineItems?.length || !quotations?.length) return lineItems;
+  const l1 = pickL1Quotation(quotations);
+  if (!l1) return lineItems;
+  const totalQty = lineItems.reduce((s, row) => s + (row.quantity || 0), 0) || 1;
+  const unitRate = l1.rate != null ? Number(l1.rate) : Number(l1.amount) / totalQty;
+  return lineItems.map((row) => {
+    const rate = unitRate;
+    const amount = (row.quantity || 0) * rate;
+    return { ...row, rate, amount };
+  });
+}
+
 module.exports = {
   computeFinalCost,
   serializeQuotationRow,
   pickL1Quotation,
   buildComparisonTable,
+  applyL1QuoteRatesToLineItems,
   upsertRfqQuotations,
   ensureDefaultVendorQuotations,
 };
