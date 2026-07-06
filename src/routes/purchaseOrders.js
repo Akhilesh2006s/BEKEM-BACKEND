@@ -83,7 +83,11 @@ router.get('/', async (req, res, next) => {
     } else if (queue === 'chairman') {
       filter.status = 'CHAIRMAN_PENDING';
     } else if (queue === 'pm') {
-      filter.status = 'PM_PENDING';
+      const tab = req.query.tab || 'pending';
+      if (tab === 'pending') filter.status = 'PM_PENDING';
+      else if (tab === 'approved') filter.status = 'APPROVED';
+      else if (tab === 'completed') filter.fulfillmentStatus = 'closed_complete';
+      else if (tab !== 'all') filter.status = 'PM_PENDING';
     } else if (queue === 'executive') {
       filter.status = {
         $in: ['DRAFT', 'PENDING_REVIEW', 'PM_PENDING', 'COORDINATOR_PENDING', 'CHAIRMAN_PENDING'],

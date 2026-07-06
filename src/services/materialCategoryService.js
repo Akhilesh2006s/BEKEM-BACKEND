@@ -114,6 +114,33 @@ async function resolveMaterialCategory({ categoryId, category }) {
   return cat;
 }
 
+async function getCategoryReport() {
+  const rows = await Material.aggregate([
+    { $match: { isActive: { $ne: false } } },
+    {
+      $group: {
+        _id: '$category',
+        count: { $sum: 1 },
+        materials: {
+          $push: {
+            id: { $toString: '$_id' },
+            code: '$code',
+            name: '$name',
+            unit: '$unit',
+          },
+        },
+      },
+    },
+    { $sort: { _id: 1 } },
+  ]);
+
+  return rows.map((row) => ({
+    category: row._id || 'Uncategorized',
+    count: row.count,
+    materials: row.materials.slice(0, 50),
+  }));
+}
+
 module.exports = {
   ensureMaterialCategories,
   listMaterialCategories,
@@ -121,5 +148,6 @@ module.exports = {
   resolveMaterialCategory,
   requiresCategoryRemarks,
   assertCategoryRemarks,
+  getCategoryReport,
   PHASE_CATEGORIES,
 };

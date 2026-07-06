@@ -49,7 +49,8 @@ router.get('/', async (req, res, next) => {
       req.user.role === UserRole.EXECUTIVE &&
       (req.query.queue === 'pending-po' ||
         req.query.readyForPo === 'true' ||
-        req.query.readyForPo === '1');
+        req.query.readyForPo === '1') &&
+      !req.query.tab;
 
     if (isExecutiveQueue) {
       const items = await listExecutivePendingPurchaseRequests();
@@ -58,6 +59,25 @@ router.get('/', async (req, res, next) => {
         data,
         meta: { count: await countExecutivePendingPurchaseRequests() },
       });
+    }
+
+    if (req.user.role === UserRole.EXECUTIVE && req.query.tab) {
+      const tab = req.query.tab;
+      const filter = {};
+      if (tab === 'pending') {
+        filter.executiveRecommendation = null;
+        filter.status = { $nin: ['CANCELLED', 'CLOSED'] };
+      } else if (tab === 'approved') {
+        filter.executiveRecommendation = { $ne: null };
+        filter.status = { $nin: ['CANCELLED', 'CLOSED'] };
+      } else if (tab === 'completed') {
+        filter.status = { $in: ['PO_CREATED', 'CLOSED', 'COMPLETED'] };
+      }
+      const items = await PurchaseRequest.find(filter)
+        .sort({ createdAt: -1 })
+        .populate(populateFields);
+      const data = await Promise.all(items.map(serializeExecutivePurchaseRequestListItem));
+      return res.json({ data, meta: { count: data.length } });
     }
 
     const filter = {};

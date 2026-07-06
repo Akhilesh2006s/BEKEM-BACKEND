@@ -506,13 +506,14 @@ async function globalSearch(user, q) {
       grns: [],
       branchTransfers: [],
       employees: [],
+      sites: [],
     };
   }
 
   const term = q.trim();
   const regex = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
 
-  const [materials, vendors, projects, employees] = await Promise.all([
+  const [materials, vendors, projects, employees, sites] = await Promise.all([
     Material.find({
       isActive: { $ne: false },
       $or: [
@@ -530,6 +531,7 @@ async function globalSearch(user, q) {
     })
       .select('name email role')
       .limit(8),
+    Site.find({ name: regex }).populate('projectId', 'code name').limit(8),
   ]);
 
   const reqFilter = {
@@ -642,6 +644,12 @@ async function globalSearch(user, q) {
     return '/profile';
   }
 
+  function siteHref() {
+    if (user.role === UserRole.STORE_INCHARGE) return '/store';
+    if (user.role === UserRole.SITE_INCHARGE) return '/site';
+    return '/admin/projects';
+  }
+
   return {
     materials: materials.map((m) => ({
       id: m._id.toString(),
@@ -699,6 +707,14 @@ async function globalSearch(user, q) {
       label: u.name,
       sublabel: [u.role?.replace(/_/g, ' '), u.email].filter(Boolean).join(' · '),
       href: employeeHref(u),
+    })),
+    sites: sites.map((s) => ({
+      id: s._id.toString(),
+      label: s.name,
+      sublabel: s.projectId
+        ? `${s.projectId.code} · ${s.projectId.name}`
+        : 'Site',
+      href: siteHref(s),
     })),
   };
 }

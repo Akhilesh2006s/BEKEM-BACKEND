@@ -30,6 +30,7 @@ router.get(
           toStatus: t.toStatus,
           actorUserId: t.actorUserId?._id?.toString() || t.actorUserId?.toString(),
           actorName: t.actorUserId?.name || 'System',
+          actorRole: t.actorUserId?.role || null,
           note: t.note,
           timestamp: t.timestamp.toISOString(),
         })),

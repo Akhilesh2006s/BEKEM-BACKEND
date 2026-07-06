@@ -204,6 +204,50 @@ async function listBillsForPo(poId) {
   return PaymentBill.find({ purchaseOrderId: poId }).sort({ createdAt: 1 }).lean();
 }
 
+async function getMonthlyTransactionReport(user, year, month) {
+  const { getMonthlyMiscTotals } = require('./miscPurchaseService');
+  const y = Number(year) || new Date().getFullYear();
+  const m = Number(month) || new Date().getMonth() + 1;
+  const start = new Date(y, m - 1, 1);
+  const end = new Date(y, m, 1);
+
+  const scope = buildFinanceScopeFilter(user);
+  const bills = await PaymentBill.find({
+    ...scope,
+    createdAt: { $gte: start, $lt: end },
+  })
+    .populate('vendorId', 'name')
+    .populate('projectId', 'code name')
+    .lean();
+
+  const miscByCategory = await getMonthlyMiscTotals(user, y, m);
+  const billTotal = bills.reduce((s, b) => s + (Number(b.invoiceValue) || 0), 0);
+  const miscTotal = miscByCategory.reduce((s, c) => s + c.totalAmount, 0);
+
+  return {
+    year: y,
+    month: m,
+    periodLabel: start.toLocaleString('en-IN', { month: 'long', year: 'numeric' }),
+    summary: {
+      miscPurchaseTotal: miscTotal,
+      poBillTotal: billTotal,
+      combinedTotal: miscTotal + billTotal,
+      miscTransactionCount: miscByCategory.reduce((s, c) => s + c.count, 0),
+      poBillCount: bills.length,
+    },
+    miscByCategory,
+    poBills: bills.map((b) => ({
+      id: b._id.toString(),
+      billNumber: b.billNumber,
+      vendorName: b.vendorId?.name || '',
+      projectCode: b.projectId?.code || '',
+      invoiceValue: b.invoiceValue,
+      paymentStatus: b.paymentStatus,
+      createdAt: b.createdAt?.toISOString?.() || null,
+    })),
+  };
+}
+
 module.exports = {
   computePaymentStatus,
   computeAgingDays,
@@ -216,4 +260,5 @@ module.exports = {
   listPaymentBills,
   getFinanceSummary,
   listBillsForPo,
+  getMonthlyTransactionReport,
 };

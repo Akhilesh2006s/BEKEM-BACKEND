@@ -484,6 +484,7 @@ export interface StatusHistoryDto {
   toStatus: string;
   actorUserId: string;
   actorName?: string;
+  actorRole?: string;
   note?: string;
   timestamp: string;
 }
@@ -922,6 +923,79 @@ export interface GlobalSearchDto {
   grns: SearchResultItemDto[];
   branchTransfers: SearchResultItemDto[];
   employees: SearchResultItemDto[];
+  sites: SearchResultItemDto[];
+}
+
+export interface MiscPurchaseDto {
+  id: string;
+  referenceNumber: string;
+  expenseCategoryKey: string;
+  expenseCategoryLabel: string;
+  description: string;
+  amount: number;
+  projectId: string;
+  projectCode: string;
+  projectName: string;
+  siteId?: string | null;
+  siteName?: string;
+  vendorName?: string;
+  purchaseOrderId?: string | null;
+  poNumber?: string;
+  requiresPo: boolean;
+  status: string;
+  createdByUserId: string;
+  createdByName?: string;
+  approvedByUserId?: string | null;
+  approvedByName?: string;
+  approvedAt?: string | null;
+  rejectionReason?: string;
+  transactionDate?: string | null;
+  note?: string;
+  createdAt?: string | null;
+}
+
+export interface MonthlyTransactionReportDto {
+  year: number;
+  month: number;
+  periodLabel: string;
+  summary: {
+    miscPurchaseTotal: number;
+    poBillTotal: number;
+    combinedTotal: number;
+    miscTransactionCount: number;
+    poBillCount: number;
+  };
+  miscByCategory: Array<{
+    categoryKey: string;
+    count: number;
+    totalAmount: number;
+    items: Array<{
+      referenceNumber: string;
+      description: string;
+      amount: number;
+      transactionDate: string | null;
+    }>;
+  }>;
+  poBills: Array<{
+    id: string;
+    billNumber: string;
+    vendorName: string;
+    projectCode: string;
+    invoiceValue: number;
+    paymentStatus: string;
+    createdAt: string | null;
+  }>;
+}
+
+export interface MaterialCategoryReportDto {
+  category: string;
+  count: number;
+  materials: Array<{
+    id: string;
+    code: string;
+    name: string;
+    unit: string;
+  }>;
 }
 
 export interface MaterialAvailabilityDto {

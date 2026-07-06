@@ -1,5 +1,5 @@
 const express = require('express');
-const { body, param } = require('express-validator');
+const { body, param, query } = require('express-validator');
 const { PaymentBill } = require('../models');
 const { authenticate } = require('../middleware/auth');
 const { requireCapability } = require('../middleware/rbac');
@@ -10,6 +10,7 @@ const {
   getFinanceSummary,
   applyPaymentToBill,
   assertCanAccessBill,
+  getMonthlyTransactionReport,
 } = require('../services/financeService');
 
 const router = express.Router();
@@ -24,6 +25,24 @@ router.get('/summary', async (req, res, next) => {
     next(err);
   }
 });
+
+router.get(
+  '/monthly-report',
+  [query('year').optional().isInt({ min: 2020, max: 2100 }), query('month').optional().isInt({ min: 1, max: 12 })],
+  validate,
+  async (req, res, next) => {
+    try {
+      const data = await getMonthlyTransactionReport(
+        req.user,
+        req.query.year,
+        req.query.month
+      );
+      res.json({ data });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 router.get('/bills', async (req, res, next) => {
   try {

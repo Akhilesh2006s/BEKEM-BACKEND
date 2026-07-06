@@ -15,7 +15,7 @@ async function record(entityType, entityId, fromStatus, toStatus, actorUserId, n
 async function getTimeline(entityType, entityId) {
   return StatusHistory.find({ entityType, entityId })
     .sort({ timestamp: 1 })
-    .populate('actorUserId', 'name');
+    .populate('actorUserId', 'name role');
 }
 
 module.exports = { record, getTimeline };

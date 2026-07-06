@@ -33,4 +33,5 @@ module.exports = {
   IdempotencyRecord: require('./IdempotencyRecord'),
   PaymentBill: require('./PaymentBill'),
   OrgSettings: require('./OrgSettings'),
+  MiscPurchase: require('./MiscPurchase'),
 };

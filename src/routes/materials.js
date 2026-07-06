@@ -38,6 +38,28 @@ router.get('/categories', async (req, res, next) => {
   }
 });
 
+router.get('/reports/by-category', requireCapability('VIEW_FINANCE'), async (req, res, next) => {
+  try {
+    const { getCategoryReport } = require('../services/materialCategoryService');
+    const data = await getCategoryReport();
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/admin/remap-categories', requireCapability('MANAGE_USERS'), async (req, res, next) => {
+  try {
+    const { ensureMaterialCategories } = require('../services/materialCategoryService');
+    await ensureMaterialCategories();
+    const { getCategoryReport } = require('../services/materialCategoryService');
+    const data = await getCategoryReport();
+    res.json({ data, message: 'Material categories remapped from legacy values' });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get('/search', async (req, res, next) => {
   try {
     const { searchMaterials } = require('../services/searchService');
