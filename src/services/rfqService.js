@@ -320,6 +320,78 @@ async function validatePoVendorSelection(
   }
 }
 
+async function previewRfqWizard(purchaseRequestId, user) {
+  assertRfqAccess(user);
+  const pr = await PurchaseRequest.findById(purchaseRequestId).populate('projectId');
+  if (!pr) {
+    const err = new Error('Purchase request not found');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  let materialIds = [];
+  if (pr.materialRequestId) {
+    const mr = await MaterialRequest.findById(pr.materialRequestId);
+    if (mr) {
+      materialIds = getIndentLineItems(mr)
+        .map((i) => (i.materialId?._id || i.materialId)?.toString())
+        .filter(Boolean);
+    }
+  }
+
+  const { ensureRfqAndQuotations, resolveVendorsForIndent } = require('./procurementService');
+  const projectCode = pr.projectId?.code || 'HO';
+  const { rfq } = await ensureRfqAndQuotations(pr, projectCode, user._id, materialIds, {
+    creationNote: 'RFQ created via RFQ wizard',
+  });
+
+  const comparison = await getRfqComparison(rfq._id.toString(), user);
+  const suggestedVendors = (await resolveVendorsForIndent(materialIds)).slice(0, 5).map((v) => ({
+    id: v._id.toString(),
+    name: v.name,
+    gstNumber: v.gstNumber || '',
+    code: v.code || '',
+  }));
+
+  return { ...comparison, suggestedVendors };
+}
+
+async function submitRfqWizard(
+  user,
+  { rfqId, quotations, selectedVendorId, whyWeChoseThisVendor, vendorSelectionReason, dueDate, finalize }
+) {
+  assertRfqAccess(user);
+  if (!rfqId) {
+    const err = new Error('rfqId is required');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  if (dueDate) {
+    await RFQ.findByIdAndUpdate(rfqId, { dueDate: new Date(dueDate) });
+  }
+
+  if (Array.isArray(quotations) && quotations.length) {
+    await saveRfqQuotations(rfqId, user, { quotations });
+  }
+
+  if (finalize) {
+    if (!selectedVendorId || !whyWeChoseThisVendor?.trim()) {
+      const err = new Error('Selected vendor and Why We Chose This Vendor are required to finalize');
+      err.statusCode = 400;
+      throw err;
+    }
+    await finalizeRfq(rfqId, user, {
+      selectedVendorId,
+      whyWeChoseThisVendor,
+      vendorSelectionReason,
+    });
+    return getRfqDetail(rfqId, user);
+  }
+
+  return getRfqComparison(rfqId, user);
+}
+
 module.exports = {
   listRfqs,
   getRfqDetail,
@@ -328,6 +400,8 @@ module.exports = {
   saveRfqQuotations,
   addRfqVendorQuotation,
   finalizeRfq,
+  previewRfqWizard,
+  submitRfqWizard,
   validatePoVendorSelection,
   buildRfqShareText,
   sendRfqEmail,

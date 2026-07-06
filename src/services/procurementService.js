@@ -75,7 +75,13 @@ async function buildLineItemsFromIndent(mr, budgetAmount) {
   return { lineItems, subtotal: subtotal || budgetAmount };
 }
 
-async function ensureRfqAndQuotations(purchaseRequest, projectCode, actorUserId, materialIds) {
+async function ensureRfqAndQuotations(
+  purchaseRequest,
+  projectCode,
+  actorUserId,
+  materialIds,
+  { creationNote = 'RFQ auto-generated during PO wizard' } = {}
+) {
   let rfq = await RFQ.findOne({ purchaseRequestId: purchaseRequest._id });
   const vendors = await resolveVendorsForIndent(materialIds);
 
@@ -95,7 +101,7 @@ async function ensureRfqAndQuotations(purchaseRequest, projectCode, actorUserId,
       null,
       'OPEN',
       actorUserId,
-      'RFQ auto-generated during PO wizard'
+      creationNote
     );
 
     let totalQty = 1;
@@ -447,6 +453,7 @@ async function createPurchaseOrdersFromWizardBatch({
 
 module.exports = {
   ensureRfqAndQuotations,
+  resolveVendorsForIndent,
   createPurchaseOrderFromWizard,
   createPurchaseOrdersFromWizardBatch,
   buildLineItemsFromIndent,

@@ -46,11 +46,21 @@ async function searchMaterials(q, user) {
 
 async function searchVendors(q, user, { materialId } = {}) {
   const term = String(q || '').trim();
-  const clauses = [{ isActive: { $ne: false } }];
+  const clauses = [
+    { isActive: { $ne: false } },
+    { authorizationStatus: { $in: ['AUTHORIZED', null] } },
+  ];
   if (materialId) {
-    clauses.push({
-      $or: [{ materialIds: materialId }, { materialIds: { $size: 0 } }],
-    });
+    const material = await Material.findById(materialId).lean();
+    const orClauses = [
+      { materialIds: materialId },
+      { materialIds: { $size: 0 } },
+      { materialIds: { $exists: false } },
+    ];
+    if (material?.category) {
+      orClauses.push({ suppliedCategories: material.category }, { category: material.category });
+    }
+    clauses.push({ $or: orClauses });
   }
   if (term.length >= 1) {
     const regex = new RegExp(escapeRegex(term), 'i');
@@ -65,7 +75,31 @@ async function searchVendors(q, user, { materialId } = {}) {
     });
   }
   const filter = clauses.length > 1 ? { $and: clauses } : clauses[0];
-  const vendors = await Vendor.find(filter).sort({ name: 1 }).limit(SEARCH_LIMIT).lean();
+  let vendors = await Vendor.find(filter).sort({ name: 1 }).limit(SEARCH_LIMIT).lean();
+  if (!vendors.length) {
+    const broadClauses = [
+      { isActive: { $ne: false } },
+      { authorizationStatus: { $in: ['AUTHORIZED', null] } },
+    ];
+    if (term.length >= 1) {
+      const regex = new RegExp(escapeRegex(term), 'i');
+      broadClauses.push({
+        $or: [
+          { name: regex },
+          { code: regex },
+          { gstNumber: regex },
+          { category: regex },
+          { contactPerson: regex },
+        ],
+      });
+    }
+    vendors = await Vendor.find(
+      broadClauses.length > 1 ? { $and: broadClauses } : broadClauses[0]
+    )
+      .sort({ name: 1 })
+      .limit(SEARCH_LIMIT)
+      .lean();
+  }
   return vendors.map((v) => ({
     id: v._id.toString(),
     code: v.code || '',

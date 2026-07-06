@@ -1,12 +1,58 @@
 const express = require('express');
 const { body, param } = require('express-validator');
 const { authenticate } = require('../middleware/auth');
+const { requireCapability } = require('../middleware/rbac');
 const { validate } = require('../middleware/validate');
 const rfqService = require('../services/rfqService');
 const { generateRfqPdf } = require('../services/pdfService');
 
 const router = express.Router();
 router.use(authenticate);
+
+router.post(
+  '/wizard/preview',
+  requireCapability('CREATE_RFQ'),
+  [body('purchaseRequestId').isMongoId()],
+  validate,
+  async (req, res, next) => {
+    try {
+      const data = await rfqService.previewRfqWizard(req.body.purchaseRequestId, req.user);
+      res.json({ data });
+    } catch (err) {
+      if (err.statusCode) return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
+      next(err);
+    }
+  }
+);
+
+router.post(
+  '/wizard/submit',
+  requireCapability('CREATE_RFQ'),
+  [
+    body('rfqId').isMongoId(),
+    body('quotations').optional().isArray({ min: 1 }),
+    body('quotations.*.vendorId').optional().isMongoId(),
+    body('quotations.*.rate').optional().isFloat({ min: 0 }),
+    body('quotations.*.gstPercent').optional().isFloat({ min: 0 }),
+    body('quotations.*.paymentTerms').optional().isString(),
+    body('quotations.*.deliveryTerms').optional().isString(),
+    body('selectedVendorId').optional().isMongoId(),
+    body('whyWeChoseThisVendor').optional().isString(),
+    body('vendorSelectionReason').optional().isString(),
+    body('dueDate').optional().isISO8601(),
+    body('finalize').optional().isBoolean(),
+  ],
+  validate,
+  async (req, res, next) => {
+    try {
+      const data = await rfqService.submitRfqWizard(req.user, req.body);
+      res.json({ data });
+    } catch (err) {
+      if (err.statusCode) return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
+      next(err);
+    }
+  }
+);
 
 router.get('/', async (req, res, next) => {
   try {
