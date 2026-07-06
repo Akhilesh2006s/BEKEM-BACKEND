@@ -1296,6 +1296,7 @@ export interface UpdateMaterialDto {
   categoryId?: string;
   categoryRemarks?: string;
   hsnCode?: string;
+  gstRate?: number;
 }
 
 export interface CreateMaterialDto {
@@ -1308,6 +1309,7 @@ export interface CreateMaterialDto {
   categoryId?: string;
   categoryRemarks?: string;
   hsnCode?: string;
+  gstRate?: number;
   siteId?: string;
   initialQuantity?: number;
   lowStockThreshold?: number;

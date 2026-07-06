@@ -2,6 +2,15 @@ export function round2(n: number) {
   return Math.round(n * 100) / 100;
 }
 
+/** Common GST slabs used on site — user picks 5% or 18%. */
+export const GST_PERCENT_OPTIONS = [5, 18] as const;
+export type GstPercentOption = (typeof GST_PERCENT_OPTIONS)[number];
+export const DEFAULT_GST_PERCENT: GstPercentOption = 18;
+
+export function snapGstPercent(value?: number | null): GstPercentOption {
+  return Number(value) === 5 ? 5 : DEFAULT_GST_PERCENT;
+}
+
 export interface GstBreakdown {
   subtotal: number;
   gstPercent: number;
