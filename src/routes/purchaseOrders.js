@@ -215,7 +215,7 @@ router.post(
       );
 
       const { buildComparisonTable } = require('../services/quotationComparisonService');
-      const { getMaterialPurchaseRateRange } = require('../services/materialPricingService');
+      const { buildPurchaseHistoryRows } = require('../services/materialPricingService');
       const { getIndentLineItems } = require('../services/materialRequestHelpers');
 
       let quantity = 1;
@@ -227,20 +227,7 @@ router.post(
         if (mr) {
           const lines = getIndentLineItems(mr);
           quantity = lines.reduce((s, l) => s + (l.quantityRequested || 0), 0) || 1;
-          const rateRange = await getMaterialPurchaseRateRange(
-            lines.map((l) => (l.materialId?._id || l.materialId)?.toString()).filter(Boolean)
-          );
-          purchaseHistory = lines.map((line) => {
-            const mid = (line.materialId?._id || line.materialId)?.toString();
-            const mat = line.materialId && typeof line.materialId === 'object' ? line.materialId : null;
-            const range = mid ? rateRange.get(mid) : null;
-            return {
-              materialId: mid,
-              materialName: mat?.name || 'Material',
-              minPurchaseRate: range?.minRate ?? null,
-              maxPurchaseRate: range?.maxRate ?? null,
-            };
-          });
+          purchaseHistory = await buildPurchaseHistoryRows(lines);
         }
       }
 

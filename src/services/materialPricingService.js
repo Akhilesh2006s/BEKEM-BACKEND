@@ -95,9 +95,43 @@ async function getMaterialPurchaseRateRange(materialIds) {
   return rangeByMaterial;
 }
 
+/**
+ * Purchase history rows for RFQ / PO wizard (min, max, latest approved rates).
+ * @param {Array<{ materialId?: unknown, materialId?: { _id?: unknown, name?: string }, quantityRequested?: number }>} lineItems
+ */
+async function buildPurchaseHistoryRows(lineItems) {
+  const rows = [];
+  const materialIds = [];
+  for (const line of lineItems || []) {
+    const mid = (line.materialId?._id || line.materialId)?.toString?.() || line.materialId?.toString?.();
+    if (mid) materialIds.push(mid);
+  }
+  const uniqueIds = [...new Set(materialIds)];
+  const rateRange = await getMaterialPurchaseRateRange(uniqueIds);
+  const latestRates = await getLatestApprovedRates(uniqueIds);
+
+  for (const line of lineItems || []) {
+    const mid = (line.materialId?._id || line.materialId)?.toString?.() || line.materialId?.toString?.();
+    const mat = line.materialId && typeof line.materialId === 'object' ? line.materialId : null;
+    const range = mid ? rateRange.get(mid) : null;
+    rows.push({
+      materialId: mid,
+      materialName: mat?.name || line.description || 'Material',
+      minPurchaseRate: range?.minRate ?? null,
+      maxPurchaseRate: range?.maxRate ?? null,
+      latestPurchaseRate: mid ? latestRates.get(mid) ?? null : null,
+    });
+  }
+  if (!rows.length) {
+    return [{ materialName: 'All materials', minPurchaseRate: null, maxPurchaseRate: null, latestPurchaseRate: null }];
+  }
+  return rows;
+}
+
 module.exports = {
   getLatestApprovedRate,
   getLatestApprovedRates,
   getMaterialPurchaseRateRange,
   attachUnitPrices,
+  buildPurchaseHistoryRows,
 };

@@ -681,6 +681,7 @@ export interface MaterialPurchaseHistoryDto {
   materialName: string;
   minPurchaseRate: number | null;
   maxPurchaseRate: number | null;
+  latestPurchaseRate?: number | null;
 }
 
 export interface RfqComparisonDto {

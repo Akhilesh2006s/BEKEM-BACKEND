@@ -3,7 +3,7 @@ const { RFQ, Quotation, PurchaseRequest, MaterialRequest, Material, Vendor } = r
 const { HO_ROLES } = require('./executiveIndentService');
 const { getIndentLineItems } = require('./materialRequestHelpers');
 const { DEFAULT_PO_TERMS } = require('../constants/poTerms');
-const { getMaterialPurchaseRateRange } = require('./materialPricingService');
+  const { buildPurchaseHistoryRows } = require('./materialPricingService');
 const {
   buildComparisonTable,
   upsertRfqQuotations,
@@ -68,8 +68,7 @@ async function getRfqComparison(rfqId, user) {
   await ensureDefaultVendorQuotations(rfq, rfq.purchaseRequestId, materialIds);
   const quotations = await Quotation.find({ rfqId: rfq._id }).populate('vendorId').sort({ amount: 1 });
   const comparison = buildComparisonTable(quotations, quantity);
-  const rateRange = await getMaterialPurchaseRateRange(materialIds);
-  const purchaseHistory = itemsFromRange(rateRange, lineItems);
+  const purchaseHistory = await buildPurchaseHistoryRows(lineItems);
 
   return {
     rfqId: rfq._id.toString(),
@@ -85,25 +84,6 @@ async function getRfqComparison(rfqId, user) {
     indentNumber: mr?.indentNumber,
     purchaseRequestId: rfq.purchaseRequestId?._id?.toString(),
   };
-}
-
-function itemsFromRange(rateRange, lineItems) {
-  const rows = [];
-  for (const line of lineItems) {
-    const mid = (line.materialId?._id || line.materialId)?.toString();
-    const mat = line.materialId && typeof line.materialId === 'object' ? line.materialId : null;
-    const range = mid ? rateRange.get(mid) : null;
-    rows.push({
-      materialId: mid,
-      materialName: mat?.name || 'Material',
-      minPurchaseRate: range?.minRate ?? null,
-      maxPurchaseRate: range?.maxRate ?? null,
-    });
-  }
-  if (!rows.length) {
-    return [{ materialName: 'All materials', minPurchaseRate: null, maxPurchaseRate: null }];
-  }
-  return rows;
 }
 
 async function getRfqByPurchaseRequest(purchaseRequestId, user) {
