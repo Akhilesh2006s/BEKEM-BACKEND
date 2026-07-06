@@ -20,6 +20,7 @@ async function createOrResolveSiteMaterial({
   name,
   unit,
   category,
+  categoryRemarks,
   description,
   createdByUserId,
 }) {
@@ -31,8 +32,10 @@ async function createOrResolveSiteMaterial({
   }
 
   const lineUnit = String(unit || 'Nos').trim() || 'Nos';
-  const mappedCategory = mapLegacyCategory(category || 'Consumables');
+  const mappedCategory = mapLegacyCategory(category || 'Civil Materials');
   const trimmedDescription = String(description || '').trim();
+  const { assertCategoryRemarks } = require('./materialCategoryService');
+  assertCategoryRemarks(mappedCategory, categoryRemarks);
 
   await ensureMaterialCategories();
 
@@ -51,7 +54,7 @@ async function createOrResolveSiteMaterial({
   try {
     categoryDoc = await resolveMaterialCategory({ category: mappedCategory });
   } catch {
-    categoryDoc = await resolveMaterialCategory({ category: 'Consumables' });
+    categoryDoc = await resolveMaterialCategory({ category: 'Civil Materials' });
   }
 
   const material = await Material.create({
@@ -60,6 +63,8 @@ async function createOrResolveSiteMaterial({
     unit: lineUnit,
     category: categoryDoc.name,
     categoryId: categoryDoc._id,
+    categoryRemarks:
+      categoryDoc.name === 'Others' ? String(categoryRemarks || '').trim() : '',
     description:
       trimmedDescription ||
       'Added from site indent — pending store/PO classification',

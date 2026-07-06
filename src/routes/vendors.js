@@ -119,6 +119,37 @@ router.get('/', async (req, res, next) => {
   }
 });
 
+router.get('/gst-lookup/preview', async (req, res, next) => {
+  try {
+    const {
+      lookupVendorByGstNumber,
+      isGstLookupEnabled,
+      normalizeGstNumber,
+    } = require('../services/vendorGstLookupService');
+    const gstNumber = normalizeGstNumber(req.query.gstNumber);
+    if (!gstNumber) {
+      return res.status(400).json({ statusCode: 400, message: 'gstNumber query required' });
+    }
+    const result = await lookupVendorByGstNumber(gstNumber);
+    res.json({
+      data: {
+        available: isGstLookupEnabled() && !!result,
+        name: result?.name,
+        address: result?.address,
+        gstDetails: result?.gstDetails,
+        message: isGstLookupEnabled()
+          ? result
+            ? 'Vendor details fetched from GST registry'
+            : 'GST lookup enabled but no record found'
+          : 'GST auto-fetch will be available when the portal API is connected',
+      },
+    });
+  } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
+    next(err);
+  }
+});
+
 router.get('/:id/scorecard', param('id').isMongoId(), validate, async (req, res, next) => {
   try {
     const vendor = await Vendor.findById(req.params.id).populate('materialIds');

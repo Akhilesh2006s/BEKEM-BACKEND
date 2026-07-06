@@ -190,10 +190,29 @@ export interface PoGrnLineSummaryDto {
   isComplete: boolean;
 }
 
+export interface GrnHoldQueueItemDto {
+  id: string;
+  grnNumber: string;
+  status: string;
+  approvalStage: string;
+  requiresChairmanApproval: boolean;
+  holdReasons: string[];
+  invoiceNo?: string;
+  invoiceValue?: number;
+  receivedAt: string;
+  poNumber: string;
+  vendorName: string;
+  projectName?: string;
+  varianceDetails?: { lines: Array<Record<string, unknown>> } | null;
+}
+
 export interface PoGrnListItemDto {
   id: string;
   grnNumber: string;
   status: string;
+  approvalStage?: string;
+  requiresChairmanApproval?: boolean;
+  holdReasons?: string[];
   receiveType: string;
   isPartialGrn?: boolean;
   varianceDetails?: { lines: Array<Record<string, unknown>> } | null;
@@ -305,6 +324,7 @@ export interface MaterialDto {
   grade?: string;
   category?: string;
   categoryId?: string;
+  categoryRemarks?: string;
   hsnCode?: string;
   gstRate?: number;
   /** Latest approved purchase rate (reference only). */
@@ -319,9 +339,22 @@ export interface MaterialCategoryDto {
 }
 
 export interface ProjectGrnCounterDto {
-  projectId: string;
+  projectId?: string;
+  purchaseOrderId?: string;
   nextNumber: number;
   grnNumber: string;
+  lines?: PoGrnReceiptLineDto[];
+}
+
+export interface PoGrnReceiptLineDto {
+  lineIndex: number;
+  materialId?: string;
+  description: string;
+  unit: string;
+  orderedQty: number;
+  previouslyReceived: number;
+  remainingQty: number;
+  poRate: number;
 }
 
 export interface MaterialSearchResultDto {
@@ -368,7 +401,8 @@ export interface CreateIndentDto {
 export interface CreateSiteMaterialDto {
   name: string;
   unit: string;
-  category?: 'Raw Material' | 'Consumables' | 'Consumable';
+  category?: string;
+  categoryRemarks?: string;
   description?: string;
 }
 
@@ -395,6 +429,10 @@ export interface MaterialRequestDto {
   requester?: { id: string; name: string };
   estimatedValue?: number;
   escalatedToHo?: boolean;
+  storeStockVerified?: boolean;
+  origin?: 'SITE' | 'EXECUTIVE';
+  rfqId?: string;
+  rfqNumber?: string;
   canFullyIssue?: boolean;
   hasShortfall?: boolean;
   crossProjectStock?: Array<{
@@ -505,12 +543,23 @@ export interface ApiErrorDto {
   error?: string;
 }
 
+export interface VendorGstDetailsDto {
+  legalName?: string;
+  tradeName?: string;
+  status?: string;
+  address?: string;
+  fetchedAt?: string;
+  source?: 'MANUAL' | 'GST_PORTAL';
+}
+
 export interface VendorDto {
   id: string;
   name: string;
   code?: string;
   address: string;
   gstNumber: string;
+  gstDetails?: VendorGstDetailsDto;
+  gstLookupAvailable?: boolean;
   email: string;
   contactPerson: string;
   phone: string;
@@ -594,9 +643,65 @@ export interface QuotationDto {
   rfqId: string;
   vendorId: string;
   vendor?: VendorDto;
+  rate?: number;
+  gstPercent?: number;
+  finalCost?: number;
   amount: number;
+  paymentTerms?: string;
+  deliveryTerms?: string;
   terms: string;
+  isL1?: boolean;
   submittedAt: string;
+}
+
+export interface QuotationComparisonVendorDto {
+  id: string;
+  rfqId: string;
+  vendorId: string;
+  vendorName: string;
+  rate: number;
+  gstPercent: number;
+  subtotal?: number;
+  gstAmount?: number;
+  finalCost: number;
+  paymentTerms: string;
+  deliveryTerms: string;
+  isL1: boolean;
+  submittedAt?: string;
+}
+
+export interface QuotationComparisonDto {
+  vendors: QuotationComparisonVendorDto[];
+  l1VendorId?: string;
+  l1QuotationId?: string;
+}
+
+export interface MaterialPurchaseHistoryDto {
+  materialId?: string;
+  materialName: string;
+  minPurchaseRate: number | null;
+  maxPurchaseRate: number | null;
+}
+
+export interface RfqComparisonDto {
+  rfqId: string;
+  rfqNumber: string;
+  status: string;
+  quantity: number;
+  comparison: QuotationComparisonDto;
+  purchaseHistory: MaterialPurchaseHistoryDto[];
+  selectedVendorId?: string;
+  vendorSelectionReason?: string;
+  whyWeChoseThisVendor?: string;
+  items: Array<{
+    materialId: string;
+    name: string;
+    code: string;
+    quantity: number;
+    unit: string;
+  }>;
+  indentNumber?: string;
+  purchaseRequestId?: string;
 }
 
 export interface PoLineItemDto {
@@ -627,12 +732,14 @@ export interface PurchaseOrderDto {
   quotationId?: string;
   amount: number;
   paymentTerms: string;
+  additionalTerms?: string;
   billingAddress?: string;
   billingAddressType?: BillingAddressType;
   deliveryAddress?: string;
   deliveryAddressType?: DeliveryAddressType;
   deliveryAddressOtherText?: string;
   referenceNote?: string;
+  vendorSelectionReason?: string;
   lineItems?: PoLineItemDto[];
   status: string;
   fulfillmentStatus?: 'open_partial' | 'closed_complete';
@@ -700,6 +807,7 @@ export interface CreatePurchaseOrderWizardDto {
   purchaseRequestId?: string;
   vendorId: string;
   paymentTerms: string;
+  additionalTerms?: string;
 }
 
 export interface CreatePurchaseRequestDto {
@@ -812,6 +920,67 @@ export interface GlobalSearchDto {
   projects: SearchResultItemDto[];
   grns: SearchResultItemDto[];
   branchTransfers: SearchResultItemDto[];
+  employees: SearchResultItemDto[];
+}
+
+export interface MaterialAvailabilityDto {
+  materialId: string;
+  materialName: string;
+  materialCode: string;
+  unit: string;
+  storeAvailableQty: number;
+  companyAvailableQty: number;
+  stores: Array<{
+    siteId: string;
+    siteName: string;
+    projectId: string;
+    projectCode: string;
+    projectName: string;
+    availableQty: number;
+  }>;
+  projectWise: Array<{
+    projectId: string;
+    projectCode: string;
+    projectName: string;
+    availableQty: number;
+  }>;
+}
+
+export interface RfqListItemDto {
+  id: string;
+  rfqNumber: string;
+  status: string;
+  dueDate?: string | null;
+  indentNumber?: string;
+  purchaseRequestId?: string;
+  createdAt: string;
+}
+
+export interface RfqDetailDto {
+  id: string;
+  rfqNumber: string;
+  status: string;
+  dueDate?: string | null;
+  termsAndConditions: string[];
+  indentNumber?: string;
+  projectCode?: string;
+  projectName?: string;
+  items: Array<{
+    materialId: string;
+    name: string;
+    code: string;
+    quantity: number;
+    unit: string;
+  }>;
+  quotations?: QuotationComparisonVendorDto[];
+  comparison?: QuotationComparisonDto;
+  purchaseHistory?: MaterialPurchaseHistoryDto[];
+  selectedVendorId?: string;
+  vendorSelectionReason?: string;
+  whyWeChoseThisVendor?: string;
+  vendors: Array<{ id: string; name: string; email: string }>;
+  purchaseRequestId?: string;
+  createdAt?: string;
 }
 
 export interface TallySyncStatusDto {
@@ -1125,6 +1294,7 @@ export interface UpdateMaterialDto {
   grade?: string;
   category?: string;
   categoryId?: string;
+  categoryRemarks?: string;
   hsnCode?: string;
 }
 
@@ -1136,8 +1306,43 @@ export interface CreateMaterialDto {
   grade?: string;
   category?: string;
   categoryId?: string;
+  categoryRemarks?: string;
   hsnCode?: string;
   siteId?: string;
   initialQuantity?: number;
   lowStockThreshold?: number;
+}
+
+export interface ExpenseCategoryApprovalDto {
+  key: string;
+  label: string;
+  requiresPo: boolean;
+  pmMaxInr: number;
+  coordinatorMaxInr: number;
+  description?: string;
+}
+
+export interface OrgSettingsDto {
+  poPmMaxInr: number;
+  poCoordinatorMaxInr: number;
+  mrPmDailyMaxInr: number;
+  timezone: string;
+  expenseCategories: ExpenseCategoryApprovalDto[];
+  approvalRoutingNote: string;
+  updatedAt?: string;
+}
+
+export interface UpdateOrgSettingsDto {
+  poPmMaxInr?: number;
+  poCoordinatorMaxInr?: number;
+  mrPmDailyMaxInr?: number;
+  timezone?: string;
+  expenseCategories?: ExpenseCategoryApprovalDto[];
+}
+
+export interface ApprovalLimitsDto {
+  poPmMaxInr: number;
+  poCoordinatorMaxInr: number;
+  mrPmDailyMaxInr: number;
+  approvalRoutingNote: string;
 }

@@ -137,7 +137,7 @@ async function createBillFromGrn(grn, po, vendor, projectId, actorUserId) {
   if (existing) return existing;
 
   const invoiceValue = Number(grn.invoiceValue) || Number(po?.amount) || 0;
-  const billNumber = `BILL/${grn.grnNumber}`;
+  const billNumber = `BILL/${po?._id || po?.id}/${grn.grnNumber}`;
   const dueDate = new Date();
   dueDate.setDate(dueDate.getDate() + 30);
 

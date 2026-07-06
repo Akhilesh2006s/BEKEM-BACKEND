@@ -51,6 +51,7 @@ const purchaseOrderSchema = new mongoose.Schema(
     quotationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Quotation' },
     amount: { type: Number, required: true },
     paymentTerms: { type: String, default: '' },
+    additionalTerms: { type: String, default: '' },
     billingAddress: { type: String, default: '' },
     billingAddressType: {
       type: String,
@@ -66,6 +67,8 @@ const purchaseOrderSchema = new mongoose.Schema(
     deliveryAddressOtherText: { type: String, default: '' },
     expectedDeliveryDate: { type: Date },
     referenceNote: { type: String, default: '' },
+    /** Mandatory when PO vendor is not L1 for the linked RFQ. */
+    vendorSelectionReason: { type: String, default: '' },
     lineItems: { type: [poLineSchema], default: [] },
     attachments: { type: [attachmentSchema], default: [] },
     status: { type: String, enum: PO_STATUSES, default: 'DRAFT' },

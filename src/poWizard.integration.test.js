@@ -63,6 +63,7 @@ describe('PO wizard integration (MSME / HSN / GST / addresses)', () => {
         billingAddressType: 'registered_office',
         deliveryAddressType: 'workshop',
         deliveryAddress: BEKEM_WORKSHOP_ADDRESS,
+        whyWeChoseThisVendor: 'Selected for best rate and delivery terms in wizard test',
         orders: [
           {
             vendorId: vendor._id.toString(),

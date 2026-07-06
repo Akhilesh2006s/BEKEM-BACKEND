@@ -28,7 +28,9 @@ module.exports = {
   PoStatusTimeline: require('./PoStatusTimeline'),
   DeliveryAlert: require('./DeliveryAlert'),
   ProjectGrnCounter: require('./ProjectGrnCounter'),
+  PurchaseOrderGrnCounter: require('./PurchaseOrderGrnCounter'),
   MaterialCategory: require('./MaterialCategory'),
   IdempotencyRecord: require('./IdempotencyRecord'),
   PaymentBill: require('./PaymentBill'),
+  OrgSettings: require('./OrgSettings'),
 };

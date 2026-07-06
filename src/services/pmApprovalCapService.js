@@ -1,7 +1,15 @@
 const { StatusHistory, MaterialRequest } = require('../models');
 const { UserRole } = require('@afios/shared');
-const { MR_PM_DAILY_MAX_INR, APP_TIMEZONE } = require('../constants/indentPolicy');
+const { getSettings } = require('./orgSettingsService');
 const { estimateIndentAmount } = require('./purchaseRequestService');
+
+function dailyCap() {
+  return getSettings().mrPmDailyMaxInr;
+}
+
+function appTimezone() {
+  return getSettings().timezone;
+}
 
 function getTimezoneOffset(date, timeZone) {
   const utc = new Date(date.toLocaleString('en-US', { timeZone: 'UTC' }));
@@ -14,7 +22,7 @@ function getTimezoneOffset(date, timeZone) {
   return `${sign}${h}:${m}`;
 }
 
-function getDayBounds(date = new Date(), timeZone = APP_TIMEZONE) {
+function getDayBounds(date = new Date(), timeZone = appTimezone()) {
   const dayStr = new Intl.DateTimeFormat('en-CA', {
     timeZone,
     year: 'numeric',
@@ -50,7 +58,7 @@ async function getPmDailyApprovedTotal(pmUserId, date = new Date()) {
 }
 
 function wouldExceedPmDailyCap(currentTotal, requestValue) {
-  return currentTotal + requestValue > MR_PM_DAILY_MAX_INR;
+  return currentTotal + requestValue > dailyCap();
 }
 
 async function checkPmCanApprove(pmUserId, mr) {
@@ -60,15 +68,19 @@ async function checkPmCanApprove(pmUserId, mr) {
   return {
     dailyApprovedTotal,
     requestValue,
-    dailyCap: MR_PM_DAILY_MAX_INR,
+    dailyCap: dailyCap(),
     wouldExceed,
-    remaining: Math.max(0, MR_PM_DAILY_MAX_INR - dailyApprovedTotal),
+    remaining: Math.max(0, dailyCap() - dailyApprovedTotal),
   };
 }
 
 module.exports = {
-  MR_PM_DAILY_MAX_INR,
-  APP_TIMEZONE,
+  get MR_PM_DAILY_MAX_INR() {
+    return dailyCap();
+  },
+  get APP_TIMEZONE() {
+    return appTimezone();
+  },
   getDayBounds,
   getPmDailyApprovedTotal,
   wouldExceedPmDailyCap,

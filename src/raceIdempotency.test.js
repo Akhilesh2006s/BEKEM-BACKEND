@@ -7,6 +7,11 @@ const request = require('supertest');
 const { setupTestDb, teardownTestDb, loginAs, getApp } = require('./test/helpers');
 const { PurchaseOrder, GoodsReceiptNote, IdempotencyRecord } = require('./models');
 
+const mandatoryAttachments = [
+  { name: 'invoice.pdf', fileType: 'application/pdf', category: 'INVOICE' },
+  { name: 'challan.pdf', fileType: 'application/pdf', category: 'CHALLAN' },
+];
+
 describe('Race & idempotency', () => {
   let app;
   let chairmanToken;
@@ -76,6 +81,7 @@ describe('Race & idempotency', () => {
       receiveType: 'PARTIAL',
       remarks: 'Idempotency test partial GRN',
       invoiceDate: new Date().toISOString(),
+      attachments: mandatoryAttachments,
     };
     const key = `test-grn-${po.id}`;
 

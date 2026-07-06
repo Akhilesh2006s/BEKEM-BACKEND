@@ -1,4 +1,4 @@
-const { ProjectGrnCounter } = require('../models');
+const { PurchaseOrderGrnCounter } = require('../models');
 
 const GRN_NUMBER_PREFIX = 'GRN-';
 
@@ -13,38 +13,27 @@ function parseGrnSequence(grnNumber) {
 }
 
 /**
- * Atomically allocate the next project-scoped GRN number (never resets).
+ * Atomically allocate the next PO-scoped GRN number (resets per purchase order).
  */
-async function allocateProjectGrnNumber(projectId) {
-  const counter = await ProjectGrnCounter.findOneAndUpdate(
-    { projectId },
+async function allocatePoGrnNumber(purchaseOrderId) {
+  const counter = await PurchaseOrderGrnCounter.findOneAndUpdate(
+    { purchaseOrderId },
     { $inc: { lastGrnNumber: 1 } },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
   return formatGrnNumber(counter.lastGrnNumber);
 }
 
-async function peekNextProjectGrnNumber(projectId) {
-  const counter = await ProjectGrnCounter.findOne({ projectId }).lean();
+async function peekNextPoGrnNumber(purchaseOrderId) {
+  const counter = await PurchaseOrderGrnCounter.findOne({ purchaseOrderId }).lean();
   const next = (counter?.lastGrnNumber || 0) + 1;
   return { nextNumber: next, grnNumber: formatGrnNumber(next) };
 }
 
-async function syncProjectGrnCounterFromExisting(projectId) {
-  const { GoodsReceiptNote, PurchaseOrder, PurchaseRequest } = require('../models');
+async function syncPoGrnCounterFromExisting(purchaseOrderId) {
+  const { GoodsReceiptNote } = require('../models');
 
-  const prIds = await PurchaseRequest.find({ projectId }).select('_id').lean();
-  const poIds = await PurchaseOrder.find({
-    purchaseRequestId: { $in: prIds.map((p) => p._id) },
-  })
-    .select('_id')
-    .lean();
-
-  const grns = await GoodsReceiptNote.find({
-    purchaseOrderId: { $in: poIds.map((p) => p._id) },
-  })
-    .select('grnNumber')
-    .lean();
+  const grns = await GoodsReceiptNote.find({ purchaseOrderId }).select('grnNumber').lean();
 
   let maxSeq = 0;
   for (const g of grns) {
@@ -53,10 +42,10 @@ async function syncProjectGrnCounterFromExisting(projectId) {
 
   if (maxSeq === 0) return null;
 
-  const existing = await ProjectGrnCounter.findOne({ projectId }).lean();
+  const existing = await PurchaseOrderGrnCounter.findOne({ purchaseOrderId }).lean();
   if (!existing || existing.lastGrnNumber < maxSeq) {
-    await ProjectGrnCounter.findOneAndUpdate(
-      { projectId },
+    await PurchaseOrderGrnCounter.findOneAndUpdate(
+      { purchaseOrderId },
       { $set: { lastGrnNumber: maxSeq } },
       { upsert: true }
     );
@@ -64,9 +53,30 @@ async function syncProjectGrnCounterFromExisting(projectId) {
   return maxSeq;
 }
 
+/** @deprecated Use allocatePoGrnNumber */
+async function allocateProjectGrnNumber(projectId) {
+  void projectId;
+  throw new Error('GRN numbers are allocated per purchase order. Use allocatePoGrnNumber.');
+}
+
+/** @deprecated Use peekNextPoGrnNumber */
+async function peekNextProjectGrnNumber(projectId) {
+  void projectId;
+  return { nextNumber: 1, grnNumber: formatGrnNumber(1) };
+}
+
+/** @deprecated Use syncPoGrnCounterFromExisting */
+async function syncProjectGrnCounterFromExisting(projectId) {
+  void projectId;
+  return null;
+}
+
 module.exports = {
   formatGrnNumber,
   parseGrnSequence,
+  allocatePoGrnNumber,
+  peekNextPoGrnNumber,
+  syncPoGrnCounterFromExisting,
   allocateProjectGrnNumber,
   peekNextProjectGrnNumber,
   syncProjectGrnCounterFromExisting,

@@ -12,6 +12,8 @@ async function setupTestDb() {
   mongoServer = await MongoMemoryServer.create();
   await mongoose.connect(mongoServer.getUri());
   await seedDatabase();
+  const { loadOrgSettings } = require('../services/orgSettingsService');
+  await loadOrgSettings();
   const { app: testApp } = createApp();
   app = testApp;
 }

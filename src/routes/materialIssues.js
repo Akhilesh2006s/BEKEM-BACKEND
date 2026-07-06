@@ -66,6 +66,7 @@ function serializeIssue(issue) {
     note: issue.note,
     issueReason: issue.issueReason,
     issueReasonOtherText: issue.issueReasonOtherText || '',
+    issueType: issue.issueType,
     attachments: (issue.attachments || []).map((a) => ({
       name: a.name,
       fileType: a.fileType,
@@ -102,6 +103,7 @@ router.post(
     body('items.*.materialId').optional().isMongoId(),
     body('items.*.quantity').optional().isFloat({ min: 0.01 }),
     body('reason').isIn(ISSUE_REASONS).withMessage('Issue reason is required'),
+    body('issueType').isIn(['WORK_ISSUE', 'CONTRACT_ISSUE']).withMessage('Issue type is required'),
     body('issuedToType').isIn(['EMPLOYEE', 'CONTRACTOR', 'DEPARTMENT']).withMessage('Issued to type is required'),
     body('issuedToName').trim().notEmpty().withMessage('Issued to name is required'),
     body('reasonOtherText').optional().trim(),
@@ -156,6 +158,7 @@ router.post(
         issuedByUserId: req.user._id,
         issueReason: reason,
         issueReasonOtherText: reason === 'other' ? String(req.body.reasonOtherText || '').trim() : '',
+        issueType: req.body.issueType,
         issuedToType: req.body.issuedToType,
         issuedToName: req.body.issuedToName.trim(),
         note: req.body.note || req.body.remark || '',

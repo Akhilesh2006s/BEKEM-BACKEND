@@ -16,7 +16,7 @@ function buildLineKey(line, index) {
   return line._id?.toString() || `idx-${index}`;
 }
 
-async function getCumulativeReceivedByLine(poId, { excludeStatuses = ['DRAFT'] } = {}) {
+async function getCumulativeReceivedByLine(poId, { excludeStatuses = ['DRAFT', 'ON_HOLD', 'REJECTED'] } = {}) {
   const grns = await GoodsReceiptNote.find({
     purchaseOrderId: poId,
     status: { $nin: excludeStatuses },
@@ -179,6 +179,9 @@ async function listPoGrns(poId) {
         id: g._id.toString(),
         grnNumber: g.grnNumber,
         status: g.status,
+        approvalStage: g.approvalStage,
+        requiresChairmanApproval: Boolean(g.requiresChairmanApproval),
+        holdReasons: g.holdReasons || [],
         receiveType: g.receiveType,
         isPartialGrn: Boolean(g.isPartialGrn),
         varianceDetails: g.varianceDetails,
@@ -210,6 +213,27 @@ function stripVarianceForRole(grnPayload, role) {
   return copy;
 }
 
+async function getPoGrnReceiptLines(po) {
+  const cumulative = await getCumulativeReceivedByLine(po._id);
+  return (po.lineItems || []).map((line, index) => {
+    const key = buildLineKey(line, index);
+    const orderedQty = Number(line.quantity);
+    const previouslyReceived =
+      cumulative[key] || cumulative[line.materialId?.toString()] || 0;
+    const remainingQty = Math.max(0, orderedQty - previouslyReceived);
+    return {
+      lineIndex: index,
+      materialId: line.materialId?.toString(),
+      description: line.description,
+      unit: line.unit || '',
+      orderedQty,
+      previouslyReceived,
+      remainingQty,
+      poRate: Number(line.rate),
+    };
+  });
+}
+
 module.exports = {
   canViewGrnVariance,
   getCumulativeReceivedByLine,
@@ -217,4 +241,5 @@ module.exports = {
   syncPoFulfillment,
   listPoGrns,
   stripVarianceForRole,
+  getPoGrnReceiptLines,
 };

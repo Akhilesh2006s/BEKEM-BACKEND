@@ -3,8 +3,6 @@ const { connectMongo } = require('./db/connectMongo');
 const { createApp } = require('./app');
 const { ensureDefaultAddresses } = require('./services/addressBootstrapService');
 const { ensureMaterialCategories } = require('./services/materialCategoryService');
-const { syncProjectGrnCounterFromExisting } = require('./services/grnCounterService');
-const { Project } = require('./models');
 
 const PORT = process.env.PORT || 4000;
 const { app, server } = createApp();
@@ -14,10 +12,6 @@ async function start() {
     await connectMongo();
     await ensureDefaultAddresses();
     await ensureMaterialCategories();
-    const projects = await Project.find().select('_id');
-    for (const p of projects) {
-      await syncProjectGrnCounterFromExisting(p._id);
-    }
     console.log('Connected to MongoDB');
 
     const { processOverdueDeliveries } = require('./services/deliveryAlertService');

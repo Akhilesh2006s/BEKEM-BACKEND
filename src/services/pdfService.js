@@ -58,7 +58,7 @@ function generateAuditLogPdf(logs, filters) {
 }
 
 function buildPurchaseOrderPdfContent(doc, po) {
-  const { DEFAULT_PO_TERMS } = require('../constants/bekemAddresses');
+  const { buildAllPoTerms } = require('../constants/poTerms');
   const pageWidth = 595;
   const margin = 50;
   const contentWidth = pageWidth - margin * 2;
@@ -202,10 +202,7 @@ function buildPurchaseOrderPdfContent(doc, po) {
 
   doc.fontSize(9).fillColor('#1A4FA0').text('Terms & Conditions', margin, y);
   y += 14;
-  const terms = [...DEFAULT_PO_TERMS];
-  if (po.paymentTerms && !terms.some((t) => t.includes(po.paymentTerms))) {
-    terms.push(`Payment: ${po.paymentTerms}`);
-  }
+  const terms = buildAllPoTerms(po);
   terms.forEach((term, i) => {
     const lineH = doc.heightOfString(`${i + 1}. ${term}`, { width: contentWidth });
     if (y + lineH > 700) {
@@ -411,6 +408,62 @@ function generateMaterialIssuePdf(issue) {
   };
 }
 
+function buildRfqPdfContent(doc, detail) {
+  header(doc, 'REQUEST FOR QUOTATION', detail.rfqNumber);
+  row(doc, 'Project', detail.projectCode ? `${detail.projectCode} — ${detail.projectName || ''}` : '—');
+  if (detail.indentNumber) row(doc, 'Indent', detail.indentNumber);
+  if (detail.dueDate) row(doc, 'Due date', new Date(detail.dueDate).toLocaleDateString('en-IN'));
+  doc.moveDown(0.5);
+
+  doc.fontSize(11).fillColor('#0F172A').text('Items');
+  doc.moveDown(0.4);
+  const colX = [50, 280, 380, 460];
+  doc.fontSize(9).fillColor('#64748B');
+  doc.text('Item', colX[0], doc.y, { width: 220 });
+  doc.text('Qty', colX[1], doc.y - doc.currentLineHeight(), { width: 80 });
+  doc.text('Unit', colX[2], doc.y - doc.currentLineHeight(), { width: 60 });
+  doc.moveDown(0.5);
+  doc.strokeColor('#E2E8F0').moveTo(50, doc.y).lineTo(545, doc.y).stroke();
+  doc.moveDown(0.4);
+
+  (detail.items || []).forEach((item, i) => {
+    if (doc.y > 700) doc.addPage();
+    doc.fontSize(9).fillColor('#0F172A');
+    doc.text(`${i + 1}. ${item.name}`, colX[0], doc.y, { width: 220 });
+    doc.text(String(item.quantity), colX[1], doc.y - doc.currentLineHeight(), { width: 80 });
+    doc.text(item.unit || 'Nos', colX[2], doc.y - doc.currentLineHeight(), { width: 60 });
+    doc.moveDown(0.5);
+  });
+
+  doc.moveDown(1);
+  doc.fontSize(11).fillColor('#0F172A').text('Terms & Conditions');
+  doc.moveDown(0.4);
+  (detail.termsAndConditions || []).forEach((term, i) => {
+    if (doc.y > 720) doc.addPage();
+    doc.fontSize(9).fillColor('#334155').text(`${i + 1}. ${term}`);
+    doc.moveDown(0.25);
+  });
+}
+
+function generateRfqPdf(detail) {
+  return (res) => {
+    const filename = `${(detail.rfqNumber || 'RFQ').replace(/[/\\?%*:|"<>]/g, '-')}.pdf`;
+    streamPdf(res, filename, (doc) => buildRfqPdfContent(doc, detail));
+  };
+}
+
+function generateRfqPdfBuffer(detail) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ margin: 50, size: 'A4' });
+    const chunks = [];
+    doc.on('data', (c) => chunks.push(c));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+    buildRfqPdfContent(doc, detail);
+    doc.end();
+  });
+}
+
 module.exports = {
   generateAuditLogPdf,
   generatePurchaseOrderPdf,
@@ -418,4 +471,6 @@ module.exports = {
   generateBudgetPdf,
   generateWorkOrderPdf,
   generateMaterialIssuePdf,
+  generateRfqPdf,
+  generateRfqPdfBuffer,
 };

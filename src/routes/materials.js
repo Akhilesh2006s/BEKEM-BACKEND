@@ -6,6 +6,7 @@ const { requireCapability } = require('../middleware/rbac');
 const { validate } = require('../middleware/validate');
 const { UserRole } = require('@afios/shared');
 const { serializeMaterial, userCanAccessSite } = require('../utils/serialize');
+const { PHASE_CATEGORIES, assertCategoryRemarks } = require('../services/materialCategoryService');
 
 const router = express.Router();
 router.use(authenticate);
@@ -99,7 +100,10 @@ router.get('/catalog', async (req, res, next) => {
     }
 
     const { dedupeMaterialListResults } = require('../services/materialDedupService');
-    const allMatching = await Material.find(filter).sort({ code: 1 }).lean();
+    const allMatching = await Material.find(filter)
+      .populate('categoryId')
+      .sort({ category: 1, code: 1 })
+      .lean();
     const deduped = dedupeMaterialListResults(
       allMatching.map((m) => serializeMaterial(m)),
       { collapseDuplicateNames: false }
@@ -184,7 +188,8 @@ router.post(
   [
     body('name').trim().notEmpty().isLength({ max: 200 }),
     body('unit').trim().notEmpty().isLength({ max: 40 }),
-    body('category').optional().trim().isIn(['Raw Material', 'Consumables', 'Consumable']),
+    body('category').optional().trim().isIn(PHASE_CATEGORIES),
+    body('categoryRemarks').optional().trim().isLength({ max: 500 }),
     body('description').optional().trim().isLength({ max: 500 }),
   ],
   validate,
@@ -195,6 +200,7 @@ router.post(
         name: req.body.name,
         unit: req.body.unit,
         category: req.body.category,
+        categoryRemarks: req.body.categoryRemarks,
         description: req.body.description,
         createdByUserId: req.user._id,
       });
@@ -218,7 +224,8 @@ router.post(
     body('description').optional().trim(),
     body('grade').optional().trim(),
     body('categoryId').optional().isMongoId(),
-    body('category').optional().trim(),
+    body('category').optional().trim().isIn(PHASE_CATEGORIES),
+    body('categoryRemarks').optional().trim().isLength({ max: 500 }),
     body('hsnCode').trim().notEmpty().withMessage('HSN code is required').isLength({ min: 4, max: 8 }),
     body('gstRate').optional().isFloat({ min: 0, max: 28 }),
     body('siteId').optional().isMongoId(),
@@ -244,11 +251,13 @@ router.post(
       const { siteId, initialQuantity, lowStockThreshold, categoryId, category, ...materialData } =
         req.body;
       const cat = await resolveMaterialCategory({ categoryId, category });
+      assertCategoryRemarks(cat.name, req.body.categoryRemarks);
       const material = await Material.create({
         ...materialData,
         code: String(materialData.code || '').toUpperCase(),
         categoryId: cat._id,
         category: cat.name,
+        categoryRemarks: cat.name === 'Others' ? String(req.body.categoryRemarks || '').trim() : '',
       });
 
       const resolvedSiteId = siteId || req.user.assignedSiteId;
@@ -285,7 +294,8 @@ router.patch(
     body('description').optional().trim(),
     body('grade').optional().trim(),
     body('categoryId').optional().isMongoId(),
-    body('category').optional().trim(),
+    body('category').optional().trim().isIn(PHASE_CATEGORIES),
+    body('categoryRemarks').optional().trim().isLength({ max: 500 }),
     body('hsnCode').optional().trim(),
   ],
   validate,
@@ -328,8 +338,18 @@ router.patch(
           categoryId: req.body.categoryId || material.categoryId,
           category: req.body.category || material.category,
         });
+        const remarks =
+          req.body.categoryRemarks !== undefined
+            ? req.body.categoryRemarks
+            : material.categoryRemarks;
+        assertCategoryRemarks(cat.name, remarks);
         material.categoryId = cat._id;
         material.category = cat.name;
+        material.categoryRemarks =
+          cat.name === 'Others' ? String(remarks || '').trim() : '';
+      } else if (req.body.categoryRemarks !== undefined) {
+        assertCategoryRemarks(material.category, req.body.categoryRemarks);
+        material.categoryRemarks = String(req.body.categoryRemarks || '').trim();
       }
       if (req.body.hsnCode !== undefined) material.hsnCode = req.body.hsnCode;
 

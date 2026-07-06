@@ -120,6 +120,29 @@ router.get('/:id/timeline', param('id').isMongoId(), validate, async (req, res, 
   }
 });
 
+router.get('/:id/grn-counter', param('id').isMongoId(), validate, async (req, res, next) => {
+  try {
+    const po = await PurchaseOrder.findById(req.params.id);
+    if (!po) return res.status(404).json({ statusCode: 404, message: 'Not found' });
+    await assertCanViewPurchaseOrder(req.user, po);
+    const { peekNextPoGrnNumber } = require('../services/grnCounterService');
+    const { getPoGrnReceiptLines } = require('../services/grnFulfillmentService');
+    const preview = await peekNextPoGrnNumber(po._id);
+    const lines = await getPoGrnReceiptLines(po);
+    res.json({
+      data: {
+        purchaseOrderId: po._id.toString(),
+        nextNumber: preview.nextNumber,
+        grnNumber: preview.grnNumber,
+        lines,
+      },
+    });
+  } catch (err) {
+    if (err.statusCode) return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
+    next(err);
+  }
+});
+
 router.get('/:id/grns', param('id').isMongoId(), validate, async (req, res, next) => {
   try {
     const po = await PurchaseOrder.findById(req.params.id).populate(poPopulate);
@@ -184,12 +207,44 @@ router.post(
             .filter(Boolean);
         }
       }
-      const { quotations } = await ensureRfqAndQuotations(
+      const { quotations, rfq } = await ensureRfqAndQuotations(
         pr,
         pr.projectId.code,
         req.user._id,
         materialIds
       );
+
+      const { buildComparisonTable } = require('../services/quotationComparisonService');
+      const { getMaterialPurchaseRateRange } = require('../services/materialPricingService');
+      const { getIndentLineItems } = require('../services/materialRequestHelpers');
+
+      let quantity = 1;
+      let purchaseHistory = [];
+      if (pr.materialRequestId) {
+        const mr = await require('../models').MaterialRequest.findById(pr.materialRequestId).populate(
+          'items.materialId'
+        );
+        if (mr) {
+          const lines = getIndentLineItems(mr);
+          quantity = lines.reduce((s, l) => s + (l.quantityRequested || 0), 0) || 1;
+          const rateRange = await getMaterialPurchaseRateRange(
+            lines.map((l) => (l.materialId?._id || l.materialId)?.toString()).filter(Boolean)
+          );
+          purchaseHistory = lines.map((line) => {
+            const mid = (line.materialId?._id || line.materialId)?.toString();
+            const mat = line.materialId && typeof line.materialId === 'object' ? line.materialId : null;
+            const range = mid ? rateRange.get(mid) : null;
+            return {
+              materialId: mid,
+              materialName: mat?.name || 'Material',
+              minPurchaseRate: range?.minRate ?? null,
+              maxPurchaseRate: range?.maxRate ?? null,
+            };
+          });
+        }
+      }
+
+      const comparison = buildComparisonTable(quotations, quantity);
 
       let deliveryAddress = '';
       let lineItems = [];
@@ -208,6 +263,9 @@ router.post(
 
       res.json({
         data: quotations.map(serializeQuotation),
+        comparison,
+        purchaseHistory,
+        rfqId: rfq?._id?.toString(),
         deliveryAddress,
         billingAddress: BEKEM_BUYER_ADDRESS,
         lineItems,
@@ -224,6 +282,7 @@ router.post(
   requireCapability('CREATE_PO'),
   [
     body('paymentTerms').trim().notEmpty(),
+    body('additionalTerms').optional().isString(),
     body('materialRequestId').optional().isMongoId(),
     body('purchaseRequestId').optional().isMongoId(),
     body('billingAddress').optional().isString(),
@@ -233,6 +292,8 @@ router.post(
     body('deliveryAddressOtherText').optional().isString(),
     body('expectedDeliveryDate').optional().isISO8601(),
     body('referenceNote').optional().isString(),
+    body('whyWeChoseThisVendor').optional().isString(),
+    body('vendorSelectionReasons').optional().isObject(),
     body('orders').isArray({ min: 1 }),
     body('orders.*.vendorId').isMongoId(),
     body('orders.*.lineItems').isArray({ min: 1 }),
@@ -263,6 +324,7 @@ router.post(
         purchaseRequestId: req.body.purchaseRequestId,
         orders: req.body.orders,
         paymentTerms: req.body.paymentTerms,
+        additionalTerms: req.body.additionalTerms,
         billingAddress: req.body.billingAddress,
         billingAddressType: req.body.billingAddressType,
         deliveryAddress: req.body.deliveryAddress,
@@ -270,6 +332,8 @@ router.post(
         deliveryAddressOtherText: req.body.deliveryAddressOtherText,
         expectedDeliveryDate: req.body.expectedDeliveryDate,
         referenceNote: req.body.referenceNote,
+        whyWeChoseThisVendor: req.body.whyWeChoseThisVendor,
+        vendorSelectionReasons: req.body.vendorSelectionReasons,
         actorUserId: req.user._id,
       });
 
@@ -293,6 +357,7 @@ router.post(
   [
     body('vendorId').isMongoId(),
     body('paymentTerms').trim().notEmpty(),
+    body('additionalTerms').optional().isString(),
     body('materialRequestId').optional().isMongoId(),
     body('purchaseRequestId').optional().isMongoId(),
     body('billingAddress').optional().isString(),
@@ -302,6 +367,8 @@ router.post(
     body('deliveryAddressOtherText').optional().isString(),
     body('expectedDeliveryDate').optional().isISO8601(),
     body('referenceNote').optional().isString(),
+    body('whyWeChoseThisVendor').optional().isString(),
+    body('vendorSelectionReason').optional().isString(),
     body('lineItems').optional().isArray(),
     body('lineItems.*.description').optional().isString(),
     body('lineItems.*.materialId').optional().isMongoId(),
@@ -325,11 +392,21 @@ router.post(
         });
       }
 
+      const { validatePoVendorSelection } = require('../services/rfqService');
+      await validatePoVendorSelection(req.body.purchaseRequestId, [req.body.vendorId], {
+        vendorSelectionReasons: req.body.vendorSelectionReason
+          ? { [req.body.vendorId]: req.body.vendorSelectionReason }
+          : {},
+        whyWeChoseThisVendor: req.body.whyWeChoseThisVendor,
+        actorUserId: req.user._id,
+      });
+
       const result = await createPurchaseOrderFromWizard({
         materialRequestId: req.body.materialRequestId,
         purchaseRequestId: req.body.purchaseRequestId,
         vendorId: req.body.vendorId,
         paymentTerms: req.body.paymentTerms,
+        additionalTerms: req.body.additionalTerms,
         billingAddress: req.body.billingAddress,
         billingAddressType: req.body.billingAddressType,
         deliveryAddress: req.body.deliveryAddress,
@@ -337,6 +414,7 @@ router.post(
         deliveryAddressOtherText: req.body.deliveryAddressOtherText,
         expectedDeliveryDate: req.body.expectedDeliveryDate,
         referenceNote: req.body.referenceNote,
+        vendorSelectionReason: req.body.vendorSelectionReason,
         lineItems: req.body.lineItems,
         attachments: req.body.attachments,
         actorUserId: req.user._id,
@@ -402,6 +480,7 @@ router.patch(
   [
     param('id').isMongoId(),
     body('paymentTerms').optional().trim(),
+    body('additionalTerms').optional().trim(),
     body('billingAddress').optional().isString(),
     body('billingAddressType').optional().isIn(['registered_office', 'project_billing']),
     body('deliveryAddress').optional().isString(),

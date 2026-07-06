@@ -26,7 +26,7 @@ const {
   getCumulativeReceivedByLine,
 } = require('./services/grnFulfillmentService');
 const { EDITABLE_STATUSES, COORDINATOR_EDIT_STATUSES, CHAIRMAN_EDIT_STATUSES } = require('./services/poEditService');
-const { allocateProjectGrnNumber } = require('./services/grnCounterService');
+const { allocatePoGrnNumber } = require('./services/grnCounterService');
 
 describe('PO tracking & GRN fulfillment (spec 21–29)', () => {
   let po;
@@ -152,7 +152,7 @@ describe('PO tracking & GRN fulfillment (spec 21–29)', () => {
     );
 
     await GoodsReceiptNote.create({
-      grnNumber: await allocateProjectGrnNumber(project._id),
+      grnNumber: await allocatePoGrnNumber(po._id),
       purchaseOrderId: po._id,
       siteId: site._id,
       items: batch1.items,
@@ -174,7 +174,7 @@ describe('PO tracking & GRN fulfillment (spec 21–29)', () => {
     );
 
     await GoodsReceiptNote.create({
-      grnNumber: await allocateProjectGrnNumber(project._id),
+      grnNumber: await allocatePoGrnNumber(po._id),
       purchaseOrderId: po._id,
       siteId: site._id,
       items: batch2.items,

@@ -142,37 +142,39 @@ router.post(
 
       if (req.user.role === UserRole.PROJECT_MANAGER) {
         if (!materialRequestId) {
-          return {
-            statusCode: 400,
-            body: { statusCode: 400, message: 'Branch transfer must be linked to a forwarded indent' },
-          };
-        }
+          if (!userManagesProject(req.user, fromProjectId) || !userManagesProject(req.user, toProjectId)) {
+            return {
+              statusCode: 403,
+              body: { statusCode: 403, message: 'You must manage both source and destination projects' },
+            };
+          }
+        } else {
+          const mr = await MaterialRequest.findById(materialRequestId);
+          if (!mr) {
+            return { statusCode: 404, body: { statusCode: 404, message: 'Linked indent not found' } };
+          }
+          if (mr.status !== 'FORWARDED_TO_PM') {
+            return {
+              statusCode: 400,
+              body: { statusCode: 400, message: 'Indent is not awaiting PM review' },
+            };
+          }
 
-        const mr = await MaterialRequest.findById(materialRequestId);
-        if (!mr) {
-          return { statusCode: 404, body: { statusCode: 404, message: 'Linked indent not found' } };
-        }
-        if (mr.status !== 'FORWARDED_TO_PM') {
-          return {
-            statusCode: 400,
-            body: { statusCode: 400, message: 'Indent is not awaiting PM review' },
-          };
-        }
+          const destProjectId = (mr.projectId?._id || mr.projectId).toString();
+          toProjectId = destProjectId;
 
-        const destProjectId = (mr.projectId?._id || mr.projectId).toString();
-        toProjectId = destProjectId;
-
-        if (!userManagesProject(req.user, toProjectId)) {
-          return {
-            statusCode: 403,
-            body: { statusCode: 403, message: 'You do not manage the requesting project' },
-          };
-        }
-        if (!userManagesProject(req.user, fromProjectId)) {
-          return {
-            statusCode: 403,
-            body: { statusCode: 403, message: 'You do not manage the source project' },
-          };
+          if (!userManagesProject(req.user, toProjectId)) {
+            return {
+              statusCode: 403,
+              body: { statusCode: 403, message: 'You do not manage the requesting project' },
+            };
+          }
+          if (!userManagesProject(req.user, fromProjectId)) {
+            return {
+              statusCode: 403,
+              body: { statusCode: 403, message: 'You do not manage the source project' },
+            };
+          }
         }
       } else {
         return {

@@ -56,8 +56,48 @@ function attachUnitPrices(materials, rateByMaterial) {
   });
 }
 
+/**
+ * Min / max approved PO line rate per material.
+ * @param {string[]} materialIds
+ * @returns {Promise<Map<string, { minRate: number|null, maxRate: number|null }>>}
+ */
+async function getMaterialPurchaseRateRange(materialIds) {
+  const ids = [...new Set((materialIds || []).map((id) => id?.toString()).filter(Boolean))];
+  const rangeByMaterial = new Map();
+  if (!ids.length) return rangeByMaterial;
+
+  const objectIds = ids
+    .filter((id) => mongoose.Types.ObjectId.isValid(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
+
+  const rows = await PurchaseOrder.aggregate([
+    { $match: { status: { $in: APPROVED_PO_STATUSES } } },
+    { $unwind: '$lineItems' },
+    { $match: { 'lineItems.materialId': { $in: objectIds } } },
+    {
+      $group: {
+        _id: '$lineItems.materialId',
+        minRate: { $min: '$lineItems.rate' },
+        maxRate: { $max: '$lineItems.rate' },
+      },
+    },
+  ]);
+
+  for (const row of rows) {
+    const mid = row._id?.toString();
+    if (mid) {
+      rangeByMaterial.set(mid, {
+        minRate: row.minRate != null ? Number(row.minRate) : null,
+        maxRate: row.maxRate != null ? Number(row.maxRate) : null,
+      });
+    }
+  }
+  return rangeByMaterial;
+}
+
 module.exports = {
   getLatestApprovedRate,
   getLatestApprovedRates,
+  getMaterialPurchaseRateRange,
   attachUnitPrices,
 };

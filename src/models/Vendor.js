@@ -31,6 +31,14 @@ const vendorSchema = new mongoose.Schema(
     authorizedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     authorizedAt: { type: Date },
     authorizationRemark: { type: String, default: '' },
+    gstDetails: {
+      legalName: { type: String, default: '' },
+      tradeName: { type: String, default: '' },
+      status: { type: String, default: '' },
+      address: { type: String, default: '' },
+      fetchedAt: { type: Date },
+      source: { type: String, enum: ['MANUAL', 'GST_PORTAL'], default: 'MANUAL' },
+    },
   },
   { timestamps: true }
 );

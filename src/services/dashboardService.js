@@ -216,11 +216,15 @@ async function getChairmanKpis(query = {}) {
       chairmanPending: woStatusMap.CHAIRMAN_PENDING || 0,
       inProgress: (woStatusMap.ACCEPTED || 0) + (woStatusMap.IN_PROGRESS || 0),
     },
-    approvalRules: {
-      pmMaxInr: 5000,
-      coordinatorMaxInr: 10000,
-      note: 'Under ₹5k → PM · ₹5k–₹10k → Coordinator · Above ₹10k → Chairman (or Coordinator if Chairman not on premises)',
-    },
+    approvalRules: (() => {
+      const { getApprovalLimits } = require('./orgSettingsService');
+      const limits = getApprovalLimits();
+      return {
+        pmMaxInr: limits.poPmMaxInr,
+        coordinatorMaxInr: limits.poCoordinatorMaxInr,
+        note: limits.approvalRoutingNote,
+      };
+    })(),
     projectBreakdown,
     projectPagination: buildPaginationMeta(page, limit, projectTotal),
     sparklines: {
@@ -501,13 +505,14 @@ async function globalSearch(user, q) {
       projects: [],
       grns: [],
       branchTransfers: [],
+      employees: [],
     };
   }
 
   const term = q.trim();
   const regex = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
 
-  const [materials, vendors, projects] = await Promise.all([
+  const [materials, vendors, projects, employees] = await Promise.all([
     Material.find({
       isActive: { $ne: false },
       $or: [
@@ -520,10 +525,16 @@ async function globalSearch(user, q) {
     }).limit(8),
     Vendor.find({ name: regex }).limit(8),
     Project.find({ $or: [{ name: regex }, { code: regex }] }).limit(8),
+    User.find({
+      $or: [{ name: regex }, { email: regex }],
+    })
+      .select('name email role')
+      .limit(8),
   ]);
 
   const reqFilter = {
     $or: [{ indentNumber: regex }],
+    origin: { $ne: 'EXECUTIVE' },
   };
   if (user.role === UserRole.PROJECT_MANAGER && user.assignedProjectIds?.length) {
     reqFilter.projectId = { $in: user.assignedProjectIds };
@@ -621,6 +632,16 @@ async function globalSearch(user, q) {
     return `/branch-transfers/${bt._id}`;
   }
 
+  function employeeHref(u) {
+    if (u.role === UserRole.PROJECT_MANAGER) return '/pm';
+    if (u.role === UserRole.EXECUTIVE) return '/executive';
+    if (u.role === UserRole.COORDINATOR) return '/coordinator';
+    if (u.role === UserRole.CHAIRMAN) return '/chairman';
+    if (u.role === UserRole.STORE_INCHARGE) return '/store';
+    if (u.role === UserRole.SITE_INCHARGE) return '/site';
+    return '/profile';
+  }
+
   return {
     materials: materials.map((m) => ({
       id: m._id.toString(),
@@ -672,6 +693,12 @@ async function globalSearch(user, q) {
       label: bt.transferNumber,
       sublabel: `Branch transfer · ${bt.status}`,
       href: btHref(bt),
+    })),
+    employees: employees.map((u) => ({
+      id: u._id.toString(),
+      label: u.name,
+      sublabel: [u.role?.replace(/_/g, ' '), u.email].filter(Boolean).join(' · '),
+      href: employeeHref(u),
     })),
   };
 }
@@ -997,7 +1024,9 @@ async function getPmDashboard(user) {
   const { getPmDailyApprovedTotal, MR_PM_DAILY_MAX_INR } = require('./pmApprovalCapService');
 
   const projectIds = user.assignedProjectIds || [];
-  const projectFilter = projectIds.length ? { projectId: { $in: projectIds } } : {};
+  const projectFilter = projectIds.length
+    ? { projectId: { $in: projectIds }, origin: { $ne: 'EXECUTIVE' } }
+    : { origin: { $ne: 'EXECUTIVE' } };
 
   const [pendingRequests, approveQueue, purchaseRequests, notifications] = await Promise.all([
     MaterialRequest.find({ ...projectFilter, status: 'PENDING_STORE' })

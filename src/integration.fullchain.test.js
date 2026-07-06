@@ -75,6 +75,7 @@ describe('Full chain integration', () => {
         purchaseRequestId: prId,
         vendorId,
         paymentTerms: 'Net 30 days',
+        whyWeChoseThisVendor: 'Best rate and delivery for integration test procurement',
       });
 
     assert.strictEqual(poRes.status, 201);

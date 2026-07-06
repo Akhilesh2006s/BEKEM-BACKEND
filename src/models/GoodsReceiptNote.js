@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
-const GRN_STATUSES = ['DRAFT', 'PARTIALLY_RECEIVED', 'RECEIVED', 'REJECTED'];
+const GRN_STATUSES = ['DRAFT', 'ON_HOLD', 'PARTIALLY_RECEIVED', 'RECEIVED', 'REJECTED'];
+const GRN_APPROVAL_STAGES = ['NONE', 'COORDINATOR_PENDING', 'CHAIRMAN_PENDING', 'APPROVED'];
 
 const grnItemSchema = new mongoose.Schema(
   {
@@ -28,12 +29,21 @@ const grnAttachmentSchema = new mongoose.Schema(
 
 const grnSchema = new mongoose.Schema(
   {
-    grnNumber: { type: String, required: true, unique: true },
+    grnNumber: { type: String, required: true },
     purchaseOrderId: { type: mongoose.Schema.Types.ObjectId, ref: 'PurchaseOrder', required: true },
     siteId: { type: mongoose.Schema.Types.ObjectId, ref: 'Site', required: true },
     items: { type: [grnItemSchema], default: [] },
     receivedQuantity: { type: Number, default: 0 },
     status: { type: String, enum: GRN_STATUSES, default: 'RECEIVED' },
+    approvalStage: { type: String, enum: GRN_APPROVAL_STAGES, default: 'NONE' },
+    requiresChairmanApproval: { type: Boolean, default: false },
+    holdReasons: { type: [String], default: [] },
+    coordinatorApprovedAt: { type: Date },
+    coordinatorApprovedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    chairmanApprovedAt: { type: Date },
+    chairmanApprovedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    approvedAt: { type: Date },
+    approvedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     receiveType: { type: String, enum: ['PARTIAL', 'FULL'], default: 'FULL' },
     isPartialGrn: { type: Boolean, default: false },
     varianceDetails: { type: mongoose.Schema.Types.Mixed, default: null },
@@ -53,5 +63,8 @@ const grnSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+grnSchema.index({ purchaseOrderId: 1, grnNumber: 1 }, { unique: true });
+
 module.exports = mongoose.model('GoodsReceiptNote', grnSchema);
 module.exports.GRN_STATUSES = GRN_STATUSES;
+module.exports.GRN_APPROVAL_STAGES = GRN_APPROVAL_STAGES;

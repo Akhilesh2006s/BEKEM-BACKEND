@@ -23,6 +23,7 @@ const STATUSES = [
   'REJECTED',
   'CANCELLED',
   'CLOSED',
+  'HO_PENDING_COORDINATOR',
 ];
 
 const lineItemSchema = new mongoose.Schema(
@@ -57,6 +58,8 @@ const materialRequestSchema = new mongoose.Schema(
     escalatedToHo: { type: Boolean, default: false },
     escalatedAt: { type: Date },
     pmForwardRemark: { type: String, default: '' },
+    /** Store confirmed stock is available before PM approval (no direct issue). */
+    storeStockVerified: { type: Boolean, default: false },
     executiveProcurementMethod: {
       type: String,
       enum: ['PURCHASE_ORDER', 'BRANCH_TRANSFER', null],
@@ -73,6 +76,8 @@ const materialRequestSchema = new mongoose.Schema(
     coordinatorProcurementRemark: { type: String, default: '' },
     coordinatorProcurementDecidedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     coordinatorProcurementDecidedAt: { type: Date },
+    /** SITE = site-raised indent; EXECUTIVE = HO-only indent (hidden from site/store/PM). */
+    origin: { type: String, enum: ['SITE', 'EXECUTIVE'], default: 'SITE' },
   },
   { timestamps: true }
 );

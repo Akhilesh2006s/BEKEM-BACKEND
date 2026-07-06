@@ -7,6 +7,8 @@ function refId(value) {
   return value.toString();
 }
 
+const { isGstLookupEnabled } = require('../services/vendorGstLookupService');
+
 function serializeVendor(v) {
   const materialIds = (v.materialIds || []).map((m) =>
     typeof m === 'object' && m._id ? m._id.toString() : m.toString()
@@ -33,6 +35,17 @@ function serializeVendor(v) {
     bankAccountNumber: v.bankAccountNumber || '',
     ifscCode: v.ifscCode || '',
     authorizationStatus: v.authorizationStatus || 'AUTHORIZED',
+    gstLookupAvailable: isGstLookupEnabled(),
+    gstDetails: v.gstDetails?.legalName || v.gstDetails?.address
+      ? {
+          legalName: v.gstDetails.legalName || '',
+          tradeName: v.gstDetails.tradeName || '',
+          status: v.gstDetails.status || '',
+          address: v.gstDetails.address || '',
+          fetchedAt: v.gstDetails.fetchedAt?.toISOString?.(),
+          source: v.gstDetails.source || 'MANUAL',
+        }
+      : undefined,
     createdByUserId: v.createdByUserId?.toString?.() || v.createdByUserId || undefined,
     authorizedAt: v.authorizedAt?.toISOString?.() || undefined,
   };
@@ -77,12 +90,19 @@ function serializePurchaseRequest(pr) {
 }
 
 function serializeQuotation(q) {
+  const rate = q.rate != null ? q.rate : 0;
+  const gstPercent = q.gstPercent ?? 18;
   return {
     id: q._id.toString(),
     rfqId: refId(q.rfqId) || '',
     vendorId: refId(q.vendorId) || '',
     vendor: q.vendorId?.name ? serializeVendor(q.vendorId) : undefined,
+    rate,
+    gstPercent,
+    finalCost: q.amount,
     amount: q.amount,
+    paymentTerms: q.paymentTerms || q.terms || '',
+    deliveryTerms: q.deliveryTerms || '',
     terms: q.terms,
     submittedAt: q.submittedAt?.toISOString?.(),
   };
@@ -106,6 +126,7 @@ function serializePurchaseOrder(po) {
     quotationId: refId(po.quotationId),
     amount: po.amount,
     paymentTerms: po.paymentTerms,
+    additionalTerms: po.additionalTerms || '',
     billingAddress: po.billingAddress || '',
     billingAddressType: po.billingAddressType || 'registered_office',
     deliveryAddress: po.deliveryAddress || '',
@@ -113,6 +134,7 @@ function serializePurchaseOrder(po) {
     deliveryAddressOtherText: po.deliveryAddressOtherText || '',
     expectedDeliveryDate: po.expectedDeliveryDate?.toISOString?.() || null,
     referenceNote: po.referenceNote || '',
+    vendorSelectionReason: po.vendorSelectionReason || '',
     lineItems: (po.lineItems || []).map((li) => ({
       id: li._id?.toString(),
       description: li.description,

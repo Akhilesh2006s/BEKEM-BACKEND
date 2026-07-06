@@ -1,7 +1,7 @@
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert');
 const request = require('supertest');
-const { Project } = require('./models');
+const { Project, User } = require('./models');
 const {
   setupTestDb,
   teardownTestDb,
@@ -63,15 +63,18 @@ describe('Portfolio explorer RBAC', () => {
   it('Project Manager sees only assigned projects', async () => {
     const app = getApp();
     const token = await loginAs('pm@bekem.com');
+    const pm = await User.findOne({ email: 'pm@bekem.com' }).populate('assignedProjectIds');
+    const assignedCodes = pm.assignedProjectIds.map((p) => p.code).sort();
 
     const res = await request(app)
       .get('/api/dashboard/explorer')
       .set('Authorization', `Bearer ${token}`);
 
     assert.strictEqual(res.status, 200);
-    assert.ok(res.body.data.length >= 3);
+    assert.ok(pm.assignedProjectIds.length >= 2 && pm.assignedProjectIds.length <= 4);
+    assert.strictEqual(res.body.data.length, assignedCodes.length);
     const codes = res.body.data.map((p) => p.code).sort();
-    assert.deepStrictEqual(codes, ['PRJ-001', 'PRJ-002', 'PRJ-003']);
+    assert.deepStrictEqual(codes, assignedCodes);
   });
 
   it('Store Manager sees only assigned project', async () => {

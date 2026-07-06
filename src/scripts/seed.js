@@ -249,6 +249,7 @@ GST No.: 29AADCB5671Q1ZY`,
 
   const passwordHash = await bcrypt.hash(DEMO_PASSWORD, 10);
   const userMap = {};
+  const allProjectIds = [project._id, project2._id, project3._id];
 
   for (const u of USERS) {
     const data = { ...u, passwordHash, assignedProjectIds: [], assignedSiteId: null };
@@ -260,7 +261,15 @@ GST No.: 29AADCB5671Q1ZY`,
       data.assignedSiteId = site._id;
       data.assignedProjectIds = [project._id];
     }
-    if (u.role === 'PROJECT_MANAGER') data.assignedProjectIds = [project._id, project2._id, project3._id];
+    if (u.role === 'PROJECT_MANAGER') {
+      const count = 2 + Math.floor(Math.random() * 3);
+      const shuffled = [...allProjectIds].sort(() => Math.random() - 0.5);
+      let selected = shuffled.slice(0, count);
+      if (!selected.some((id) => id.equals(project._id))) {
+        selected = [project._id, ...selected.filter((id) => !id.equals(project._id))].slice(0, count);
+      }
+      data.assignedProjectIds = selected;
+    }
     if (u.role === 'EXECUTIVE') data.assignedProjectIds = [project._id, project2._id, project3._id];
     if (u.role === 'COORDINATOR') {
       data.assignedProjectIds = [project._id, project2._id, project3._id];

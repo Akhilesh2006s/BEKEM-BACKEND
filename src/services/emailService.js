@@ -71,4 +71,61 @@ async function sendPoToVendor(po, vendor, { pdfBuffer } = {}) {
   return { sent: true, mode: 'smtp', to: vendor.email };
 }
 
-module.exports = { sendPoToVendor, smtpConfigured };
+async function sendRfqToVendor(rfqDetail, vendor, { pdfBuffer } = {}) {
+  if (!vendor?.email) {
+    return { sent: false, reason: 'Vendor has no email address' };
+  }
+
+  const rfqNo = rfqDetail.rfqNumber || 'RFQ';
+  const subject = `Request for Quotation ${rfqNo} — BEKEM INFRA PROJECTS PVT. LTD.`;
+  const itemLines = (rfqDetail.items || [])
+    .map((i, idx) => `${idx + 1}. ${i.name} — ${i.quantity} ${i.unit}`)
+    .join('\n');
+  const termsLines = (rfqDetail.termsAndConditions || [])
+    .map((t, i) => `${i + 1}. ${t}`)
+    .join('\n');
+  const text = [
+    `Dear ${vendor.contactPerson || vendor.name},`,
+    '',
+    `Please submit your quotation against RFQ ${rfqNo}.`,
+    '',
+    'Items:',
+    itemLines,
+    '',
+    'Terms & Conditions:',
+    termsLines,
+    '',
+    'Kindly respond before the due date mentioned in the attached RFQ.',
+    '',
+    'For BEKEM INFRA PROJECTS PVT. LTD.',
+    'Procurement Department',
+  ].join('\n');
+
+  const attachments = pdfBuffer
+    ? [
+        {
+          filename: `${rfqNo.replace(/[/\\?%*:|"<>]/g, '-')}.pdf`,
+          content: pdfBuffer,
+          contentType: 'application/pdf',
+        },
+      ]
+    : [];
+
+  const transport = createTransport();
+  if (!transport) {
+    console.log(`[RFQ EMAIL — dev mode] To: ${vendor.email}\nSubject: ${subject}\n${text}`);
+    return { sent: true, mode: 'log', to: vendor.email };
+  }
+
+  await transport.sendMail({
+    from: process.env.SMTP_FROM || process.env.SMTP_USER,
+    to: vendor.email,
+    subject,
+    text,
+    attachments,
+  });
+
+  return { sent: true, mode: 'smtp', to: vendor.email };
+}
+
+module.exports = { sendPoToVendor, sendRfqToVendor, smtpConfigured };

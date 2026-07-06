@@ -98,13 +98,19 @@ async function ensureRfqAndQuotations(purchaseRequest, projectCode, actorUserId,
       'RFQ auto-generated during PO wizard'
     );
 
-    for (const vendor of vendors) {
+    for (const vendor of vendors.slice(0, 3)) {
       const baseAmount = purchaseRequest.amountEstimate || 100000;
       const variance = 0.9 + Math.random() * 0.2;
+      const rate = Math.round(baseAmount * variance);
+      const { computeFinalCost } = require('./quotationComparisonService');
       await Quotation.create({
         rfqId: rfq._id,
         vendorId: vendor._id,
-        amount: Math.round(baseAmount * variance),
+        rate,
+        gstPercent: 18,
+        paymentTerms: '100% payment within 30 days from the date of supply',
+        deliveryTerms: 'Delivery as per project schedule',
+        amount: computeFinalCost(rate, 1, 18),
         terms: '100% payment within 30 days from the date of supply',
         submittedAt: new Date(),
       });
@@ -112,7 +118,10 @@ async function ensureRfqAndQuotations(purchaseRequest, projectCode, actorUserId,
   }
 
   const quotations = await Quotation.find({ rfqId: rfq._id }).populate('vendorId');
-  return { rfq, quotations };
+  const { ensureDefaultVendorQuotations } = require('./quotationComparisonService');
+  await ensureDefaultVendorQuotations(rfq, purchaseRequest, materialIds);
+  const allQuotes = await Quotation.find({ rfqId: rfq._id }).populate('vendorId');
+  return { rfq, quotations: allQuotes.length ? allQuotes : quotations };
 }
 
 function normalizeWizardLineItems(rawItems, mr, fallbackAmount) {
@@ -171,6 +180,7 @@ async function createPurchaseOrderFromWizard({
   purchaseRequestId,
   vendorId,
   paymentTerms,
+  additionalTerms,
   billingAddress,
   billingAddressType,
   deliveryAddress: deliveryOverride,
@@ -180,6 +190,7 @@ async function createPurchaseOrderFromWizard({
   referenceNote,
   lineItems: lineItemsOverride,
   attachments,
+  vendorSelectionReason,
   actorUserId,
   skipIndentStatusUpdate = false,
 }) {
@@ -281,6 +292,7 @@ async function createPurchaseOrderFromWizard({
     quotationId: quotation._id,
     amount: poAmount,
     paymentTerms: paymentTerms || quotation.terms,
+    additionalTerms: additionalTerms || '',
     billingAddress: resolvedBilling,
     billingAddressType: billingAddressType || 'registered_office',
     deliveryAddress,
@@ -288,6 +300,7 @@ async function createPurchaseOrderFromWizard({
     deliveryAddressOtherText: deliveryAddressOtherText || '',
     expectedDeliveryDate: expectedDeliveryDate ? new Date(expectedDeliveryDate) : undefined,
     referenceNote: referenceNote || (mr?.indentNumber ? `Indent ${mr.indentNumber}` : ''),
+    vendorSelectionReason: vendorSelectionReason || '',
     lineItems,
     attachments: poAttachments,
     status: initialStatus,
@@ -367,6 +380,7 @@ async function createPurchaseOrdersFromWizardBatch({
   materialRequestId,
   orders,
   paymentTerms,
+  additionalTerms,
   billingAddress,
   billingAddressType,
   deliveryAddress,
@@ -375,19 +389,34 @@ async function createPurchaseOrdersFromWizardBatch({
   expectedDeliveryDate,
   referenceNote,
   actorUserId,
+  whyWeChoseThisVendor,
+  vendorSelectionReasons,
 }) {
   if (!Array.isArray(orders) || orders.length === 0) {
     throw Object.assign(new Error('At least one vendor order required'), { statusCode: 400 });
   }
 
+  const vendorIds = orders.map((o) => o.vendorId);
+  const { validatePoVendorSelection } = require('./rfqService');
+  await validatePoVendorSelection(purchaseRequestId, vendorIds, {
+    vendorSelectionReasons: vendorSelectionReasons || {},
+    whyWeChoseThisVendor,
+    actorUserId,
+  });
+
   const created = [];
   for (let i = 0; i < orders.length; i++) {
     const order = orders[i];
+    const selectionReason =
+      order.vendorSelectionReason ||
+      vendorSelectionReasons?.[order.vendorId] ||
+      '';
     const result = await createPurchaseOrderFromWizard({
       purchaseRequestId,
       materialRequestId,
       vendorId: order.vendorId,
       paymentTerms: order.paymentTerms || paymentTerms,
+      additionalTerms: order.additionalTerms || additionalTerms,
       billingAddress,
       billingAddressType,
       deliveryAddress,
@@ -397,6 +426,7 @@ async function createPurchaseOrdersFromWizardBatch({
       referenceNote,
       lineItems: order.lineItems,
       attachments: order.attachments,
+      vendorSelectionReason: selectionReason,
       actorUserId,
       skipIndentStatusUpdate: i > 0,
     });

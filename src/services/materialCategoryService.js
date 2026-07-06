@@ -1,27 +1,56 @@
-const { MaterialCategory, Material, Project } = require('../models');
+const { MaterialCategory, Material } = require('../models');
 
-const PHASE_CATEGORIES = ['Raw Material', 'Consumables'];
+const PHASE_CATEGORIES = [
+  'Stationery',
+  'Electrical Materials',
+  'Civil Materials',
+  'Mechanical Materials',
+  'Others',
+];
 
 const LEGACY_CATEGORY_MAP = {
-  cement: 'Raw Material',
-  steel: 'Raw Material',
-  aggregates: 'Raw Material',
-  bitumen: 'Raw Material',
-  paving: 'Raw Material',
-  fuel: 'Consumables',
-  geosynthetics: 'Consumables',
-  drainage: 'Consumables',
-  fasteners: 'Consumables',
-  hardware: 'Consumables',
-  general: 'Consumables',
+  cement: 'Civil Materials',
+  steel: 'Civil Materials',
+  aggregates: 'Civil Materials',
+  bitumen: 'Civil Materials',
+  paving: 'Civil Materials',
+  'raw material': 'Civil Materials',
+  fuel: 'Mechanical Materials',
+  geosynthetics: 'Mechanical Materials',
+  drainage: 'Mechanical Materials',
+  fasteners: 'Mechanical Materials',
+  hardware: 'Mechanical Materials',
+  mechanical: 'Mechanical Materials',
+  electrical: 'Electrical Materials',
+  'electrical materials': 'Electrical Materials',
+  stationery: 'Stationery',
+  consumables: 'Stationery',
+  consumable: 'Stationery',
+  general: 'Others',
+  others: 'Others',
 };
 
 function mapLegacyCategory(value) {
-  if (!value) return 'Consumables';
+  if (!value) return 'Civil Materials';
   const key = String(value).trim().toLowerCase();
-  if (key === 'consumable') return 'Consumables';
-  if (PHASE_CATEGORIES.some((c) => c.toLowerCase() === key)) return value.trim();
-  return LEGACY_CATEGORY_MAP[key] || 'Consumables';
+  if (PHASE_CATEGORIES.some((c) => c.toLowerCase() === key)) {
+    return PHASE_CATEGORIES.find((c) => c.toLowerCase() === key) || value.trim();
+  }
+  return LEGACY_CATEGORY_MAP[key] || 'Civil Materials';
+}
+
+function requiresCategoryRemarks(categoryName) {
+  return String(categoryName || '').trim() === 'Others';
+}
+
+function assertCategoryRemarks(categoryName, remarks) {
+  if (!requiresCategoryRemarks(categoryName)) return;
+  const text = String(remarks || '').trim();
+  if (!text) {
+    const err = new Error('Remarks are required when category is Others');
+    err.statusCode = 400;
+    throw err;
+  }
 }
 
 async function ensureMaterialCategories() {
@@ -36,11 +65,16 @@ async function ensureMaterialCategories() {
     rows.push(row);
   }
 
+  await MaterialCategory.updateMany(
+    { name: { $nin: PHASE_CATEGORIES } },
+    { $set: { isActive: false } }
+  );
+
   const byName = Object.fromEntries(rows.map((r) => [r.name, r]));
   const materials = await Material.find({}).select('category categoryId');
   for (const mat of materials) {
     const mappedName = mapLegacyCategory(mat.category);
-    const cat = byName[mappedName] || byName['Consumables'];
+    const cat = byName[mappedName] || byName['Civil Materials'];
     let changed = false;
     if (!mat.categoryId || mat.categoryId.toString() !== cat._id.toString()) {
       mat.categoryId = cat._id;
@@ -85,5 +119,7 @@ module.exports = {
   listMaterialCategories,
   mapLegacyCategory,
   resolveMaterialCategory,
+  requiresCategoryRemarks,
+  assertCategoryRemarks,
   PHASE_CATEGORIES,
 };

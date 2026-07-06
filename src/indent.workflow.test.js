@@ -152,4 +152,27 @@ describe('Indent workflow v2', () => {
     assert.strictEqual(approve2.body.escalated, true);
     assert.strictEqual(approve2.body.data.status, 'PENDING_HO');
   });
+
+  it('forwards to PM when stock is available instead of direct issue', async () => {
+    const createRes = await request(app)
+      .post('/api/material-requests')
+      .set('Authorization', `Bearer ${siteToken}`)
+      .send({
+        purpose: 'Stock available verify test',
+        items: [{ materialId: material._id.toString(), quantityRequested: 1 }],
+      });
+    const mrId = createRes.body.data.id;
+
+    const verifyRes = await request(app)
+      .post(`/api/material-requests/${mrId}/allocate`)
+      .set('Authorization', `Bearer ${storeToken}`)
+      .send({ decision: 'issue', remark: 'Stock verified — forwarding to PM' });
+
+    assert.strictEqual(verifyRes.status, 200);
+    assert.strictEqual(verifyRes.body.data.status, 'FORWARDED_TO_PM');
+    assert.strictEqual(verifyRes.body.data.storeStockVerified, true);
+
+    const mr = await MaterialRequest.findById(mrId);
+    assert.strictEqual(mr.status, 'FORWARDED_TO_PM');
+  });
 });

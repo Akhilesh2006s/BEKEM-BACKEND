@@ -101,8 +101,10 @@ function mountApiRoutes(app, prefix) {
   app.use(`${prefix}/material-issues`, materialIssueRoutes);
   app.use(`${prefix}/branch-transfers`, branchTransferRoutes);
   app.use(`${prefix}/procurement-decisions`, procurementDecisionRoutes);
+  app.use(`${prefix}/rfqs`, require('./routes/rfqs'));
   app.use(`${prefix}/incidents`, incidentRoutes);
   app.use(`${prefix}/finance`, require('./routes/finance'));
+  app.use(`${prefix}/admin/org-settings`, require('./routes/orgSettings'));
 
 }
 

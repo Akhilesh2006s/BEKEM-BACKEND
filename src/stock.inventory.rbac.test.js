@@ -7,7 +7,7 @@ const {
   loginAs,
   getApp,
 } = require('./test/helpers');
-const { Project, StockInventoryRecord } = require('./models');
+const { Project, StockInventoryRecord, User } = require('./models');
 
 async function seedInventoryRows(projectA, projectB, projectC) {
   await StockInventoryRecord.deleteMany({ financialYear: '25-26' });
@@ -93,20 +93,33 @@ describe('Stock inventory RBAC', () => {
   });
 
   it('Project Manager sees only assigned project inventories', async () => {
+    const pm = await User.findOne({ email: 'pm@bekem.com' }).populate('assignedProjectIds');
+    const assignedNames = pm.assignedProjectIds.map((p) => p.name);
+
     const res = await request(app)
       .get('/api/stock/inventory')
       .set('Authorization', `Bearer ${pmToken}`);
 
     assert.strictEqual(res.status, 200);
     const projects = [...new Set(res.body.data.map((row) => row.project))];
-    assert.ok(projects.includes(projectA.name));
-    assert.ok(projects.includes(projectB.name));
-    assert.ok(projects.includes(projectC.name));
+    for (const name of assignedNames) {
+      assert.ok(projects.includes(name), `PM should see inventory for ${name}`);
+    }
+    const allProjects = [projectA, projectB, projectC];
+    for (const p of allProjects) {
+      if (!assignedNames.includes(p.name)) {
+        assert.ok(!projects.includes(p.name), `PM should not see inventory for ${p.name}`);
+      }
+    }
     assert.strictEqual(res.body.meta.inventoryScope, 'assigned');
-    assert.ok(res.body.meta.assignedProjects.length >= 3, 'PM should have at least 3 assigned projects');
+    assert.ok(pm.assignedProjectIds.length >= 2 && pm.assignedProjectIds.length <= 4);
+    assert.strictEqual(res.body.meta.assignedProjects.length, pm.assignedProjectIds.length);
   });
 
   it('PM cross-project stock returns assigned project availability', async () => {
+    const pm = await User.findOne({ email: 'pm@bekem.com' }).populate('assignedProjectIds');
+    const assignedNames = new Set(pm.assignedProjectIds.map((p) => p.name));
+
     const res = await request(app)
       .get('/api/stock/cross-project')
       .set('Authorization', `Bearer ${pmToken}`)
@@ -115,16 +128,14 @@ describe('Stock inventory RBAC', () => {
     assert.strictEqual(res.status, 200);
     assert.ok(res.body.data.length >= 1);
     const row = res.body.data[0];
-    assert.ok(row.projects.length >= 3);
-    const amr = row.projects.find((p) => p.projectName === 'AMR POWER');
-    const chitravathi = row.projects.find((p) => p.projectName === 'CHITRAVATHI');
-    const kaiga = row.projects.find((p) => p.projectName === 'KAIGA PROJECT');
-    assert.ok(amr);
-    assert.strictEqual(amr.availableQty, 0);
-    assert.ok(chitravathi);
-    assert.strictEqual(chitravathi.availableQty, 50);
-    assert.ok(kaiga);
-    assert.strictEqual(kaiga.availableQty, 120);
+    assert.strictEqual(row.projects.length, pm.assignedProjectIds.length);
+    for (const p of row.projects) {
+      assert.ok(assignedNames.has(p.projectName));
+    }
+    const byName = Object.fromEntries(row.projects.map((p) => [p.projectName, p.availableQty]));
+    if (assignedNames.has('AMR POWER')) assert.strictEqual(byName['AMR POWER'], 0);
+    if (assignedNames.has('CHITRAVATHI')) assert.strictEqual(byName.CHITRAVATHI, 50);
+    if (assignedNames.has('KAIGA PROJECT')) assert.strictEqual(byName['KAIGA PROJECT'], 120);
   });
 
   it('Coordinator sees all project inventories', async () => {

@@ -9,6 +9,8 @@ const {
   User,
   StockLedger,
   StockMovement,
+  PurchaseRequest,
+  RFQ,
 } = require('../models');
 const { authenticate } = require('../middleware/auth');
 const { requireCapability } = require('../middleware/rbac');
@@ -30,9 +32,11 @@ const {
   resolveId,
 } = require('../utils/serialize');
 const { enrichIndentWithStock } = require('../services/indentStockService');
+const { allocateIndentStock } = require('../services/indentAllocationService');
 const { estimateIndentAmount } = require('../services/purchaseRequestService');
 const { queueForExecutiveDecision } = require('../services/procurementDecisionService');
-const { checkPmCanApprove, getPmDailyApprovedTotal, MR_PM_DAILY_MAX_INR } = require('../services/pmApprovalCapService');
+const pmApprovalCapService = require('../services/pmApprovalCapService');
+const { checkPmCanApprove, getPmDailyApprovedTotal } = pmApprovalCapService;
 const { handleIdempotent } = require('../utils/idempotentHandler');
 
 const router = express.Router();
@@ -60,6 +64,14 @@ async function mrEnrichedBody(mrId) {
   return { data: await serializeMaterialRequestEnriched(populated) };
 }
 
+const HIDE_HO_ORIGIN_ROLES = [UserRole.SITE_INCHARGE, UserRole.STORE_INCHARGE, UserRole.PROJECT_MANAGER];
+
+function applySiteOriginFilter(filter, user) {
+  if (HIDE_HO_ORIGIN_ROLES.includes(user.role)) {
+    filter.origin = { $ne: 'EXECUTIVE' };
+  }
+}
+
 const FORWARDED_STATUSES = ['FORWARDED_TO_PM', 'PM_APPROVED', 'PURCHASE_REQUESTED', 'PENDING_HO', 'PO_CREATED'];
 
 router.use(authenticate);
@@ -72,6 +84,75 @@ function parseStatusFilter(status) {
     .filter(Boolean);
   if (!statuses.length) return undefined;
   return statuses.length === 1 ? statuses[0] : { $in: statuses };
+}
+
+const APPROVED_NOT_RECEIVED_STATUSES = [
+  'ALLOCATED',
+  'FORWARDED_TO_PM',
+  'PM_APPROVED',
+  'PURCHASE_REQUESTED',
+  'PENDING_HO',
+  'PENDING_EXECUTIVE_DECISION',
+  'EXECUTIVE_DECISION_PO',
+  'EXECUTIVE_DECISION_BRANCH_TRANSFER',
+  'BRANCH_TRANSFER_REQUESTED',
+  'PO_CREATED',
+  'COORDINATOR_VERIFIED',
+  'CHAIRMAN_APPROVED',
+  'RFQ_OPEN',
+  'QUOTED',
+  'VENDOR_SELECTED',
+];
+
+const COMPLETED_RECEIVED_STATUSES = ['MATERIAL_RECEIVED', 'ISSUED', 'COMPLETED', 'CLOSED'];
+
+async function buildPmIndentNotification(mr) {
+  const populated = await MaterialRequest.findById(mr._id)
+    .populate('projectId', 'name code')
+    .populate('requestedByUserId', 'name')
+    .populate('items.materialId', 'name unit');
+  const lines = getIndentLineItems(populated || mr);
+  const materialSummary = lines
+    .map((line) => {
+      const name = line.materialId?.name || 'Material';
+      return `${name} × ${line.quantityRequested}`;
+    })
+    .join(', ');
+  const project = populated?.projectId?.code || populated?.projectId?.name || '';
+  const requester = populated?.requestedByUserId?.name || 'Site';
+  return {
+    title: 'Indent awaiting PM approval',
+    body: `${mr.indentNumber} · ${project} · ${materialSummary} · by ${requester}`,
+    relatedEntityType: 'MaterialRequest',
+    relatedEntityId: mr._id,
+  };
+}
+
+async function forwardIndentToPm(mr, actorUserId, remark, { storeStockVerified = false } = {}) {
+  const fromStatus = mr.status;
+  mr.status = 'FORWARDED_TO_PM';
+  mr.pendingWithRole = 'PROJECT_MANAGER';
+  mr.storeStockVerified = Boolean(storeStockVerified);
+  mr.estimatedValue = await estimateIndentAmount(mr);
+  await mr.save();
+
+  await statusHistoryService.record(
+    'MaterialRequest',
+    mr._id,
+    fromStatus,
+    'FORWARDED_TO_PM',
+    actorUserId,
+    remark
+  );
+
+  const pmUsers = await User.find({
+    role: UserRole.PROJECT_MANAGER,
+    assignedProjectIds: mr.projectId,
+  });
+  const notification = await buildPmIndentNotification(mr);
+  await notificationService.notifyUsers(pmUsers.map((u) => u._id), notification);
+
+  return mr;
 }
 
 router.get('/', async (req, res, next) => {
@@ -100,9 +181,6 @@ router.get('/', async (req, res, next) => {
       } else {
         filter.siteId = req.user.assignedSiteId;
       }
-      if (tab === 'pending') {
-        filter.status = 'PENDING_STORE';
-      }
     } else if ([UserRole.CHAIRMAN, UserRole.COORDINATOR, UserRole.EXECUTIVE].includes(req.user.role)) {
       // HQ roles see all site material requests (indents)
     } else if (req.user.role === UserRole.PROJECT_MANAGER) {
@@ -116,19 +194,22 @@ router.get('/', async (req, res, next) => {
 
     if (statusFilter) filter.status = statusFilter;
 
-    if (tab === 'approved') {
-      filter.status = {
-        $in: ['ALLOCATED', 'FORWARDED_TO_PM', 'PM_APPROVED'],
-      };
+    if (tab === 'pending') {
+      if (req.user.role === UserRole.PROJECT_MANAGER) {
+        filter.status = 'FORWARDED_TO_PM';
+        filter.escalatedToHo = { $ne: true };
+      } else {
+        filter.status = 'PENDING_STORE';
+      }
+    } else if (tab === 'approved') {
+      filter.status = { $in: APPROVED_NOT_RECEIVED_STATUSES };
     } else if (tab === 'completed') {
-      filter.status = {
-        $in: ['COMPLETED', 'CLOSED'],
-      };
-    } else if (tab === 'rejected') {
+      filter.status = { $in: COMPLETED_RECEIVED_STATUSES };
+    } else     if (tab === 'rejected') {
       filter.status = 'REJECTED';
-    } else if (tab === 'pending' && req.user.role === UserRole.SITE_INCHARGE) {
-      filter.status = 'PENDING_STORE';
     }
+
+    applySiteOriginFilter(filter, req.user);
 
     const requests = await MaterialRequest.find(filter)
       .sort({ createdAt: -1 })
@@ -147,12 +228,14 @@ router.get('/pm/daily-cap', async (req, res, next) => {
     if (req.user.role !== UserRole.PROJECT_MANAGER) {
       return res.status(403).json({ statusCode: 403, message: 'Forbidden' });
     }
+    const { getApprovalLimits } = require('../services/orgSettingsService');
+    const limits = getApprovalLimits();
     const dailyApprovedTotal = await getPmDailyApprovedTotal(req.user._id);
     res.json({
       data: {
         dailyApprovedTotal,
-        dailyCap: MR_PM_DAILY_MAX_INR,
-        remaining: Math.max(0, MR_PM_DAILY_MAX_INR - dailyApprovedTotal),
+        dailyCap: limits.mrPmDailyMaxInr,
+        remaining: Math.max(0, limits.mrPmDailyMaxInr - dailyApprovedTotal),
       },
     });
   } catch (err) {
@@ -160,10 +243,162 @@ router.get('/pm/daily-cap', async (req, res, next) => {
   }
 });
 
+router.get('/ho-indents', async (req, res, next) => {
+  try {
+    const { HO_ROLES } = require('../services/executiveIndentService');
+    if (!HO_ROLES.includes(req.user.role)) {
+      return res.status(403).json({ statusCode: 403, message: 'Forbidden' });
+    }
+    const filter = { origin: 'EXECUTIVE' };
+    if (req.query.status) filter.status = req.query.status;
+    const requests = await MaterialRequest.find(filter)
+      .sort({ createdAt: -1 })
+      .populate(populateFields);
+    const data = await Promise.all(
+      requests.map(async (mr) => {
+        const row = await serializeMaterialRequestEnriched(mr);
+        if (mr.status === 'RFQ_OPEN') {
+          const pr = await PurchaseRequest.findOne({ materialRequestId: mr._id }).select('_id');
+          if (pr) {
+            const rfq = await RFQ.findOne({ purchaseRequestId: pr._id }).select('_id rfqNumber');
+            if (rfq) {
+              row.rfqId = rfq._id.toString();
+              row.rfqNumber = rfq.rfqNumber;
+            }
+          }
+        }
+        return row;
+      })
+    );
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post(
+  '/ho-indents',
+  [
+    body('projectId').isMongoId(),
+    body('items').isArray({ min: 1 }),
+    body('items.*.materialId').isMongoId(),
+    body('items.*.quantityRequested').isFloat({ min: 0.01 }),
+    body('purpose').trim().notEmpty().isLength({ max: 500 }),
+    body('requiredByDate').optional().isISO8601(),
+  ],
+  validate,
+  async (req, res, next) => {
+    try {
+      if (req.user.role !== UserRole.EXECUTIVE) {
+        return res.status(403).json({ statusCode: 403, message: 'Only Executive can generate HO indents' });
+      }
+      const { createExecutiveIndent } = require('../services/executiveIndentService');
+      const mr = await createExecutiveIndent(req.user, req.body);
+      const populated = await MaterialRequest.findById(mr._id).populate(populateFields);
+      res.status(201).json({ data: await serializeMaterialRequestEnriched(populated) });
+    } catch (err) {
+      if (err.statusCode) return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
+      next(err);
+    }
+  }
+);
+
+router.post(
+  '/ho-indents/:id/coordinator-approve',
+  param('id').isMongoId(),
+  validate,
+  async (req, res, next) => {
+    try {
+      const { approveExecutiveIndent } = require('../services/executiveIndentService');
+      const { mr, rfq } = await approveExecutiveIndent(req.user, req.params.id);
+      const populated = await MaterialRequest.findById(mr._id).populate(populateFields);
+      res.json({
+        data: {
+          indent: await serializeMaterialRequestEnriched(populated),
+          rfqId: rfq._id.toString(),
+          rfqNumber: rfq.rfqNumber,
+        },
+      });
+    } catch (err) {
+      if (err.statusCode) return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
+      next(err);
+    }
+  }
+);
+
+router.post(
+  '/pm-procurement',
+  [
+    body('projectId').isMongoId(),
+    body('items').isArray({ min: 1 }),
+    body('items.*.materialId').isMongoId(),
+    body('items.*.quantityRequested').isFloat({ min: 0.01 }),
+    body('purpose').trim().notEmpty().isLength({ max: 500 }),
+  ],
+  validate,
+  async (req, res, next) => {
+    try {
+      if (req.user.role !== UserRole.PROJECT_MANAGER) {
+        return res.status(403).json({ statusCode: 403, message: 'Forbidden' });
+      }
+      if (!userCanAccessProject(req.user, req.body.projectId)) {
+        return res.status(403).json({ statusCode: 403, message: 'Project not in your scope' });
+      }
+      const site = await Site.findOne({ projectId: req.body.projectId }).sort({ createdAt: 1 });
+      if (!site) {
+        return res.status(400).json({ statusCode: 400, message: 'No site for project' });
+      }
+      const project = await Project.findById(req.body.projectId);
+      const resolvedItems = await resolveIndentLineItems(req.body.items, req.user._id);
+      const indentNumber = await generateIndentNumber(project.code);
+      const mr = await MaterialRequest.create({
+        indentNumber,
+        projectId: project._id,
+        siteId: site._id,
+        items: resolvedItems,
+        materialId: resolvedItems[0].materialId,
+        quantityRequested: resolvedItems[0].quantityRequested,
+        purpose: req.body.purpose.trim(),
+        requestedByUserId: req.user._id,
+        status: 'PENDING_HO',
+        pendingWithRole: 'EXECUTIVE',
+        escalatedToHo: true,
+        escalatedAt: new Date(),
+        origin: 'SITE',
+      });
+      mr.estimatedValue = await estimateIndentAmount(mr);
+      await mr.save();
+      await statusHistoryService.record(
+        'MaterialRequest',
+        mr._id,
+        null,
+        'PENDING_HO',
+        req.user._id,
+        `PM procurement request ${indentNumber}`
+      );
+      const executives = await User.find({ role: UserRole.EXECUTIVE });
+      await notificationService.notifyUsers(executives.map((u) => u._id), {
+        title: 'New procurement request',
+        body: `${indentNumber} — PM requested new procurement.`,
+        relatedEntityType: 'ProcurementDecision',
+        relatedEntityId: mr._id,
+      });
+      const populated = await MaterialRequest.findById(mr._id).populate(populateFields);
+      res.status(201).json({ data: await serializeMaterialRequestEnriched(populated) });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 router.get('/:id', param('id').isMongoId(), validate, async (req, res, next) => {
   try {
     const mr = await MaterialRequest.findById(req.params.id).populate(populateFields);
     if (!mr) {
+      return res.status(404).json({ statusCode: 404, message: 'Request not found' });
+    }
+
+    if (mr.origin === 'EXECUTIVE' && HIDE_HO_ORIGIN_ROLES.includes(req.user.role)) {
       return res.status(404).json({ statusCode: 404, message: 'Request not found' });
     }
 
@@ -329,35 +564,21 @@ router.post(
       const remark = requireRemark(req.body.remark);
       const stockContext = await enrichIndentWithStock(mr);
 
-      if (decision === 'forward') {
-        const fromStatus = mr.status;
-        mr.status = 'FORWARDED_TO_PM';
-        mr.pendingWithRole = 'PROJECT_MANAGER';
-        mr.estimatedValue = await estimateIndentAmount(mr);
-        await mr.save();
+      if (decision === 'forward' || decision === 'issue') {
+        if (decision === 'issue' && !stockContext.canFullyIssue) {
+          return {
+            statusCode: 400,
+            body: {
+              statusCode: 400,
+              message:
+                'Cannot verify partial indent — one or more lines are short on stock. Forward the entire indent to PM instead.',
+            },
+          };
+        }
 
-        await statusHistoryService.record(
-          'MaterialRequest',
-          mr._id,
-          fromStatus,
-          'FORWARDED_TO_PM',
-          req.user._id,
-          remark
-        );
-
-        const pmUsers = await User.find({
-          role: UserRole.PROJECT_MANAGER,
-          assignedProjectIds: mr.projectId,
+        await forwardIndentToPm(mr, req.user._id, remark, {
+          storeStockVerified: decision === 'issue' && stockContext.canFullyIssue,
         });
-        await notificationService.notifyUsers(
-          pmUsers.map((u) => u._id),
-          {
-            title: 'Indent forwarded to PM',
-            body: `${mr.indentNumber} forwarded — ${remark}`,
-            relatedEntityType: 'MaterialRequest',
-            relatedEntityId: mr._id,
-          }
-        );
 
         req.auditEntityType = 'MaterialRequest';
         req.auditEntityId = mr._id;
@@ -365,74 +586,7 @@ router.post(
         return { statusCode: 200, body: await mrEnrichedBody(mr._id) };
       }
 
-      if (!stockContext.canFullyIssue) {
-        return {
-          statusCode: 400,
-          body: {
-            statusCode: 400,
-            message:
-              'Cannot issue partial indent — one or more lines are short on stock. Forward the entire indent to PM instead.',
-          },
-        };
-      }
-
-      const lineItems = getIndentLineItems(mr);
-      const fromStatus = mr.status;
-
-      for (const item of lineItems) {
-        const qty = item.quantityRequested;
-        item.quantityAllocated = qty;
-
-        const materialId = item.materialId._id || item.materialId;
-        const ledger = await StockLedger.findOne({ siteId: mr.siteId, materialId });
-        if (!ledger || ledger.quantityOnHand < qty) {
-          const mat = await Material.findById(materialId);
-          return {
-            statusCode: 400,
-            body: {
-              statusCode: 400,
-              message: `Insufficient stock for ${mat?.name || 'material'} — forward entire indent to PM.`,
-            },
-          };
-        }
-
-        ledger.quantityOnHand -= qty;
-        ledger.lastMovementAt = new Date();
-        await ledger.save();
-        await StockMovement.create({
-          siteId: mr.siteId,
-          materialId,
-          materialRequestId: mr._id,
-          quantityDelta: -qty,
-          type: 'ALLOCATION',
-          actorUserId: req.user._id,
-        });
-      }
-
-      mr.status = 'ALLOCATED';
-      mr.pendingWithRole = 'STORE_INCHARGE';
-      await mr.save();
-
-      await statusHistoryService.record(
-        'MaterialRequest',
-        mr._id,
-        fromStatus,
-        'ALLOCATED',
-        req.user._id,
-        remark
-      );
-
-      await notificationService.notifyUser(mr.requestedByUserId, {
-        title: 'Indent accepted by store',
-        body: `Your indent ${mr.indentNumber} has been fully allocated.`,
-        relatedEntityType: 'MaterialRequest',
-        relatedEntityId: mr._id,
-      });
-
-      req.auditEntityType = 'MaterialRequest';
-      req.auditEntityId = mr._id;
-
-      return { statusCode: 200, body: await mrEnrichedBody(mr._id) };
+      return { statusCode: 400, body: { statusCode: 400, message: 'Invalid decision' } };
     }, next);
   }
 );
@@ -505,12 +659,7 @@ router.post(
         });
         await notificationService.notifyUsers(
           pmUsers.map((u) => u._id),
-          {
-            title: 'Request forwarded to PM',
-            body: `Request ${mr.indentNumber} forwarded for PM review.`,
-            relatedEntityType: 'MaterialRequest',
-            relatedEntityId: mr._id,
-          }
+          await buildPmIndentNotification(mr)
         );
       } catch (notifyErr) {
         console.error('Forward notification failed:', notifyErr.message);
@@ -620,7 +769,7 @@ router.post(
             fromStatus,
             'PENDING_HO',
             req.user._id,
-            `Escalated: exceeds ₹${MR_PM_DAILY_MAX_INR.toLocaleString('en-IN')} daily limit`
+            `Escalated: exceeds ₹${pmApprovalCapService.MR_PM_DAILY_MAX_INR.toLocaleString('en-IN')} daily limit`
           );
 
           const executives = await User.find({ role: UserRole.EXECUTIVE });
@@ -639,7 +788,7 @@ router.post(
             statusCode: 409,
             body: {
               statusCode: 409,
-              message: `Escalated: exceeds ₹${MR_PM_DAILY_MAX_INR.toLocaleString('en-IN')} daily limit`,
+              message: `Escalated: exceeds ₹${pmApprovalCapService.MR_PM_DAILY_MAX_INR.toLocaleString('en-IN')} daily limit`,
               escalated: true,
               dailyApprovedTotal: capCheck.dailyApprovedTotal,
               dailyCap: capCheck.dailyCap,
@@ -704,7 +853,7 @@ router.post(
           ...enriched,
           escalated: false,
           dailyApprovedTotal,
-          dailyCap: MR_PM_DAILY_MAX_INR,
+          dailyCap: pmApprovalCapService.MR_PM_DAILY_MAX_INR,
         },
       };
     }, next);
@@ -798,7 +947,7 @@ router.post(
           statusCode: 409,
           body: {
             statusCode: 409,
-            message: `Cannot close locally — exceeds ₹${MR_PM_DAILY_MAX_INR.toLocaleString('en-IN')} daily limit. Forward to Head Office instead.`,
+            message: `Cannot close locally — exceeds ₹${pmApprovalCapService.MR_PM_DAILY_MAX_INR.toLocaleString('en-IN')} daily limit. Forward to Head Office instead.`,
             escalated: true,
           },
         };
@@ -806,16 +955,34 @@ router.post(
 
       const remark = requireRemark(req.body.remark);
       const fromStatus = mr.status;
-      mr.status = 'PM_APPROVED';
+
+      if (mr.storeStockVerified) {
+        try {
+          await allocateIndentStock(mr, req.user._id);
+          mr.status = 'ALLOCATED';
+          mr.pendingWithRole = 'STORE_INCHARGE';
+        } catch (allocErr) {
+          if (allocErr.statusCode) {
+            return {
+              statusCode: allocErr.statusCode,
+              body: { statusCode: allocErr.statusCode, message: allocErr.message },
+            };
+          }
+          throw allocErr;
+        }
+      } else {
+        mr.status = 'PM_APPROVED';
+        mr.pendingWithRole = 'STORE_INCHARGE';
+      }
+
       mr.pmForwardRemark = remark;
-      mr.pendingWithRole = 'STORE_INCHARGE';
       await mr.save();
 
       await statusHistoryService.record(
         'MaterialRequest',
         mr._id,
         fromStatus,
-        'PM_APPROVED',
+        mr.status,
         req.user._id,
         `PM approved & closed locally (no HO escalation): ${remark}`
       );
@@ -827,8 +994,8 @@ router.post(
       await notificationService.notifyUsers(
         storeUsers.map((u) => u._id),
         {
-          title: 'Indent approved by PM',
-          body: `${mr.indentNumber} approved locally — proceed with issue or local fulfillment.`,
+          title: 'Indent approved by PM — ready to issue',
+          body: `${mr.indentNumber} approved — ${mr.status === 'ALLOCATED' ? 'stock reserved, issue material' : 'proceed with fulfillment'}.`,
           relatedEntityType: 'MaterialRequest',
           relatedEntityId: mr._id,
         }

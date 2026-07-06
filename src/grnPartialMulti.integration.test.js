@@ -7,14 +7,21 @@ const request = require('supertest');
 const { setupTestDb, teardownTestDb, loginAs, getApp } = require('./test/helpers');
 const { PurchaseOrder, GoodsReceiptNote } = require('./models');
 
+const mandatoryAttachments = [
+  { name: 'invoice.pdf', fileType: 'application/pdf', category: 'INVOICE' },
+  { name: 'challan.pdf', fileType: 'application/pdf', category: 'CHALLAN' },
+];
+
 describe('GRN partial & multi receipt integration', () => {
   let app;
   let storeToken;
+  let coordToken;
 
   before(async () => {
     await setupTestDb();
     app = getApp();
     storeToken = await loginAs('storeincharge@bekem.com');
+    coordToken = await loginAs('coordinator@bekem.com');
   });
 
   after(async () => {
@@ -54,6 +61,7 @@ describe('GRN partial & multi receipt integration', () => {
         receiveType: 'PARTIAL',
         remarks: 'First partial — quantity variance',
         invoiceDate: new Date().toISOString(),
+        attachments: mandatoryAttachments,
       });
     assert.strictEqual(first.status, 201);
     assert.ok(first.body.data.isPartialGrn || first.body.data.status === 'PARTIALLY_RECEIVED');
@@ -80,8 +88,17 @@ describe('GRN partial & multi receipt integration', () => {
         receiveType: 'PARTIAL',
         remarks: 'Second partial — price variance',
         invoiceDate: new Date().toISOString(),
+        attachments: mandatoryAttachments,
       });
     assert.strictEqual(second.status, 201);
+    assert.equal(second.body.data.status, 'ON_HOLD');
+
+    const holdGrnId = second.body.data.id;
+    const approve = await request(app)
+      .post(`/api/goods-receipts/${holdGrnId}/approve`)
+      .set('Authorization', `Bearer ${coordToken}`)
+      .send({});
+    assert.strictEqual(approve.status, 200);
 
     const grnCount = await GoodsReceiptNote.countDocuments({ purchaseOrderId: po.id });
     assert.strictEqual(grnCount, 2);

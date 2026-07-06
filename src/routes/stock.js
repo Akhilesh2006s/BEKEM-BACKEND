@@ -323,6 +323,31 @@ router.get('/cross-project', async (req, res, next) => {
   }
 });
 
+router.get(
+  '/material-availability/:materialId',
+  param('materialId').isMongoId(),
+  validate,
+  async (req, res, next) => {
+    try {
+      const allowed = [
+        UserRole.PROJECT_MANAGER,
+        UserRole.EXECUTIVE,
+        UserRole.COORDINATOR,
+        UserRole.CHAIRMAN,
+      ];
+      if (!allowed.includes(req.user.role)) {
+        return res.status(403).json({ statusCode: 403, message: 'Forbidden' });
+      }
+      const { getMaterialAvailability } = require('../services/materialAvailabilityService');
+      const data = await getMaterialAvailability(req.user, req.params.materialId);
+      res.json({ data });
+    } catch (err) {
+      if (err.statusCode) return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
+      next(err);
+    }
+  }
+);
+
 router.get('/inventory', async (req, res, next) => {
   try {
     const { StockInventoryRecord } = require('../models');

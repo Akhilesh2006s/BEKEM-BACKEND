@@ -84,6 +84,7 @@ async function updatePurchaseOrderDraft(po, body, { acknowledgeGrnWarnings = fal
   }
 
   if (body.paymentTerms != null) po.paymentTerms = body.paymentTerms;
+  if (body.additionalTerms != null) po.additionalTerms = body.additionalTerms;
   if (body.billingAddress != null) po.billingAddress = body.billingAddress;
   if (body.billingAddressType != null) po.billingAddressType = body.billingAddressType;
   if (body.deliveryAddress != null) po.deliveryAddress = body.deliveryAddress;
@@ -138,17 +139,7 @@ function computeGrnInvoiceValue(items) {
   );
 }
 
-function validateGrnTransportFields(invoiceValue, { vehicleNo, vehicleNumber, ewayBillNumber }) {
-  if (invoiceValue <= EWAY_INVOICE_THRESHOLD_INR) return null;
-  const vehicle = (vehicleNo || vehicleNumber || '').trim();
-  const eway = (ewayBillNumber || '').trim();
-  if (!vehicle || !eway) {
-    const err = new Error(
-      'Vehicle number and E-Way Bill number are required when invoice value exceeds ₹50,000'
-    );
-    err.statusCode = 400;
-    return err;
-  }
+function validateGrnTransportFields() {
   return null;
 }
 

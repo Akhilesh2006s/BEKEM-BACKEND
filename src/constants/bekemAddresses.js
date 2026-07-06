@@ -13,13 +13,7 @@ Yelahanka Industrial Area, Bangalore, Karnataka — 560 064`;
 const BEKEM_GLOBAL_WAREHOUSE_ADDRESS = `BEKEM INFRA PROJECTS PVT. LTD. — Global Warehouse
 Kogilu Main Road, Agrahara, Bangalore, Karnataka — 560 064`;
 
-const DEFAULT_PO_TERMS = [
-  'Delivery: As per project schedule',
-  'P & F Charges: Inclusive in the above price',
-  'Freight: Inclusive in the above price',
-  'Test Certificates: Must be sent along with the material',
-  'Payment: 100% payment within 30 days from the date of supply',
-];
+const { DEFAULT_PO_TERMS } = require('./poTerms');
 
 module.exports = {
   BEKEM_BUYER_ADDRESS,

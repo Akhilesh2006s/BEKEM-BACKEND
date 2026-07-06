@@ -30,7 +30,7 @@ describe('Site Material Master — indent workflow', () => {
       .send({
         name: 'Sand',
         unit: 'Mts',
-        category: 'Raw Material',
+        category: 'Civil Materials',
         description: 'River sand for plaster',
       });
 
@@ -40,7 +40,7 @@ describe('Site Material Master — indent workflow', () => {
     assert.notStrictEqual(res.body.data.code, 'NEW');
     assert.strictEqual(res.body.data.name, 'Sand');
     assert.strictEqual(res.body.data.unit, 'Mts');
-    assert.strictEqual(res.body.data.category, 'Raw Material');
+    assert.strictEqual(res.body.data.category, 'Civil Materials');
     assert.strictEqual(res.body.meta.created, true);
 
     const persisted = await Material.findById(res.body.data.id);
@@ -54,13 +54,13 @@ describe('Site Material Master — indent workflow', () => {
     const first = await request(app)
       .post('/api/materials/site-request')
       .set('Authorization', `Bearer ${siteToken}`)
-      .send({ name: 'Cement', unit: 'Bags', category: 'Raw Material' });
+      .send({ name: 'Cement', unit: 'Bags', category: 'Civil Materials' });
     assert.strictEqual(first.status, 201);
 
     const second = await request(app)
       .post('/api/materials/site-request')
       .set('Authorization', `Bearer ${siteToken}`)
-      .send({ name: 'cement', unit: 'Mts', category: 'Raw Material' });
+      .send({ name: 'cement', unit: 'Mts', category: 'Civil Materials' });
 
     assert.strictEqual(second.status, 200);
     assert.strictEqual(second.body.data.id, first.body.data.id);
@@ -78,7 +78,7 @@ describe('Site Material Master — indent workflow', () => {
     await request(app)
       .post('/api/materials/site-request')
       .set('Authorization', `Bearer ${siteToken}`)
-      .send({ name: uniqueName, unit: 'Nos', category: 'Consumables' });
+      .send({ name: uniqueName, unit: 'Nos', category: 'Stationery' });
 
     const list = await request(app)
       .get('/api/materials')
