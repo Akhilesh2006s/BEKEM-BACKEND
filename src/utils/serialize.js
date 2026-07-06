@@ -1,4 +1,4 @@
-const { UserRole } = require('@afios/shared');
+const { UserRole, hideIndentPricingForRole } = require('@afios/shared');
 const { getIndentLineItems, pendingWithLabel } = require('../services/materialRequestHelpers');
 
 function resolveId(ref) {
@@ -142,6 +142,7 @@ function serializeMaterialRequest(mr, stockContext, pricingContext) {
     escalatedToHo: !!mr.escalatedToHo,
     storeStockVerified: !!mr.storeStockVerified,
     origin: mr.origin || 'SITE',
+    indentRequestType: mr.indentRequestType || 'ABOVE_5000',
     canFullyIssue: stockContext?.canFullyIssue,
     hasShortfall: stockContext?.hasShortfall,
     createdAt: mr.createdAt?.toISOString?.() || mr.createdAt,
@@ -181,14 +182,33 @@ function serializeMaterialRequest(mr, stockContext, pricingContext) {
   return base;
 }
 
-async function serializeMaterialRequestEnriched(mr) {
+function stripIndentPricingFromResponse(data) {
+  if (Array.isArray(data.items)) {
+    for (const item of data.items) {
+      delete item.unitPrice;
+      delete item.lineTotal;
+      if (item.material) {
+        delete item.material.unitPrice;
+        delete item.material.referenceUnitPrice;
+      }
+    }
+  }
+  delete data.estimatedValue;
+  return data;
+}
+
+async function serializeMaterialRequestEnriched(mr, viewerRole) {
   const { enrichIndentWithStock } = require('../services/indentStockService');
   const { computeIndentPricing } = require('../services/indentPricingService');
   const [stockContext, pricingContext] = await Promise.all([
     enrichIndentWithStock(mr),
     computeIndentPricing(mr),
   ]);
-  return serializeMaterialRequest(mr, stockContext, pricingContext);
+  const data = serializeMaterialRequest(mr, stockContext, pricingContext);
+  if (viewerRole && hideIndentPricingForRole(viewerRole, data.indentRequestType)) {
+    stripIndentPricingFromResponse(data);
+  }
+  return data;
 }
 
 module.exports = {

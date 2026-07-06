@@ -36,6 +36,7 @@ describe('Indent workflow v2', () => {
       .post('/api/material-requests')
       .set('Authorization', `Bearer ${siteToken}`)
       .send({
+        indentRequestType: 'ABOVE_5000',
         purpose: 'UAT test reason',
         items: [{ materialId: material._id.toString(), quantityRequested: 1 }],
       });
@@ -55,6 +56,7 @@ describe('Indent workflow v2', () => {
       .post('/api/material-requests')
       .set('Authorization', `Bearer ${siteToken}`)
       .send({
+        indentRequestType: 'ABOVE_5000',
         purpose: 'UAT test reason',
         items: [{ materialId: material._id.toString(), quantityRequested: 5 }],
       });
@@ -79,6 +81,7 @@ describe('Indent workflow v2', () => {
       .post('/api/material-requests')
       .set('Authorization', `Bearer ${siteToken}`)
       .send({
+        indentRequestType: 'ABOVE_5000',
         purpose: 'UAT test reason',
         items: [
           { materialId: material._id.toString(), quantityRequested: 1 },
@@ -124,7 +127,8 @@ describe('Indent workflow v2', () => {
         .post('/api/material-requests')
         .set('Authorization', `Bearer ${siteToken}`)
         .send({
-          purpose: 'PM daily cap test',
+          indentRequestType: 'ABOVE_5000',
+        purpose: 'PM daily cap test',
           items: [{ materialId: cement._id.toString(), quantityRequested }],
         });
       const mrId = createRes.body.data.id;
@@ -158,6 +162,7 @@ describe('Indent workflow v2', () => {
       .post('/api/material-requests')
       .set('Authorization', `Bearer ${siteToken}`)
       .send({
+        indentRequestType: 'ABOVE_5000',
         purpose: 'Stock available verify test',
         items: [{ materialId: material._id.toString(), quantityRequested: 1 }],
       });

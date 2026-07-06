@@ -1,14 +1,9 @@
 {
-  "name": "bekem-backend",
+  "name": "@afios/api",
   "version": "2.0.0",
   "private": true,
   "main": "src/index.js",
-  "workspaces": [
-    "packages/*"
-  ],
   "scripts": {
-    "postinstall": "npm run build -w @afios/shared",
-    "build:shared": "npm run build -w @afios/shared",
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
     "seed": "node src/scripts/seed.js",
@@ -16,7 +11,7 @@
     "seed:transactions": "node src/scripts/seedTransactionalDemo.js",
     "uat:walk": "node src/scripts/uatSmokeWalk.js",
     "import:po-index": "node src/scripts/importPoIndex.js",
-    "backfill:stock": "node src/scripts/backfillStock.js",
+    "dedupe:materials": "node src/scripts/dedupeMaterials.js",
     "test": "node --test --test-concurrency=1 src/**/*.test.js"
   },
   "dependencies": {
@@ -35,7 +30,6 @@
   },
   "devDependencies": {
     "mongodb-memory-server": "^10.1.4",
-    "supertest": "^7.0.0",
-    "typescript": "^5.7.3"
+    "supertest": "^7.0.0"
   }
 }

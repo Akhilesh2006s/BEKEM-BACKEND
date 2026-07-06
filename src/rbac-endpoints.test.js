@@ -27,6 +27,7 @@ describe('RBAC endpoint enforcement', () => {
       .post('/api/material-requests')
       .set('Authorization', `Bearer ${token}`)
       .send({
+        indentRequestType: 'ABOVE_5000',
         materialId: material._id.toString(),
         quantityRequested: 5,
         purpose: 'Should fail',

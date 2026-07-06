@@ -1081,9 +1081,15 @@ async function getPmDashboard(user) {
   const dailyApprovedTotal = await getPmDailyApprovedTotal(user._id);
 
   return {
-    pendingRequests: await Promise.all(pendingRequests.map(serializeMaterialRequestEnriched)),
-    approveQueue: await Promise.all(approveQueue.map(serializeMaterialRequestEnriched)),
-    purchaseRequests: await Promise.all(purchaseRequests.map(serializeMaterialRequestEnriched)),
+    pendingRequests: await Promise.all(
+      pendingRequests.map((mr) => serializeMaterialRequestEnriched(mr, UserRole.PROJECT_MANAGER))
+    ),
+    approveQueue: await Promise.all(
+      approveQueue.map((mr) => serializeMaterialRequestEnriched(mr, UserRole.PROJECT_MANAGER))
+    ),
+    purchaseRequests: await Promise.all(
+      purchaseRequests.map((mr) => serializeMaterialRequestEnriched(mr, UserRole.PROJECT_MANAGER))
+    ),
     notifications: notifications.map((n) => ({
       id: n._id.toString(),
       title: n.title,

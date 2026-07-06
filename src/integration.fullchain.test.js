@@ -36,6 +36,7 @@ describe('Full chain integration', () => {
       .post('/api/material-requests')
       .set('Authorization', `Bearer ${siteToken}`)
       .send({
+        indentRequestType: 'ABOVE_5000',
         items: [{ materialId: cement._id.toString(), quantityRequested: 1 }],
         purpose: 'Integration test pour',
         requiredByDate: new Date(Date.now() + 7 * 86400000).toISOString(),

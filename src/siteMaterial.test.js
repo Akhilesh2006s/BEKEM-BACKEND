@@ -95,6 +95,7 @@ describe('Site Material Master — indent workflow', () => {
       .post('/api/material-requests')
       .set('Authorization', `Bearer ${siteToken}`)
       .send({
+        indentRequestType: 'ABOVE_5000',
         purpose: 'Legacy custom name path',
         items: [{ customName: name, unit: 'Nos', quantityRequested: 2 }],
       });

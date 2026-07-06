@@ -71,8 +71,37 @@ async function computeIndentEstimatedValue(mr) {
   return totalEstimatedValue;
 }
 
+/**
+ * Pricing total for unsaved indent line items (create validation).
+ * @param {Array<{ materialId: unknown, quantityRequested: number }>} items
+ */
+async function computeDraftIndentTotal(items) {
+  if (!items?.length) return 0;
+
+  const materialIds = [...new Set(items.map((i) => (i.materialId?._id || i.materialId)?.toString()).filter(Boolean))];
+  const [rateByMaterial, materials] = await Promise.all([
+    getLatestApprovedRates(materialIds),
+    Material.find({ _id: { $in: materialIds } }).select('referenceUnitPrice').lean(),
+  ]);
+
+  const referenceByMaterial = new Map(
+    materials.map((m) => [m._id.toString(), Number(m.referenceUnitPrice) || 0])
+  );
+
+  let totalEstimatedValue = 0;
+  for (const item of items) {
+    const materialId = (item.materialId?._id || item.materialId)?.toString();
+    const unitPrice = resolveUnitPrice(materialId, rateByMaterial, referenceByMaterial);
+    const requestedQty = Math.max(0, Number(item.quantityRequested) || 0);
+    totalEstimatedValue += round2(requestedQty * unitPrice);
+  }
+
+  return round2(totalEstimatedValue);
+}
+
 module.exports = {
   computeIndentPricing,
   computeIndentEstimatedValue,
+  computeDraftIndentTotal,
   round2,
 };

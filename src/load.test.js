@@ -43,6 +43,7 @@ describe('Load / soak tests', () => {
         .post('/api/material-requests')
         .set('Authorization', `Bearer ${siteToken}`)
         .send({
+          indentRequestType: 'ABOVE_5000',
           materialId: material._id.toString(),
           quantityRequested: 1,
           purpose: `Load test ${i}`,

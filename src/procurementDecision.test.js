@@ -14,7 +14,8 @@ async function createForwardedIndent(app, siteToken, storeToken, materialId) {
   const createRes = await request(app)
     .post('/api/material-requests')
     .set('Authorization', `Bearer ${siteToken}`)
-    .send({ purpose: 'UAT test reason', items: [{ materialId: materialId.toString(), quantityRequested: 50 }] });
+    .send({ indentRequestType: 'ABOVE_5000',
+        purpose: 'UAT test reason', items: [{ materialId: materialId.toString(), quantityRequested: 50 }] });
   assert.strictEqual(createRes.status, 201);
   const mrId = createRes.body.data.id;
 

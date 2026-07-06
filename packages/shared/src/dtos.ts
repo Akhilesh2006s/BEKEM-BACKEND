@@ -329,6 +329,8 @@ export interface MaterialDto {
   gstRate?: number;
   /** Latest approved purchase rate (reference only). */
   unitPrice?: number | null;
+  /** Material Master reference rate when no PO history exists. */
+  referenceUnitPrice?: number | null;
   /** Secondary line for indent/search pickers when names collide. */
   pickerSubtitle?: string;
 }
@@ -388,6 +390,7 @@ export interface IndentLineItemDto {
 }
 
 export interface CreateIndentDto {
+  indentRequestType: 'BELOW_5000' | 'ABOVE_5000';
   purpose: string;
   items: Array<{
     materialId?: string;
@@ -409,6 +412,7 @@ export interface CreateSiteMaterialDto {
 export interface MaterialRequestDto {
   id: string;
   indentNumber: string;
+  indentRequestType?: 'BELOW_5000' | 'ABOVE_5000';
   projectId: string;
   siteId: string;
   items: IndentLineItemDto[];

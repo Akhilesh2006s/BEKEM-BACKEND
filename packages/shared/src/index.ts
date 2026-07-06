@@ -125,6 +125,7 @@ export const PERMISSION_MATRIX: Record<UserRole, Capability[]> = {
   [UserRole.SITE_INCHARGE]: ['VIEW_OWN_SCOPE', 'CREATE_MATERIAL_REQUEST', 'REPORT_INCIDENT'],
   [UserRole.STORE_INCHARGE]: [
     'VIEW_OWN_SCOPE',
+    'CREATE_MATERIAL_REQUEST',
     'VIEW_FINANCE',
     'ALLOCATE_MATERIAL_REQUEST',
     'FORWARD_MATERIAL_REQUEST',
@@ -211,3 +212,4 @@ export * from './dtos';
 export * from './locales';
 export * from './materialConstants';
 export * from './gstMath';
+export * from './indentRequestTypes';

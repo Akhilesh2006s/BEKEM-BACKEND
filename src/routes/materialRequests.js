@@ -59,9 +59,9 @@ const populateFields = [
   { path: 'requestedByUserId', select: 'name' },
 ];
 
-async function mrEnrichedBody(mrId) {
+async function mrEnrichedBody(mrId, viewerRole) {
   const populated = await MaterialRequest.findById(mrId).populate(populateFields);
-  return { data: await serializeMaterialRequestEnriched(populated) };
+  return { data: await serializeMaterialRequestEnriched(populated, viewerRole) };
 }
 
 const HIDE_HO_ORIGIN_ROLES = [UserRole.SITE_INCHARGE, UserRole.STORE_INCHARGE, UserRole.PROJECT_MANAGER];
@@ -215,7 +215,9 @@ router.get('/', async (req, res, next) => {
       .sort({ createdAt: -1 })
       .populate(populateFields);
 
-    const data = await Promise.all(requests.map((mr) => serializeMaterialRequestEnriched(mr)));
+    const data = await Promise.all(
+      requests.map((mr) => serializeMaterialRequestEnriched(mr, req.user.role))
+    );
     res.json({ data });
   } catch (err) {
     next(err);
@@ -256,7 +258,7 @@ router.get('/ho-indents', async (req, res, next) => {
       .populate(populateFields);
     const data = await Promise.all(
       requests.map(async (mr) => {
-        const row = await serializeMaterialRequestEnriched(mr);
+        const row = await serializeMaterialRequestEnriched(mr, req.user.role);
         if (mr.status === 'RFQ_OPEN') {
           const pr = await PurchaseRequest.findOne({ materialRequestId: mr._id }).select('_id');
           if (pr) {
@@ -295,7 +297,7 @@ router.post(
       const { createExecutiveIndent } = require('../services/executiveIndentService');
       const mr = await createExecutiveIndent(req.user, req.body);
       const populated = await MaterialRequest.findById(mr._id).populate(populateFields);
-      res.status(201).json({ data: await serializeMaterialRequestEnriched(populated) });
+      res.status(201).json({ data: await serializeMaterialRequestEnriched(populated, req.user.role) });
     } catch (err) {
       if (err.statusCode) return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
       next(err);
@@ -314,7 +316,7 @@ router.post(
       const populated = await MaterialRequest.findById(mr._id).populate(populateFields);
       res.json({
         data: {
-          indent: await serializeMaterialRequestEnriched(populated),
+          indent: await serializeMaterialRequestEnriched(populated, req.user.role),
           rfqId: rfq._id.toString(),
           rfqNumber: rfq.rfqNumber,
         },
@@ -384,7 +386,7 @@ router.post(
         relatedEntityId: mr._id,
       });
       const populated = await MaterialRequest.findById(mr._id).populate(populateFields);
-      res.status(201).json({ data: await serializeMaterialRequestEnriched(populated) });
+      res.status(201).json({ data: await serializeMaterialRequestEnriched(populated, req.user.role) });
     } catch (err) {
       next(err);
     }
@@ -419,7 +421,7 @@ router.get('/:id', param('id').isMongoId(), validate, async (req, res, next) => 
       }
     }
 
-    const data = await serializeMaterialRequestEnriched(mr);
+    const data = await serializeMaterialRequestEnriched(mr, req.user.role);
     if (req.user.role === UserRole.PROJECT_MANAGER) {
       const { enrichIndentWithCrossProjectStock } = require('../services/pmCrossProjectStockService');
       const cross = await enrichIndentWithCrossProjectStock(mr, req.user);
@@ -453,6 +455,7 @@ router.post(
     body('materialId').optional().isMongoId(),
     body('quantityRequested').optional().isFloat({ min: 0.01 }),
     body('purpose').trim().notEmpty().withMessage('Reason for request is required').isLength({ max: 500 }),
+    body('indentRequestType').isIn(['BELOW_5000', 'ABOVE_5000']),
     body('requiredByDate').optional().isISO8601(),
   ],
   validate,
@@ -482,6 +485,9 @@ router.post(
         });
       }
 
+      const { validateIndentRequestTypeForCreate } = require('../services/indentRequestTypeService');
+      await validateIndentRequestTypeForCreate(req.body.indentRequestType, resolvedItems);
+
       const project = site.projectId;
       const indentNumber = await generateIndentNumber(project.code);
 
@@ -492,10 +498,14 @@ router.post(
         items: resolvedItems,
         requestedByUserId: req.user._id,
         purpose: req.body.purpose.trim(),
+        indentRequestType: req.body.indentRequestType,
         requiredByDate: req.body.requiredByDate ? new Date(req.body.requiredByDate) : undefined,
         status: 'PENDING_STORE',
         pendingWithRole: 'STORE_INCHARGE',
       });
+
+      mr.estimatedValue = await estimateIndentAmount(mr);
+      await mr.save();
 
       await statusHistoryService.record(
         'MaterialRequest',
@@ -525,8 +535,13 @@ router.post(
       req.auditEntityId = mr._id;
 
       const populated = await MaterialRequest.findById(mr._id).populate(populateFields);
-      res.status(201).json({ data: serializeMaterialRequest(populated) });
+      res.status(201).json({
+        data: await serializeMaterialRequestEnriched(populated, req.user.role),
+      });
     } catch (err) {
+      if (err.statusCode) {
+        return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
+      }
       next(err);
     }
   }
@@ -553,10 +568,10 @@ router.post(
       const { decision } = req.body;
       if (mr.status !== 'PENDING_STORE') {
         if (decision === 'forward' && FORWARDED_STATUSES.includes(mr.status)) {
-          return { statusCode: 200, body: await mrEnrichedBody(mr._id) };
+          return { statusCode: 200, body: await mrEnrichedBody(mr._id, req.user.role) };
         }
         if (decision === 'issue' && mr.status === 'ALLOCATED') {
-          return { statusCode: 200, body: await mrEnrichedBody(mr._id) };
+          return { statusCode: 200, body: await mrEnrichedBody(mr._id, req.user.role) };
         }
         return { statusCode: 400, body: { statusCode: 400, message: 'Request is not pending store action' } };
       }
@@ -583,7 +598,7 @@ router.post(
         req.auditEntityType = 'MaterialRequest';
         req.auditEntityId = mr._id;
 
-        return { statusCode: 200, body: await mrEnrichedBody(mr._id) };
+        return { statusCode: 200, body: await mrEnrichedBody(mr._id, req.user.role) };
       }
 
       return { statusCode: 400, body: { statusCode: 400, message: 'Invalid decision' } };
@@ -623,7 +638,7 @@ router.post(
       }
 
       if (mr.status === 'FORWARDED_TO_PM') {
-        return { statusCode: 200, body: { ...(await mrEnrichedBody(mr._id)), message: 'Already forwarded to PM' } };
+        return { statusCode: 200, body: { ...(await mrEnrichedBody(mr._id, req.user.role)), message: 'Already forwarded to PM' } };
       }
 
       if (!['ALLOCATED', 'PENDING_STORE'].includes(mr.status)) {
@@ -668,7 +683,7 @@ router.post(
       req.auditEntityType = 'MaterialRequest';
       req.auditEntityId = mr._id;
 
-      return { statusCode: 200, body: await mrEnrichedBody(mr._id) };
+      return { statusCode: 200, body: await mrEnrichedBody(mr._id, req.user.role) };
     }, next);
   }
 );
@@ -719,7 +734,7 @@ router.post(
       });
 
       const populated = await MaterialRequest.findById(mr._id).populate(populateFields);
-      res.json({ data: await serializeMaterialRequestEnriched(populated) });
+      res.json({ data: await serializeMaterialRequestEnriched(populated, req.user.role) });
     } catch (err) {
       if (err.statusCode) {
         return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
@@ -747,7 +762,7 @@ router.post(
       if (actingRole === UserRole.PROJECT_MANAGER) {
         if (mr.status !== 'FORWARDED_TO_PM') {
           if (['PM_APPROVED', 'PURCHASE_REQUESTED', 'PENDING_HO', 'PENDING_EXECUTIVE_DECISION'].includes(mr.status)) {
-            return { statusCode: 200, body: await mrEnrichedBody(mr._id) };
+            return { statusCode: 200, body: await mrEnrichedBody(mr._id, req.user.role) };
           }
           return { statusCode: 400, body: { statusCode: 400, message: 'Request not awaiting PM approval' } };
         }
@@ -783,7 +798,7 @@ router.post(
             }
           );
 
-          const enriched = await mrEnrichedBody(mr._id);
+          const enriched = await mrEnrichedBody(mr._id, req.user.role);
           return {
             statusCode: 409,
             body: {
@@ -846,7 +861,7 @@ router.post(
           ? await getPmDailyApprovedTotal(pmId)
           : undefined;
 
-      const enriched = await mrEnrichedBody(mr._id);
+      const enriched = await mrEnrichedBody(mr._id, req.user.role);
       return {
         statusCode: 200,
         body: {
@@ -1008,7 +1023,7 @@ router.post(
         relatedEntityId: mr._id,
       });
 
-      return { statusCode: 200, body: await mrEnrichedBody(mr._id) };
+      return { statusCode: 200, body: await mrEnrichedBody(mr._id, req.user.role) };
     }, next);
   }
 );
@@ -1043,7 +1058,7 @@ router.post(
             'PM_APPROVED',
           ].includes(mr.status)
         ) {
-          return { statusCode: 200, body: await mrEnrichedBody(mr._id) };
+          return { statusCode: 200, body: await mrEnrichedBody(mr._id, req.user.role) };
         }
         return {
           statusCode: 400,
@@ -1068,7 +1083,7 @@ router.post(
         relatedEntityId: mr._id,
       });
 
-      const enriched = await mrEnrichedBody(mr._id);
+      const enriched = await mrEnrichedBody(mr._id, req.user.role);
       return {
         statusCode: 200,
         body: {
