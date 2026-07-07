@@ -151,6 +151,30 @@ async function ensureDefaultVendorQuotations(rfq, purchaseRequest, materialIds) 
     usedIds.add(vendor._id.toString());
   }
 
+  if (existing.length + rows.length < 3) {
+    const fallback = await Vendor.find({
+      isActive: { $ne: false },
+      authorizationStatus: { $in: ['AUTHORIZED', null] },
+      _id: { $nin: [...usedIds] },
+    })
+      .sort({ name: 1 })
+      .limit(5);
+    for (const vendor of fallback) {
+      if (usedIds.has(vendor._id.toString())) continue;
+      if (existing.length + rows.length >= 3) break;
+      const variance = 0.9 + Math.random() * 0.2;
+      const lineSubtotal = Math.round(baseAmount * variance);
+      rows.push({
+        vendorId: vendor._id,
+        rate: Math.max(1, Math.round(lineSubtotal / qty)),
+        gstPercent: 18,
+        paymentTerms: '100% payment within 30 days from the date of supply',
+        deliveryTerms: 'Delivery as per project schedule',
+      });
+      usedIds.add(vendor._id.toString());
+    }
+  }
+
   if (rows.length) {
     return upsertRfqQuotations(rfq, rows, qty);
   }

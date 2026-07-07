@@ -75,7 +75,7 @@ async function enrichPurchaseRequestDetail(pr) {
     executiveRecommendation: pr.executiveRecommendation || null,
     executiveRecommendationRemark: pr.executiveRecommendationRemark || '',
     executiveRecommendedAt: pr.executiveRecommendedAt?.toISOString?.() || null,
-    canExecutiveDecide: pr.status === 'OPEN',
+    canExecutiveDecide: pr.status === 'OPEN' && !pr.executiveRecommendation,
     items: lineItems.map((item) => {
       const mat = item.materialId;
       return {

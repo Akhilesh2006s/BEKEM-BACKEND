@@ -1,4 +1,4 @@
-const { Material, GoodsReceiptNote } = require('../models');
+const { Material, GoodsReceiptNote, Vendor } = require('../models');
 const { validatePoLinePayload } = require('./poLineCalculation');
 const { getCumulativeReceivedByLine } = require('./grnFulfillmentService');
 
@@ -65,7 +65,7 @@ async function getPoEditGrnWarnings(po, body) {
   return warnings;
 }
 
-async function updatePurchaseOrderDraft(po, body, { acknowledgeGrnWarnings = false } = {}) {
+async function updatePurchaseOrderDraft(po, body, { acknowledgeGrnWarnings = false, actorUserId } = {}) {
   const isApprovedCorrection = po.status === 'APPROVED';
   if (!EDITABLE_STATUSES.has(po.status) && !isApprovedCorrection) {
     const err = new Error('PO cannot be edited in its current status');
@@ -82,6 +82,27 @@ async function updatePurchaseOrderDraft(po, body, { acknowledgeGrnWarnings = fal
       throw err;
     }
   }
+
+  if (body.vendorId != null) {
+    const vendor = await Vendor.findById(body.vendorId);
+    if (!vendor) {
+      const err = new Error('Vendor not found');
+      err.statusCode = 400;
+      throw err;
+    }
+    if (body.vendorId.toString() !== po.vendorId?.toString()) {
+      const { validatePoVendorSelection } = require('./rfqService');
+      await validatePoVendorSelection(po.purchaseRequestId, [body.vendorId], {
+        vendorSelectionReasons: body.vendorSelectionReason
+          ? { [body.vendorId]: body.vendorSelectionReason }
+          : {},
+        actorUserId,
+        skipFinalizeRequirement: true,
+      });
+      po.vendorId = body.vendorId;
+    }
+  }
+  if (body.vendorSelectionReason != null) po.vendorSelectionReason = body.vendorSelectionReason;
 
   if (body.paymentTerms != null) po.paymentTerms = body.paymentTerms;
   if (body.additionalTerms != null) po.additionalTerms = body.additionalTerms;

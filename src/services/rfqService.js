@@ -266,7 +266,7 @@ async function sendRfqEmail(rfqId, user, { vendorId, vendorEmail } = {}) {
 async function validatePoVendorSelection(
   purchaseRequestId,
   vendorIds,
-  { vendorSelectionReasons = {}, whyWeChoseThisVendor, actorUserId } = {}
+  { vendorSelectionReasons = {}, whyWeChoseThisVendor, actorUserId, skipFinalizeRequirement = false } = {}
 ) {
   const rfq = await RFQ.findOne({ purchaseRequestId });
   if (!rfq) return;
@@ -297,7 +297,7 @@ async function validatePoVendorSelection(
     }
   }
 
-  if (rfq.status !== 'FINALIZED' || !rfq.whyWeChoseThisVendor?.trim()) {
+  if (!skipFinalizeRequirement && (rfq.status !== 'FINALIZED' || !rfq.whyWeChoseThisVendor?.trim())) {
     const why = String(whyWeChoseThisVendor || rfq.whyWeChoseThisVendor || '').trim();
     if (!why) {
       const err = new Error(

@@ -473,6 +473,8 @@ router.patch(
   requirePoEditRole,
   [
     param('id').isMongoId(),
+    body('vendorId').optional().isMongoId(),
+    body('vendorSelectionReason').optional().isString(),
     body('paymentTerms').optional().trim(),
     body('additionalTerms').optional().trim(),
     body('billingAddress').optional().isString(),
@@ -520,6 +522,7 @@ router.patch(
 
       await updatePurchaseOrderDraft(po, req.body, {
         acknowledgeGrnWarnings: !!req.body.acknowledgeGrnWarnings,
+        actorUserId: req.user._id,
       });
       const populated = await PurchaseOrder.findById(po._id).populate(poPopulate);
       res.json({

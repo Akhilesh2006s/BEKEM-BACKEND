@@ -345,8 +345,8 @@ async function getTodayActions(user) {
       actions.push({
         id: 'exec-pr-queue',
         title: `Process ${pendingPrs} purchase request${pendingPrs > 1 ? 's' : ''}`,
-        subtitle: 'Review PM-forwarded indents and create PO or recommend branch transfer',
-        href: '/executive/purchase-requests',
+        subtitle: 'Start RFQ — compare vendor quotes before creating PO',
+        href: '/executive/rfq/inbox',
         priority: 'high',
         count: pendingPrs,
       });
