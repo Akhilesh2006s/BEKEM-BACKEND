@@ -340,7 +340,7 @@ async function getTodayActions(user) {
     const {
       countExecutivePendingPurchaseRequests,
     } = require('./executivePurchaseRequestQueueService');
-    const pendingPrs = await countExecutivePendingPurchaseRequests();
+    const pendingPrs = await countExecutivePendingPurchaseRequests(user);
     if (pendingPrs > 0) {
       actions.push({
         id: 'exec-pr-queue',
@@ -873,11 +873,11 @@ async function getDashboardWidgets(user) {
     ]);
 
   const procurementCounts =
-    role === UserRole.EXECUTIVE ? await countPendingProcurementDecisions() : null;
+    role === UserRole.EXECUTIVE ? await countPendingProcurementDecisions(user) : null;
 
   const executivePrCount =
     role === UserRole.EXECUTIVE
-      ? await require('./executivePurchaseRequestQueueService').countExecutivePendingPurchaseRequests()
+      ? await require('./executivePurchaseRequestQueueService').countExecutivePendingPurchaseRequests(user)
       : null;
 
   const coordinatorVerifyCount =

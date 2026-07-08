@@ -40,12 +40,10 @@ router.use(authenticate);
 
 router.get('/pending-purchase-orders', async (req, res, next) => {
   try {
-    const { DeliveryVerification } = require('../models');
-    const verifiedPoIds = await DeliveryVerification.distinct('purchaseOrderId');
+    // Req 43/44 — Material Received opens directly from approved POs (no Verify Delivery gate).
     const orders = await PurchaseOrder.find({
       status: 'APPROVED',
       fulfillmentStatus: { $ne: 'closed_complete' },
-      _id: { $in: verifiedPoIds },
     })
       .sort({ createdAt: -1 })
       .populate([
@@ -95,23 +93,31 @@ router.get('/hold-queue', async (req, res, next) => {
   }
 });
 
+function serializeGrnListItem(g) {
+  const po = g.purchaseOrderId;
+  return {
+    id: g._id.toString(),
+    grnNumber: g.grnNumber,
+    purchaseOrderId: po?._id?.toString() || po?.toString?.() || null,
+    poNumber: g.poNumber || po?.poNumber || po?.displayPoNumber || po?.draftRef || '',
+    indentNumber: g.indentNumber || '',
+    vendorId: g.vendorId?._id?.toString?.() || g.vendorId?.toString?.() || null,
+    vendorName: g.vendorName || '',
+    status: g.status,
+    receivedAt: g.receivedAt?.toISOString?.() || g.createdAt?.toISOString?.() || null,
+    itemCount: g.items?.length || 0,
+  };
+}
+
 router.get('/', async (req, res, next) => {
   try {
     const receipts = await GoodsReceiptNote.find()
       .sort({ createdAt: -1 })
       .populate('purchaseOrderId')
       .populate('items.materialId')
-      .limit(50);
+      .limit(100);
     res.json({
-      data: receipts.map((g) => ({
-        id: g._id.toString(),
-        grnNumber: g.grnNumber,
-        purchaseOrderId: g.purchaseOrderId?._id?.toString(),
-        poNumber: g.purchaseOrderId?.poNumber || g.purchaseOrderId?.draftRef,
-        status: g.status,
-        receivedAt: g.receivedAt?.toISOString?.(),
-        itemCount: g.items?.length || 0,
-      })),
+      data: receipts.map(serializeGrnListItem),
     });
   } catch (err) {
     next(err);
@@ -157,15 +163,6 @@ router.post(
       if (!po) return { statusCode: 404, body: { statusCode: 404, message: 'PO not found' } };
       if (po.status !== 'APPROVED') {
         return { statusCode: 400, body: { statusCode: 400, message: 'PO must be approved before receipt' } };
-      }
-
-      const { DeliveryVerification } = require('../models');
-      const verification = await DeliveryVerification.findOne({ purchaseOrderId: po._id });
-      if (!verification) {
-        return {
-          statusCode: 400,
-          body: { statusCode: 400, message: 'Store must verify physical delivery before GRN can be created' },
-        };
       }
 
       const existingComplete = po.fulfillmentStatus === 'closed_complete';
@@ -242,9 +239,28 @@ router.post(
 
       const grnNumber = await allocatePoGrnNumber(po._id);
 
+      const { MaterialRequest, Vendor } = require('../models');
+      let indentNumber = '';
+      if (pr?.materialRequestId) {
+        const mr = await MaterialRequest.findById(pr.materialRequestId).select('indentNumber');
+        indentNumber = mr?.indentNumber || '';
+      }
+      const vendor =
+        po.vendorId && typeof po.vendorId === 'object' && po.vendorId.name
+          ? po.vendorId
+          : po.vendorId
+            ? await Vendor.findById(po.vendorId).select('name')
+            : null;
+      const poNumber = po.poNumber || po.displayPoNumber || po.draftRef || '';
+      const vendorName = vendor?.name || '';
+
       const grn = await GoodsReceiptNote.create({
         grnNumber,
         purchaseOrderId: po._id,
+        poNumber,
+        indentNumber,
+        vendorId: vendor?._id || po.vendorId || null,
+        vendorName,
         siteId,
         items,
         receivedQuantity: totalReceived,

@@ -11,6 +11,11 @@ const { serializeUser } = require('../utils/serialize');
 const router = express.Router();
 
 function signTokens(user) {
+  if (!process.env.JWT_ACCESS_SECRET || !process.env.JWT_REFRESH_SECRET) {
+    const err = new Error('Server auth is not configured (JWT secrets missing)');
+    err.statusCode = 500;
+    throw err;
+  }
   const payload = { sub: user._id.toString(), role: user.role };
   const accessToken = jwt.sign(payload, process.env.JWT_ACCESS_SECRET, {
     expiresIn: process.env.JWT_ACCESS_EXPIRES || '4h',
@@ -49,6 +54,12 @@ router.post(
         tokens,
       });
     } catch (err) {
+      if (err.name === 'MongoServerSelectionError' || err.name === 'MongoNetworkError') {
+        return res.status(503).json({
+          statusCode: 503,
+          message: 'Database is temporarily unavailable. Check MongoDB connection and retry.',
+        });
+      }
       next(err);
     }
   }

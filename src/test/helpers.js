@@ -35,7 +35,21 @@ async function getSeedContext() {
   const site = await Site.findOne();
   const material = await Material.findOne();
   const project = await Project.findOne();
-  return { site, material, project };
+  const { IndentCategory } = require('../models');
+  const indentCategory = await IndentCategory.findOne({ isActive: true }).sort({ sortOrder: 1 });
+  return { site, material, project, indentCategory };
 }
 
-module.exports = { setupTestDb, teardownTestDb, loginAs, getSeedContext, getApp: () => app };
+async function createTestIndentBody(materialId, patch = {}) {
+  const { indentCategory } = await getSeedContext();
+  return {
+    indentRequestType: 'ABOVE_5000',
+    requestedByName: 'Test Requester',
+    purpose: 'UAT test reason',
+    indentCategoryId: indentCategory._id.toString(),
+    items: [{ materialId: materialId.toString(), quantityRequested: 1 }],
+    ...patch,
+  };
+}
+
+module.exports = { setupTestDb, teardownTestDb, loginAs, getSeedContext, createTestIndentBody, getApp: () => app };

@@ -35,6 +35,12 @@ const { enrichIndentWithStock } = require('../services/indentStockService');
 const { allocateIndentStock } = require('../services/indentAllocationService');
 const { estimateIndentAmount } = require('../services/purchaseRequestService');
 const { queueForExecutiveDecision } = require('../services/procurementDecisionService');
+const { resolveIndentCategory } = require('../services/indentCategoryService');
+const {
+  buildExecutiveIndentCategoryFilter,
+  executiveCanAccessIndent,
+  notifyExecutivesForIndent,
+} = require('../services/executiveRoutingService');
 const pmApprovalCapService = require('../services/pmApprovalCapService');
 const { checkPmCanApprove, getPmDailyApprovedTotal } = pmApprovalCapService;
 const { handleIdempotent } = require('../utils/idempotentHandler');
@@ -57,6 +63,7 @@ const populateFields = [
   { path: 'siteId' },
   { path: 'projectId' },
   { path: 'requestedByUserId', select: 'name' },
+  { path: 'indentCategoryId', select: 'name' },
 ];
 
 async function mrEnrichedBody(mrId, viewerRole) {
@@ -86,7 +93,8 @@ function parseStatusFilter(status) {
   return statuses.length === 1 ? statuses[0] : { $in: statuses };
 }
 
-const APPROVED_NOT_RECEIVED_STATUSES = [
+const IN_PROGRESS_STATUSES = [
+  'PENDING_STORE',
   'ALLOCATED',
   'FORWARDED_TO_PM',
   'PM_APPROVED',
@@ -183,6 +191,9 @@ router.get('/', async (req, res, next) => {
       }
     } else if ([UserRole.CHAIRMAN, UserRole.COORDINATOR, UserRole.EXECUTIVE].includes(req.user.role)) {
       // HQ roles see all site material requests (indents)
+      if (req.user.role === UserRole.EXECUTIVE) {
+        Object.assign(filter, buildExecutiveIndentCategoryFilter(req.user));
+      }
     } else if (req.user.role === UserRole.PROJECT_MANAGER) {
       if (!filter.projectId) {
         filter.projectId = { $in: req.user.assignedProjectIds };
@@ -195,14 +206,19 @@ router.get('/', async (req, res, next) => {
     if (statusFilter) filter.status = statusFilter;
 
     if (tab === 'pending') {
-      if (req.user.role === UserRole.PROJECT_MANAGER) {
-        filter.status = 'FORWARDED_TO_PM';
-        filter.escalatedToHo = { $ne: true };
-      } else {
+      if (req.user.role === UserRole.STORE_INCHARGE) {
         filter.status = 'PENDING_STORE';
+      } else {
+        filter.status = { $in: IN_PROGRESS_STATUSES };
       }
     } else if (tab === 'approved') {
-      filter.status = { $in: APPROVED_NOT_RECEIVED_STATUSES };
+      if (req.user.role === UserRole.STORE_INCHARGE) {
+        filter.status = {
+          $in: IN_PROGRESS_STATUSES.filter((s) => s !== 'PENDING_STORE'),
+        };
+      } else {
+        filter.status = { $in: IN_PROGRESS_STATUSES };
+      }
     } else if (tab === 'completed') {
       filter.status = { $in: COMPLETED_RECEIVED_STATUSES };
     } else     if (tab === 'rejected') {
@@ -336,6 +352,7 @@ router.post(
     body('items.*.materialId').isMongoId(),
     body('items.*.quantityRequested').isFloat({ min: 0.01 }),
     body('purpose').trim().notEmpty().isLength({ max: 500 }),
+    body('indentCategoryId').isMongoId().withMessage('Indent category is required'),
   ],
   validate,
   async (req, res, next) => {
@@ -352,6 +369,7 @@ router.post(
       }
       const project = await Project.findById(req.body.projectId);
       const resolvedItems = await resolveIndentLineItems(req.body.items, req.user._id);
+      await resolveIndentCategory(req.body.indentCategoryId);
       const indentNumber = await generateIndentNumber(project.code);
       const mr = await MaterialRequest.create({
         indentNumber,
@@ -362,6 +380,7 @@ router.post(
         quantityRequested: resolvedItems[0].quantityRequested,
         purpose: req.body.purpose.trim(),
         requestedByUserId: req.user._id,
+        indentCategoryId: req.body.indentCategoryId,
         status: 'PENDING_HO',
         pendingWithRole: 'EXECUTIVE',
         escalatedToHo: true,
@@ -378,8 +397,7 @@ router.post(
         req.user._id,
         `PM procurement request ${indentNumber}`
       );
-      const executives = await User.find({ role: UserRole.EXECUTIVE });
-      await notificationService.notifyUsers(executives.map((u) => u._id), {
+      await notifyExecutivesForIndent(mr.indentCategoryId, notificationService, {
         title: 'New procurement request',
         body: `${indentNumber} — PM requested new procurement.`,
         relatedEntityType: 'ProcurementDecision',
@@ -402,6 +420,10 @@ router.get('/:id', param('id').isMongoId(), validate, async (req, res, next) => 
 
     if (mr.origin === 'EXECUTIVE' && HIDE_HO_ORIGIN_ROLES.includes(req.user.role)) {
       return res.status(404).json({ statusCode: 404, message: 'Request not found' });
+    }
+
+    if (!executiveCanAccessIndent(req.user, mr)) {
+      return res.status(403).json({ statusCode: 403, message: 'Forbidden' });
     }
 
     const siteId = mr.siteId._id || mr.siteId;
@@ -455,6 +477,8 @@ router.post(
     body('materialId').optional().isMongoId(),
     body('quantityRequested').optional().isFloat({ min: 0.01 }),
     body('purpose').trim().notEmpty().withMessage('Reason for request is required').isLength({ max: 500 }),
+    body('requestedByName').trim().notEmpty().withMessage('Request by name is required').isLength({ max: 120 }),
+    body('indentCategoryId').isMongoId().withMessage('Indent category is required'),
     body('indentRequestType').isIn(['BELOW_5000', 'ABOVE_5000']),
     body('requiredByDate').optional().isISO8601(),
   ],
@@ -487,6 +511,7 @@ router.post(
 
       const { validateIndentRequestTypeForCreate } = require('../services/indentRequestTypeService');
       await validateIndentRequestTypeForCreate(req.body.indentRequestType, resolvedItems);
+      await resolveIndentCategory(req.body.indentCategoryId);
 
       const project = site.projectId;
       const indentNumber = await generateIndentNumber(project.code);
@@ -498,6 +523,8 @@ router.post(
         items: resolvedItems,
         requestedByUserId: req.user._id,
         purpose: req.body.purpose.trim(),
+        requestedByName: req.body.requestedByName.trim(),
+        indentCategoryId: req.body.indentCategoryId,
         indentRequestType: req.body.indentRequestType,
         requiredByDate: req.body.requiredByDate ? new Date(req.body.requiredByDate) : undefined,
         status: 'PENDING_STORE',
@@ -787,16 +814,12 @@ router.post(
             `Escalated: exceeds ₹${pmApprovalCapService.MR_PM_DAILY_MAX_INR.toLocaleString('en-IN')} daily limit`
           );
 
-          const executives = await User.find({ role: UserRole.EXECUTIVE });
-          await notificationService.notifyUsers(
-            executives.map((u) => u._id),
-            {
-              title: 'New Procurement Decision Pending',
-              body: `${mr.indentNumber} exceeds PM daily approval cap.`,
-              relatedEntityType: 'ProcurementDecision',
-              relatedEntityId: mr._id,
-            }
-          );
+          await notifyExecutivesForIndent(mr.indentCategoryId, notificationService, {
+            title: 'New Procurement Decision Pending',
+            body: `${mr.indentNumber} exceeds PM daily approval cap.`,
+            relatedEntityType: 'ProcurementDecision',
+            relatedEntityId: mr._id,
+          });
 
           const enriched = await mrEnrichedBody(mr._id, req.user.role);
           return {
@@ -956,22 +979,27 @@ router.post(
 
       if (!mr.estimatedValue) mr.estimatedValue = await estimateIndentAmount(mr);
       const pmId = req.approvalContext.principal._id;
-      const capCheck = await checkPmCanApprove(pmId, mr);
-      if (capCheck.wouldExceed) {
-        return {
-          statusCode: 409,
-          body: {
+      const stockContext = await enrichIndentWithStock(mr);
+      const canIssueFromStock = stockContext.canFullyIssue;
+
+      if (!canIssueFromStock) {
+        const capCheck = await checkPmCanApprove(pmId, mr);
+        if (capCheck.wouldExceed) {
+          return {
             statusCode: 409,
-            message: `Cannot close locally — exceeds ₹${pmApprovalCapService.MR_PM_DAILY_MAX_INR.toLocaleString('en-IN')} daily limit. Forward to Head Office instead.`,
-            escalated: true,
-          },
-        };
+            body: {
+              statusCode: 409,
+              message: `Cannot close locally — exceeds ₹${pmApprovalCapService.MR_PM_DAILY_MAX_INR.toLocaleString('en-IN')} daily limit. Forward to Head Office instead.`,
+              escalated: true,
+            },
+          };
+        }
       }
 
       const remark = requireRemark(req.body.remark);
       const fromStatus = mr.status;
 
-      if (mr.storeStockVerified) {
+      if (canIssueFromStock) {
         try {
           await allocateIndentStock(mr, req.user._id);
           mr.status = 'ALLOCATED';

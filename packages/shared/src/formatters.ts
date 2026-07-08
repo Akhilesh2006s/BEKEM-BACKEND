@@ -10,6 +10,18 @@ export function formatDate(date: Date | string | null | undefined): string {
   return `${day} ${month} ${year}`;
 }
 
+export function formatTime(date: Date | string | null | undefined): string {
+  if (!date) return '—';
+  const d = typeof date === 'string' ? new Date(date) : date;
+  if (isNaN(d.getTime())) return '—';
+  return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+}
+
+export function formatDateTime(date: Date | string | null | undefined): string {
+  if (!date) return '—';
+  return `${formatDate(date)} · ${formatTime(date)}`;
+}
+
 export function formatCurrency(amount: number | null | undefined): string {
   if (amount == null || isNaN(amount)) return '₹0';
   const [intPart, decPart] = Math.abs(amount).toFixed(2).split('.');

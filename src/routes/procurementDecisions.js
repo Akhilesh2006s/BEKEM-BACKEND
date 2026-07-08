@@ -11,6 +11,7 @@ const {
   executiveDecide,
   coordinatorReview,
 } = require('../services/procurementDecisionService');
+const { executiveCanAccessIndent } = require('../services/executiveRoutingService');
 
 const router = express.Router();
 router.use(authenticate);
@@ -46,6 +47,9 @@ router.get(
     try {
       const mr = await loadDecisionIndent(req.params.id);
       if (!mr) return res.status(404).json({ statusCode: 404, message: 'Not found' });
+      if (!executiveCanAccessIndent(req.user, mr)) {
+        return res.status(403).json({ statusCode: 403, message: 'Forbidden' });
+      }
       res.json({ data: await buildProcurementDecisionDto(mr) });
     } catch (err) {
       next(err);

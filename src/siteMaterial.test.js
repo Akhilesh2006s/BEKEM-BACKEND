@@ -6,17 +6,21 @@ const {
   teardownTestDb,
   loginAs,
   getApp,
+  getSeedContext,
 } = require('./test/helpers');
 const { Material } = require('./models');
 
 describe('Site Material Master — indent workflow', () => {
   let app;
   let siteToken;
+  let indentCategoryId;
 
   before(async () => {
     await setupTestDb();
     app = getApp();
     siteToken = await loginAs('request@bekem.com');
+    const ctx = await getSeedContext();
+    indentCategoryId = ctx.indentCategory._id.toString();
   });
 
   after(async () => {
@@ -96,6 +100,8 @@ describe('Site Material Master — indent workflow', () => {
       .set('Authorization', `Bearer ${siteToken}`)
       .send({
         indentRequestType: 'ABOVE_5000',
+        requestedByName: 'Test Requester',
+        indentCategoryId: indentCategoryId,
         purpose: 'Legacy custom name path',
         items: [{ customName: name, unit: 'Nos', quantityRequested: 2 }],
       });

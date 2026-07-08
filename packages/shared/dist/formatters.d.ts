@@ -1,4 +1,6 @@
 export declare function formatDate(date: Date | string | null | undefined): string;
+export declare function formatTime(date: Date | string | null | undefined): string;
+export declare function formatDateTime(date: Date | string | null | undefined): string;
 export declare function formatCurrency(amount: number | null | undefined): string;
 export declare function formatQuantity(qty: number, unit?: string): string;
 /** Whole-unit counts for inventory dashboards (no float artifacts). */

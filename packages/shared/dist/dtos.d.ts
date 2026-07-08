@@ -5,6 +5,7 @@ export interface UserDto {
     role: string;
     assignedProjectIds: string[];
     assignedSiteId?: string | null;
+    assignedIndentCategoryIds?: string[];
     avatarColor: string;
     locale?: import('./locales').AppLocale;
     notificationPrefs?: NotificationPrefsDto;
@@ -373,9 +374,23 @@ export interface IndentLineItemDto {
     unitPrice?: number | null;
     lineTotal?: number | null;
 }
+export interface IndentCategoryDto {
+    id: string;
+    name: string;
+    isActive?: boolean;
+    sortOrder?: number;
+}
+export interface ExecutiveAssignmentsDto {
+    executives: Array<UserDto & {
+        assignedIndentCategories?: IndentCategoryDto[];
+    }>;
+    categories: IndentCategoryDto[];
+}
 export interface CreateIndentDto {
     indentRequestType: 'BELOW_5000' | 'ABOVE_5000';
     purpose: string;
+    requestedByName: string;
+    indentCategoryId: string;
     items: Array<{
         materialId?: string;
         /** @deprecated Use materialId after POST /materials/site-request */
@@ -403,6 +418,9 @@ export interface MaterialRequestDto {
     quantityRequested?: number;
     quantityAllocated?: number;
     purpose?: string;
+    requestedByName?: string;
+    indentCategoryId?: string;
+    indentCategory?: IndentCategoryDto;
     requiredByDate?: string | null;
     requestedByUserId: string;
     status: string;

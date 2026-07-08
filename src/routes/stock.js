@@ -22,9 +22,39 @@ const {
   buildInventoryProjectFilter,
 } = require('../services/inventoryAccessService');
 
+const { getStockAging, getSlimInventory } = require('../services/fifoStockService');
+
 const router = express.Router();
 
 router.use(authenticate);
+
+/** Req 57 — Stock aging report */
+router.get('/aging', async (req, res, next) => {
+  try {
+    const siteId = req.query.siteId || req.user.assignedSiteId;
+    if (siteId && !userCanAccessSite(req.user, String(siteId))) {
+      return res.status(403).json({ statusCode: 403, message: 'Forbidden' });
+    }
+    const data = await getStockAging({ siteId: siteId ? String(siteId) : undefined });
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Req 54 — Slim inventory balance view */
+router.get('/balance', async (req, res, next) => {
+  try {
+    const siteId = req.query.siteId || req.user.assignedSiteId;
+    if (siteId && !userCanAccessSite(req.user, String(siteId))) {
+      return res.status(403).json({ statusCode: 403, message: 'Forbidden' });
+    }
+    const data = await getSlimInventory({ siteId: siteId ? String(siteId) : undefined });
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+});
 
 router.get('/site/:siteId', async (req, res, next) => {
   try {

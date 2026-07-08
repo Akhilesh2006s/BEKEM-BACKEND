@@ -199,8 +199,8 @@ export const ROLE_COLORS: Record<UserRole, { primary: string; accent: string }> 
 };
 
 export const ROLE_LABELS: Record<UserRole, string> = {
-  [UserRole.SITE_INCHARGE]: 'Site Manager',
-  [UserRole.STORE_INCHARGE]: 'Store Manager',
+  [UserRole.SITE_INCHARGE]: 'Indent raiser',
+  [UserRole.STORE_INCHARGE]: 'Store Incharge',
   [UserRole.PROJECT_MANAGER]: 'Project Manager',
   [UserRole.EXECUTIVE]: 'Executive',
   [UserRole.COORDINATOR]: 'Coordinator',

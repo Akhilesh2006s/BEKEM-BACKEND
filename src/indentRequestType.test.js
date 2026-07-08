@@ -9,6 +9,7 @@ describe('Indent request type', () => {
   let siteToken;
   let storeToken;
   let material;
+  let indentCategoryId;
 
   before(async () => {
     await setupTestDb();
@@ -20,6 +21,7 @@ describe('Indent request type', () => {
       (await Material.findOne({ name: 'Cement OPC 53' })) ||
       (await Material.findOne({ referenceUnitPrice: { $lte: 500 } })) ||
       ctx.material;
+    indentCategoryId = ctx.indentCategory._id.toString();
     assert.ok(material);
   });
 
@@ -44,6 +46,8 @@ describe('Indent request type', () => {
       .set('Authorization', `Bearer ${siteToken}`)
       .send({
         indentRequestType: 'BELOW_5000',
+        requestedByName: 'Test Requester',
+        indentCategoryId: indentCategoryId,
         purpose: 'Over cap',
         items: [{ materialId: material._id.toString(), quantityRequested: 20 }],
       });
@@ -57,6 +61,8 @@ describe('Indent request type', () => {
       .set('Authorization', `Bearer ${siteToken}`)
       .send({
         indentRequestType: 'BELOW_5000',
+        requestedByName: 'Test Requester',
+        indentCategoryId: indentCategoryId,
         purpose: 'Petty purchase',
         items: [{ materialId: material._id.toString(), quantityRequested: 1 }],
       });
@@ -77,6 +83,8 @@ describe('Indent request type', () => {
       .set('Authorization', `Bearer ${siteToken}`)
       .send({
         indentRequestType: 'ABOVE_5000',
+        requestedByName: 'Test Requester',
+        indentCategoryId: indentCategoryId,
         purpose: 'Standard indent',
         items: [{ materialId: material._id.toString(), quantityRequested: 2 }],
       });

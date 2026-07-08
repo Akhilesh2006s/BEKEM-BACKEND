@@ -22,7 +22,7 @@ describe('Full chain integration', () => {
 
   it('walks material request through all 6 roles end-to-end', async () => {
     const app = getApp();
-    const { site } = await getSeedContext();
+    const { site, indentCategory } = await getSeedContext();
     const cement = await Material.findOne({ code: 'MAT-CEMENT-OPC53' });
     assert.ok(cement, 'seed cement material required');
 
@@ -37,6 +37,8 @@ describe('Full chain integration', () => {
       .set('Authorization', `Bearer ${siteToken}`)
       .send({
         indentRequestType: 'ABOVE_5000',
+        requestedByName: 'Test Requester',
+        indentCategoryId: indentCategory._id.toString(),
         items: [{ materialId: cement._id.toString(), quantityRequested: 1 }],
         purpose: 'Integration test pour',
         requiredByDate: new Date(Date.now() + 7 * 86400000).toISOString(),

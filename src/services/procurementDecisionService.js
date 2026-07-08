@@ -14,6 +14,7 @@ const { derivePriority } = require('./purchaseRequestSerializeService');
 const { generateTransferNumber } = require('./documentNumberService');
 const statusHistoryService = require('./statusHistoryService');
 const notificationService = require('./notificationService');
+const { notifyExecutivesForIndent, buildExecutiveIndentCategoryFilter, executiveCanAccessIndent } = require('./executiveRoutingService');
 
 const EXECUTIVE_QUEUE_STATUSES = ['PENDING_EXECUTIVE_DECISION', 'PENDING_HO'];
 const COORDINATOR_QUEUE_STATUSES = [
@@ -142,6 +143,7 @@ async function listProcurementDecisions(user) {
   let filter = {};
   if (user.role === UserRole.EXECUTIVE) {
     filter.status = { $in: EXECUTIVE_QUEUE_STATUSES };
+    Object.assign(filter, buildExecutiveIndentCategoryFilter(user));
   } else if (user.role === UserRole.COORDINATOR) {
     filter.status = { $in: COORDINATOR_QUEUE_STATUSES };
   } else if (user.role === UserRole.CHAIRMAN) {
@@ -200,19 +202,20 @@ async function queueForExecutiveDecision(mr, actorUserId, remark, historyNote) {
     historyNote || remark
   );
 
-  const executives = await User.find({ role: UserRole.EXECUTIVE });
-  await notificationService.notifyUsers(
-    executives.map((u) => u._id),
-    {
-      title: 'Procurement review pending',
-      body: `${mr.indentNumber} — review and mark proceed with purchase order when ready.`,
-      relatedEntityType: 'ProcurementDecision',
-      relatedEntityId: mr._id,
-    }
-  );
+  await notifyExecutivesForIndent(mr.indentCategoryId, notificationService, {
+    title: 'Procurement review pending',
+    body: `${mr.indentNumber} — review and mark proceed with purchase order when ready.`,
+    relatedEntityType: 'ProcurementDecision',
+    relatedEntityId: mr._id,
+  });
 }
 
 async function executiveDecide(mr, user, { method, remark }) {
+  if (!executiveCanAccessIndent(user, mr)) {
+    const err = new Error('This indent is not in your assigned categories');
+    err.statusCode = 403;
+    throw err;
+  }
   if (!EXECUTIVE_QUEUE_STATUSES.includes(mr.status)) {
     const err = new Error('Indent is not awaiting executive procurement review');
     err.statusCode = 400;
@@ -406,8 +409,12 @@ async function coordinatorReview(mr, user, { action, method, remark, fromProject
   return buildProcurementDecisionDto(await loadDecisionIndent(mr._id));
 }
 
-async function countPendingProcurementDecisions() {
-  const rows = await MaterialRequest.find({ status: { $in: EXECUTIVE_QUEUE_STATUSES } })
+async function countPendingProcurementDecisions(user) {
+  const filter = { status: { $in: EXECUTIVE_QUEUE_STATUSES } };
+  if (user?.role === UserRole.EXECUTIVE) {
+    Object.assign(filter, buildExecutiveIndentCategoryFilter(user));
+  }
+  const rows = await MaterialRequest.find(filter)
     .populate('items.materialId')
     .populate('materialId');
 

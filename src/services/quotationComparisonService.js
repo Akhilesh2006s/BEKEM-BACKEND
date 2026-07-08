@@ -5,12 +5,78 @@ function computeFinalCost(rate, quantity, gstPercent = 18) {
   return computeGstBreakdown(quantity, rate, gstPercent).finalAmount;
 }
 
-function serializeQuotationRow(q, { quantity = 1, isL1 = false } = {}) {
+function toId(value) {
+  return (value?._id || value)?.toString?.() || '';
+}
+
+function buildLineMeta(lineItems = []) {
+  return lineItems.map((line) => {
+    const materialId = toId(line.materialId);
+    const quantity = Number(line.quantityRequested || line.quantity || 0);
+    const unit = line.unit || line.materialId?.unit || 'Nos';
+    const name = line.materialId?.name || line.material?.name || 'Item';
+    return { materialId, quantity, unit, name };
+  });
+}
+
+function computeQuotationTotals(q, lineItems = [], fallbackQuantity = 1) {
+  const lines = buildLineMeta(lineItems);
+  if (!lines.length) {
+    const rate = q.rate != null ? Number(q.rate) : Number(q.amount || 0) / Math.max(1, fallbackQuantity);
+    const gstPercent = Number(q.gstPercent ?? 18);
+    const breakdown = computeGstBreakdown(fallbackQuantity, rate, gstPercent);
+    return {
+      subtotal: breakdown.subtotal,
+      gstAmount: breakdown.gstAmount,
+      finalCost: q.amount ?? breakdown.finalAmount,
+      itemRates: [],
+    };
+  }
+
+  const explicitSelection = Array.isArray(q.selectedMaterialIds);
+  const selected = new Set((q.selectedMaterialIds || []).map((id) => toId(id)).filter(Boolean));
+  const useSubset = explicitSelection;
+  const byMaterial = new Map(
+    (q.itemQuotes || []).map((it) => [toId(it.materialId), { rate: Number(it.rate || 0), gstPercent: Number(it.gstPercent ?? 18) }])
+  );
+
+  let subtotal = 0;
+  let gstAmount = 0;
+  const itemRates = [];
+
+  for (const line of lines) {
+    if (!line.materialId) continue;
+    if (useSubset && !selected.has(line.materialId)) continue;
+    const iq = byMaterial.get(line.materialId);
+    const rate = iq ? iq.rate : Number(q.rate || 0);
+    const gstPercent = iq ? iq.gstPercent : Number(q.gstPercent ?? 18);
+    const breakdown = computeGstBreakdown(line.quantity || 0, rate, gstPercent);
+    subtotal += breakdown.subtotal;
+    gstAmount += breakdown.gstAmount;
+    itemRates.push({
+      materialId: line.materialId,
+      materialName: line.name,
+      quantity: line.quantity,
+      unit: line.unit,
+      rate,
+      gstPercent,
+      finalCost: breakdown.finalAmount,
+    });
+  }
+
+  return {
+    subtotal: Math.round(subtotal),
+    gstAmount: Math.round(gstAmount),
+    finalCost: Math.round(subtotal + gstAmount),
+    itemRates,
+  };
+}
+
+function serializeQuotationRow(q, { quantity = 1, isL1 = false, lineItems = [] } = {}) {
   const vendor = q.vendorId;
   const rate = q.rate != null ? q.rate : q.amount / Math.max(1, quantity);
   const gstPercent = q.gstPercent ?? 18;
-  const breakdown = computeGstBreakdown(quantity, rate, gstPercent);
-  const finalCost = q.amount ?? breakdown.finalAmount;
+  const totals = computeQuotationTotals(q, lineItems, quantity);
   const paymentTerms = q.paymentTerms || q.terms || '';
   return {
     id: q._id.toString(),
@@ -19,44 +85,129 @@ function serializeQuotationRow(q, { quantity = 1, isL1 = false } = {}) {
     vendorName: vendor?.name || 'Vendor',
     rate,
     gstPercent,
-    subtotal: breakdown.subtotal,
-    gstAmount: breakdown.gstAmount,
-    finalCost,
+    subtotal: totals.subtotal,
+    gstAmount: totals.gstAmount,
+    finalCost: totals.finalCost,
     paymentTerms,
     deliveryTerms: q.deliveryTerms || '',
+    itemRates: totals.itemRates,
+    selectedMaterialIds: (q.selectedMaterialIds || []).map((id) => toId(id)),
     isL1,
     submittedAt: q.submittedAt?.toISOString?.() || q.submittedAt,
   };
 }
 
-function pickL1Quotation(quotations, quantity = 1) {
+function pickL1Quotation(quotations, quantity = 1, lineItems = []) {
   if (!quotations?.length) return null;
   return quotations.reduce((best, q) => {
-    const cost = q.amount ?? computeFinalCost(q.rate, quantity, q.gstPercent);
-    const bestCost = best.amount ?? computeFinalCost(best.rate, quantity, best.gstPercent);
+    const cost = computeQuotationTotals(q, lineItems, quantity).finalCost;
+    const bestCost = computeQuotationTotals(best, lineItems, quantity).finalCost;
     return cost < bestCost ? q : best;
   });
 }
 
-function buildComparisonTable(quotations, quantity = 1) {
-  const l1 = pickL1Quotation(quotations, quantity);
+function filterActiveQuotations(quotations) {
+  const assigned = quotations.filter((q) => (q.selectedMaterialIds || []).length > 0);
+  return assigned.length ? assigned : quotations;
+}
+
+function buildMaterialOffers(quotations, line) {
+  const offers = [];
+  const active = filterActiveQuotations(quotations);
+  for (const q of active) {
+    const vendor = q.vendorId;
+    const vendorId = toId(vendor);
+    if (!vendorId) continue;
+    const selected = (q.selectedMaterialIds || []).map((id) => toId(id));
+    const hasExplicitSelection = selected.length > 0;
+    if (hasExplicitSelection && !selected.includes(line.materialId)) continue;
+    const vendorName = vendor?.name || 'Vendor';
+    const iq = (q.itemQuotes || []).find((it) => toId(it.materialId) === line.materialId);
+    if (iq) {
+      const rate = Number(iq.rate || 0);
+      const gstPercent = Number(iq.gstPercent ?? 18);
+      const breakdown = computeGstBreakdown(line.quantity || 0, rate, gstPercent);
+      offers.push({
+        vendorId,
+        vendorName,
+        rate,
+        finalCost: breakdown.finalAmount,
+      });
+    } else {
+      offers.push({ vendorId, vendorName, rate: null, finalCost: null });
+    }
+  }
+  offers.sort((a, b) => {
+    if (a.rate != null && b.rate != null) return a.rate - b.rate;
+    if (a.rate != null) return -1;
+    if (b.rate != null) return 1;
+    return a.vendorName.localeCompare(b.vendorName);
+  });
+  return offers;
+}
+
+function buildComparisonTable(quotations, quantity = 1, lineItems = []) {
+  const activeQuotations = filterActiveQuotations(quotations);
+  const l1 = pickL1Quotation(activeQuotations, quantity, lineItems);
   const l1Id = l1?._id?.toString();
-  const vendors = quotations.map((q) =>
-    serializeQuotationRow(q, { quantity, isL1: q._id.toString() === l1Id })
+  const vendors = activeQuotations.map((q) =>
+    serializeQuotationRow(q, { quantity, isL1: q._id.toString() === l1Id, lineItems })
   );
   vendors.sort((a, b) => a.finalCost - b.finalCost);
+  const lines = buildLineMeta(lineItems);
+  const itemComparisons = lines.map((line) => {
+    const offers = buildMaterialOffers(activeQuotations, line);
+    const pricedOffers = offers.filter((o) => o.rate != null);
+    const minOffer = pricedOffers.length
+      ? pricedOffers.reduce((a, b) => (a.rate <= b.rate ? a : b))
+      : null;
+    const maxOffer = pricedOffers.length
+      ? pricedOffers.reduce((a, b) => (a.rate >= b.rate ? a : b))
+      : null;
+    return {
+      materialId: line.materialId,
+      materialName: line.name,
+      quantity: line.quantity,
+      unit: line.unit,
+      minOffer,
+      maxOffer,
+      offers,
+    };
+  });
   return {
     vendors,
+    itemComparisons,
     l1VendorId: l1?.vendorId?._id?.toString() || l1?.vendorId?.toString(),
     l1QuotationId: l1Id,
   };
 }
 
-async function upsertRfqQuotations(rfq, vendorQuotes, quantity) {
+async function upsertRfqQuotations(rfq, vendorQuotes, quantity, lineItems = []) {
   const results = [];
+  const lineMap = new Map(buildLineMeta(lineItems).map((line) => [line.materialId, line]));
   for (const row of vendorQuotes) {
-    const { vendorId, rate, gstPercent, paymentTerms, deliveryTerms } = row;
-    const finalCost = computeFinalCost(rate, quantity, gstPercent);
+    const { vendorId, rate, gstPercent, paymentTerms, deliveryTerms, itemRates, selectedMaterialIds } = row;
+    let finalCost = computeFinalCost(rate, quantity, gstPercent);
+    const normalizedItemQuotes = Array.isArray(itemRates)
+      ? itemRates
+          .map((it) => {
+            const materialId = toId(it.materialId);
+            const line = lineMap.get(materialId);
+            if (!materialId || !line) return null;
+            const itemRate = Number(it.rate || 0);
+            const itemGst = Number(it.gstPercent ?? 18);
+            return {
+              materialId,
+              rate: itemRate,
+              gstPercent: itemGst,
+              amount: computeFinalCost(itemRate, line.quantity, itemGst),
+            };
+          })
+          .filter(Boolean)
+      : [];
+    if (normalizedItemQuotes.length) {
+      finalCost = Math.round(normalizedItemQuotes.reduce((sum, it) => sum + Number(it.amount || 0), 0));
+    }
     const terms = paymentTerms || '';
     let q = await Quotation.findOne({ rfqId: rfq._id, vendorId });
     if (q) {
@@ -66,6 +217,8 @@ async function upsertRfqQuotations(rfq, vendorQuotes, quantity) {
       q.deliveryTerms = deliveryTerms || '';
       q.amount = finalCost;
       q.terms = terms;
+      q.itemQuotes = normalizedItemQuotes;
+      q.selectedMaterialIds = (selectedMaterialIds || []).map((id) => id);
       await q.save();
     } else {
       q = await Quotation.create({
@@ -77,17 +230,20 @@ async function upsertRfqQuotations(rfq, vendorQuotes, quantity) {
         deliveryTerms: deliveryTerms || '',
         amount: finalCost,
         terms,
+        itemQuotes: normalizedItemQuotes,
+        selectedMaterialIds: (selectedMaterialIds || []).map((id) => id),
       });
     }
     results.push(q);
   }
   const vendorObjectIds = vendorQuotes.map((v) => v.vendorId);
-  const existingIds = (rfq.vendorIds || []).map((id) =>
-    (id?._id || id)?.toString()
-  );
-  const merged = [...new Set([...existingIds, ...vendorObjectIds.map((id) => id.toString())])];
+  const submittedIds = new Set(vendorObjectIds.map((id) => id.toString()));
   const mongoose = require('mongoose');
-  rfq.vendorIds = merged.map((id) => new mongoose.Types.ObjectId(id));
+  await Quotation.deleteMany({
+    rfqId: rfq._id,
+    vendorId: { $nin: Array.from(submittedIds).map((id) => new mongoose.Types.ObjectId(id)) },
+  });
+  rfq.vendorIds = vendorObjectIds.map((id) => new mongoose.Types.ObjectId(id));
   await rfq.save();
   return Quotation.find({ rfqId: rfq._id }).populate('vendorId');
 }

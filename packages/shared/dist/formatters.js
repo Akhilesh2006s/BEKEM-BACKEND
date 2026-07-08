@@ -1,6 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.formatDate = formatDate;
+exports.formatTime = formatTime;
+exports.formatDateTime = formatDateTime;
 exports.formatCurrency = formatCurrency;
 exports.formatQuantity = formatQuantity;
 exports.formatUnitCount = formatUnitCount;
@@ -18,6 +20,19 @@ function formatDate(date) {
     const month = MONTHS[d.getMonth()];
     const year = d.getFullYear();
     return `${day} ${month} ${year}`;
+}
+function formatTime(date) {
+    if (!date)
+        return '—';
+    const d = typeof date === 'string' ? new Date(date) : date;
+    if (isNaN(d.getTime()))
+        return '—';
+    return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+}
+function formatDateTime(date) {
+    if (!date)
+        return '—';
+    return `${formatDate(date)} · ${formatTime(date)}`;
 }
 function formatCurrency(amount) {
     if (amount == null || isNaN(amount))

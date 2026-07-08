@@ -31,6 +31,11 @@ const grnSchema = new mongoose.Schema(
   {
     grnNumber: { type: String, required: true },
     purchaseOrderId: { type: mongoose.Schema.Types.ObjectId, ref: 'PurchaseOrder', required: true },
+    /** Denormalized traceability (Req 45) — also resolvable via PO → PR → Indent. */
+    poNumber: { type: String, default: '' },
+    indentNumber: { type: String, default: '' },
+    vendorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Vendor', default: null },
+    vendorName: { type: String, default: '' },
     siteId: { type: mongoose.Schema.Types.ObjectId, ref: 'Site', required: true },
     items: { type: [grnItemSchema], default: [] },
     receivedQuantity: { type: Number, default: 0 },

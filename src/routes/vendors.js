@@ -1,58 +1,19 @@
 const express = require('express');
 const { body, param, query } = require('express-validator');
-const { Vendor, Material } = require('../models');
+const { Vendor, Material, PurchaseRequest, RFQ, Quotation } = require('../models');
 const { authenticate } = require('../middleware/auth');
 const { requireCapability, hasCapability } = require('../middleware/rbac');
 const { validate } = require('../middleware/validate');
 const { serializeVendor } = require('../utils/serializeProcurement');
 const vendorScorecardService = require('../services/vendorScorecardService');
+const {
+  vendorsForMaterial,
+  vendorsForMaterialsGrouped,
+  buildVendorOffersForMaterials,
+} = require('../services/vendorOfferService');
 
 const router = express.Router();
 router.use(authenticate);
-
-async function vendorsForMaterial(materialId, { strict = false } = {}) {
-  const material = await Material.findById(materialId);
-  if (!material) return Vendor.find({ isActive: { $ne: false }, authorizationStatus: { $in: ['AUTHORIZED', null] } }).populate('materialIds');
-
-  const baseFilter = {
-    isActive: { $ne: false },
-    authorizationStatus: { $in: ['AUTHORIZED', null] },
-  };
-
-  if (strict) {
-    return Vendor.find({ ...baseFilter, materialIds: materialId }).populate('materialIds').sort({ name: 1 });
-  }
-
-  return Vendor.find({
-    ...baseFilter,
-    $or: [
-      { materialIds: materialId },
-      { suppliedCategories: material.category },
-      { category: material.category },
-      { materialIds: { $size: 0 } },
-      { materialIds: { $exists: false } },
-    ],
-  })
-    .populate('materialIds')
-    .sort({ name: 1 });
-}
-
-async function vendorsForMaterialsGrouped(materialIds, { strict = false } = {}) {
-  const uniqueIds = [...new Set(materialIds.filter(Boolean))];
-  const rows = [];
-  for (const materialId of uniqueIds) {
-    const material = await Material.findById(materialId);
-    const vendors = await vendorsForMaterial(materialId, { strict });
-    rows.push({
-      materialId,
-      material: material
-        ? { id: material._id.toString(), code: material.code, name: material.name, unit: material.unit }
-        : null,
-      vendors: vendors.map(serializeVendor),
-    });
-  }
-  return rows;
-}
 
 router.get('/for-materials', async (req, res, next) => {
   try {
@@ -63,6 +24,37 @@ router.get('/for-materials', async (req, res, next) => {
       .filter(Boolean);
     const strict = req.query.strict === 'true' || req.query.strict === '1';
     const rows = await vendorsForMaterialsGrouped(materialIds, { strict });
+    res.json({ data: rows });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/offers-for-materials', async (req, res, next) => {
+  try {
+    const raw = req.query.materialIds || req.query.ids || '';
+    const materialIds = String(raw)
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const strict = req.query.strict !== 'false' && req.query.strict !== '0';
+    const purchaseRequestId = req.query.purchaseRequestId;
+
+    let currentQuotations = [];
+    if (purchaseRequestId) {
+      const pr = await PurchaseRequest.findById(purchaseRequestId);
+      if (pr) {
+        const rfq = await RFQ.findOne({ purchaseRequestId: pr._id });
+        if (rfq) {
+          currentQuotations = await Quotation.find({ rfqId: rfq._id }).populate('vendorId');
+        }
+      }
+    }
+
+    const rows = await buildVendorOffersForMaterials(materialIds, {
+      strict,
+      currentQuotations,
+    });
     res.json({ data: rows });
   } catch (err) {
     next(err);
@@ -456,8 +448,9 @@ router.post(
   requireCapability('EDIT_PROCUREMENT'),
   [
     param('id').isMongoId(),
-    body('rating').isFloat({ min: 1, max: 5 }),
-    body('comment').optional().trim(),
+    body('deliveryScore').isFloat({ min: 1, max: 5 }),
+    body('qualityScore').isFloat({ min: 1, max: 5 }),
+    body('note').optional().trim(),
   ],
   validate,
   async (req, res, next) => {
@@ -465,10 +458,10 @@ router.post(
       const vendor = await Vendor.findById(req.params.id);
       if (!vendor) return res.status(404).json({ statusCode: 404, message: 'Vendor not found' });
 
-      const review = await vendorScorecardService.addReview(vendor._id, {
-        rating: req.body.rating,
-        comment: req.body.comment || '',
-        reviewerUserId: req.user._id,
+      const review = await vendorScorecardService.addVendorReview(vendor._id, req.user._id, {
+        deliveryScore: Number(req.body.deliveryScore),
+        qualityScore: Number(req.body.qualityScore),
+        note: req.body.note || '',
       });
 
       res.status(201).json({ data: review });

@@ -16,6 +16,7 @@ describe('Indent workflow v2', () => {
   let storeToken;
   let pmToken;
   let material;
+  let indentCategoryId;
 
   before(async () => {
     await setupTestDb();
@@ -25,6 +26,7 @@ describe('Indent workflow v2', () => {
     pmToken = await loginAs('pm@bekem.com');
     const ctx = await getSeedContext();
     material = ctx.material;
+    indentCategoryId = ctx.indentCategory._id.toString();
   });
 
   after(async () => {
@@ -37,6 +39,8 @@ describe('Indent workflow v2', () => {
       .set('Authorization', `Bearer ${siteToken}`)
       .send({
         indentRequestType: 'ABOVE_5000',
+        requestedByName: 'Test Requester',
+        indentCategoryId: indentCategoryId,
         purpose: 'UAT test reason',
         items: [{ materialId: material._id.toString(), quantityRequested: 1 }],
       });
@@ -57,6 +61,8 @@ describe('Indent workflow v2', () => {
       .set('Authorization', `Bearer ${siteToken}`)
       .send({
         indentRequestType: 'ABOVE_5000',
+        requestedByName: 'Test Requester',
+        indentCategoryId: indentCategoryId,
         purpose: 'UAT test reason',
         items: [{ materialId: material._id.toString(), quantityRequested: 5 }],
       });
@@ -82,6 +88,8 @@ describe('Indent workflow v2', () => {
       .set('Authorization', `Bearer ${siteToken}`)
       .send({
         indentRequestType: 'ABOVE_5000',
+        requestedByName: 'Test Requester',
+        indentCategoryId: indentCategoryId,
         purpose: 'UAT test reason',
         items: [
           { materialId: material._id.toString(), quantityRequested: 1 },
@@ -128,6 +136,8 @@ describe('Indent workflow v2', () => {
         .set('Authorization', `Bearer ${siteToken}`)
         .send({
           indentRequestType: 'ABOVE_5000',
+        requestedByName: 'Test Requester',
+        indentCategoryId: indentCategoryId,
         purpose: 'PM daily cap test',
           items: [{ materialId: cement._id.toString(), quantityRequested }],
         });
@@ -163,6 +173,8 @@ describe('Indent workflow v2', () => {
       .set('Authorization', `Bearer ${siteToken}`)
       .send({
         indentRequestType: 'ABOVE_5000',
+        requestedByName: 'Test Requester',
+        indentCategoryId: indentCategoryId,
         purpose: 'Stock available verify test',
         items: [{ materialId: material._id.toString(), quantityRequested: 1 }],
       });
@@ -179,5 +191,36 @@ describe('Indent workflow v2', () => {
 
     const mr = await MaterialRequest.findById(mrId);
     assert.strictEqual(mr.status, 'FORWARDED_TO_PM');
+  });
+
+  it('PM can approve stock-available indent without daily cap check', async () => {
+    const createRes = await request(app)
+      .post('/api/material-requests')
+      .set('Authorization', `Bearer ${siteToken}`)
+      .send({
+        indentRequestType: 'ABOVE_5000',
+        requestedByName: 'Test Requester',
+        indentCategoryId: indentCategoryId,
+        purpose: 'Stock available PM approve test',
+        items: [{ materialId: material._id.toString(), quantityRequested: 1 }],
+      });
+    const mrId = createRes.body.data.id;
+
+    const verifyRes = await request(app)
+      .post(`/api/material-requests/${mrId}/allocate`)
+      .set('Authorization', `Bearer ${storeToken}`)
+      .send({ decision: 'issue', remark: 'Stock verified — forwarding to PM' });
+
+    assert.strictEqual(verifyRes.status, 200);
+
+    await MaterialRequest.findByIdAndUpdate(mrId, { estimatedValue: 50000 });
+
+    const closeRes = await request(app)
+      .post(`/api/material-requests/${mrId}/pm-local-close`)
+      .set('Authorization', `Bearer ${pmToken}`)
+      .send({ remark: 'Approved — stock on hand' });
+
+    assert.strictEqual(closeRes.status, 200, JSON.stringify(closeRes.body));
+    assert.strictEqual(closeRes.body.data.status, 'ALLOCATED');
   });
 });

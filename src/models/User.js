@@ -26,6 +26,8 @@ const userSchema = new mongoose.Schema(
       emailDigest: { type: Boolean, default: false },
       sms: { type: Boolean, default: false },
     },
+    /** Indent categories this executive receives (whole-indent routing). */
+    assignedIndentCategoryIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'IndentCategory' }],
     /** System administrator — only role that may manage users. */
     isSystemAdmin: { type: Boolean, default: false },
   },

@@ -5,6 +5,7 @@ export interface UserDto {
   role: string;
   assignedProjectIds: string[];
   assignedSiteId?: string | null;
+  assignedIndentCategoryIds?: string[];
   avatarColor: string;
   locale?: import('./locales').AppLocale;
   notificationPrefs?: NotificationPrefsDto;
@@ -389,9 +390,23 @@ export interface IndentLineItemDto {
   lineTotal?: number | null;
 }
 
+export interface IndentCategoryDto {
+  id: string;
+  name: string;
+  isActive?: boolean;
+  sortOrder?: number;
+}
+
+export interface ExecutiveAssignmentsDto {
+  executives: Array<UserDto & { assignedIndentCategories?: IndentCategoryDto[] }>;
+  categories: IndentCategoryDto[];
+}
+
 export interface CreateIndentDto {
   indentRequestType: 'BELOW_5000' | 'ABOVE_5000';
   purpose: string;
+  requestedByName: string;
+  indentCategoryId: string;
   items: Array<{
     materialId?: string;
     /** @deprecated Use materialId after POST /materials/site-request */
@@ -421,6 +436,9 @@ export interface MaterialRequestDto {
   quantityRequested?: number;
   quantityAllocated?: number;
   purpose?: string;
+  requestedByName?: string;
+  indentCategoryId?: string;
+  indentCategory?: IndentCategoryDto;
   requiredByDate?: string | null;
   requestedByUserId: string;
   status: string;
@@ -677,12 +695,31 @@ export interface QuotationComparisonVendorDto {
   finalCost: number;
   paymentTerms: string;
   deliveryTerms: string;
+  itemRates?: Array<{
+    materialId: string;
+    materialName: string;
+    quantity: number;
+    unit: string;
+    rate: number;
+    gstPercent: number;
+    finalCost: number;
+  }>;
+  selectedMaterialIds?: string[];
   isL1: boolean;
   submittedAt?: string;
 }
 
 export interface QuotationComparisonDto {
   vendors: QuotationComparisonVendorDto[];
+  itemComparisons?: Array<{
+    materialId: string;
+    materialName: string;
+    quantity: number;
+    unit: string;
+    minOffer?: { vendorId: string; vendorName: string; rate: number; finalCost: number } | null;
+    maxOffer?: { vendorId: string; vendorName: string; rate: number; finalCost: number } | null;
+    offers?: Array<{ vendorId: string; vendorName: string; rate: number; finalCost: number }>;
+  }>;
   l1VendorId?: string;
   l1QuotationId?: string;
 }

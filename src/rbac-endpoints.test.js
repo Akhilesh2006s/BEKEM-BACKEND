@@ -21,13 +21,15 @@ describe('RBAC endpoint enforcement', () => {
   it('Coordinator cannot create material request', async () => {
     const app = getApp();
     const token = await loginAs('coordinator@bekem.com');
-    const { material } = await getSeedContext();
+    const { material, indentCategory } = await getSeedContext();
 
     const res = await request(app)
       .post('/api/material-requests')
       .set('Authorization', `Bearer ${token}`)
       .send({
         indentRequestType: 'ABOVE_5000',
+        requestedByName: 'Test Requester',
+        indentCategoryId: indentCategory._id.toString(),
         materialId: material._id.toString(),
         quantityRequested: 5,
         purpose: 'Should fail',

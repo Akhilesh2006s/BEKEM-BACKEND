@@ -3,8 +3,6 @@ const { body, param } = require('express-validator');
 const {
   MaterialIssue,
   MaterialRequest,
-  StockLedger,
-  StockMovement,
 } = require('../models');
 const { authenticate } = require('../middleware/auth');
 const { requireCapability } = require('../middleware/rbac');
@@ -15,6 +13,7 @@ const statusHistoryService = require('../services/statusHistoryService');
 const notificationService = require('../services/notificationService');
 const { ISSUE_REASONS } = require('../constants/indentPolicy');
 const { serializeMaterialRequestEnriched } = require('../utils/serialize');
+const { consumeFifo } = require('../services/fifoStockService');
 
 const router = express.Router();
 router.use(authenticate);
@@ -67,6 +66,7 @@ function serializeIssue(issue) {
     issueReason: issue.issueReason,
     issueReasonOtherText: issue.issueReasonOtherText || '',
     issueType: issue.issueType,
+    issuedAt: (issue.issuedAt || issue.createdAt)?.toISOString?.(),
     attachments: (issue.attachments || []).map((a) => ({
       name: a.name,
       fileType: a.fileType,
@@ -75,6 +75,20 @@ function serializeIssue(issue) {
     createdAt: issue.createdAt?.toISOString?.(),
   };
 }
+
+router.get('/', async (req, res, next) => {
+  try {
+    const filter = {};
+    if (req.query.siteId) filter.siteId = req.query.siteId;
+    const issues = await MaterialIssue.find(filter)
+      .sort({ issuedAt: -1, createdAt: -1 })
+      .populate(issuePopulate)
+      .limit(100);
+    res.json({ data: issues.map(serializeIssue) });
+  } catch (err) {
+    next(err);
+  }
+});
 
 router.get('/:id', param('id').isMongoId(), validate, async (req, res, next) => {
   try {
@@ -104,8 +118,9 @@ router.post(
     body('items.*.quantity').optional().isFloat({ min: 0.01 }),
     body('reason').isIn(ISSUE_REASONS).withMessage('Issue reason is required'),
     body('issueType').isIn(['WORK_ISSUE', 'CONTRACT_ISSUE']).withMessage('Issue type is required'),
-    body('issuedToType').isIn(['EMPLOYEE', 'CONTRACTOR', 'DEPARTMENT']).withMessage('Issued to type is required'),
+    body('issuedToType').optional().isIn(['EMPLOYEE', 'CONTRACTOR']),
     body('issuedToName').trim().notEmpty().withMessage('Issued to name is required'),
+    body('issuedAt').optional().isISO8601(),
     body('reasonOtherText').optional().trim(),
     body('note').optional().trim(),
     body('remark').optional().trim(),
@@ -117,7 +132,9 @@ router.post(
   validate,
   async (req, res, next) => {
     try {
-      const mr = await MaterialRequest.findById(req.body.materialRequestId);
+      const mr = await MaterialRequest.findById(req.body.materialRequestId).populate(
+        'items.materialId'
+      );
       if (!mr) return res.status(404).json({ statusCode: 404, message: 'Indent not found' });
 
       const issueable = ['MATERIAL_RECEIVED', 'CHAIRMAN_APPROVED', 'ALLOCATED'];
@@ -139,6 +156,19 @@ router.post(
         }
       }
 
+      const issueType = req.body.issueType;
+      const issuedToType =
+        issueType === 'CONTRACT_ISSUE' ? 'CONTRACTOR' : 'EMPLOYEE';
+      if (!String(req.body.issuedToName || '').trim()) {
+        return res.status(400).json({
+          statusCode: 400,
+          message:
+            issueType === 'CONTRACT_ISSUE'
+              ? 'Contractor name is required for Contract Issue'
+              : 'Employee name is required for Work Issue',
+        });
+      }
+
       let issueItems = req.body.items;
       if (!issueItems?.length) {
         const lines = getIndentLineItems(mr);
@@ -150,6 +180,7 @@ router.post(
 
       const alreadyAllocated = mr.status === 'ALLOCATED';
       const issueNumber = await generateIssueNumber();
+      const issuedAt = req.body.issuedAt ? new Date(req.body.issuedAt) : new Date();
       const issue = await MaterialIssue.create({
         issueNumber,
         materialRequestId: mr._id,
@@ -158,9 +189,10 @@ router.post(
         issuedByUserId: req.user._id,
         issueReason: reason,
         issueReasonOtherText: reason === 'other' ? String(req.body.reasonOtherText || '').trim() : '',
-        issueType: req.body.issueType,
-        issuedToType: req.body.issuedToType,
+        issueType,
+        issuedToType,
         issuedToName: req.body.issuedToName.trim(),
+        issuedAt,
         note: req.body.note || req.body.remark || '',
         attachments: Array.isArray(req.body.attachments)
           ? req.body.attachments
@@ -175,24 +207,16 @@ router.post(
 
       for (const item of issueItems) {
         if (!alreadyAllocated) {
-          const ledger = await StockLedger.findOne({ siteId: mr.siteId, materialId: item.materialId });
-          if (!ledger || ledger.quantityOnHand < item.quantity) {
-            return res.status(400).json({ statusCode: 400, message: 'Insufficient stock to issue' });
-          }
-          ledger.quantityOnHand -= item.quantity;
-          ledger.lastMovementAt = new Date();
-          await ledger.save();
-          await StockMovement.create({
+          await consumeFifo({
             siteId: mr.siteId,
             materialId: item.materialId,
-            materialRequestId: mr._id,
-            quantityDelta: -item.quantity,
-            type: 'ALLOCATION',
+            quantity: item.quantity,
             actorUserId: req.user._id,
+            materialRequestId: mr._id,
           });
         }
 
-        const line = mr.items.find((li) => li.materialId.toString() === item.materialId.toString());
+        const line = mr.items.find((li) => li.materialId._id?.toString() === item.materialId.toString() || li.materialId.toString() === item.materialId.toString());
         if (line) line.quantityIssued = (line.quantityIssued || 0) + item.quantity;
       }
 

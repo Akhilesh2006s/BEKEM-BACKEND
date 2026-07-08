@@ -49,7 +49,9 @@ describe('Executive purchase request queue', () => {
 
   it('executive queue API returns meta count aligned with list', async () => {
     const { countExecutivePendingPurchaseRequests } = require('./services/executivePurchaseRequestQueueService');
-    const expected = await countExecutivePendingPurchaseRequests();
+    const expected = await countExecutivePendingPurchaseRequests(
+      await require('./models').User.findOne({ email: 'executive@bekem.com' })
+    );
     const res = await request(app)
       .get('/api/purchase-requests')
       .set('Authorization', `Bearer ${executiveToken}`)

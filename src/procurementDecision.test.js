@@ -10,11 +10,15 @@ const {
 } = require('./test/helpers');
 const { MaterialRequest, PurchaseRequest } = require('./models');
 
+let indentCategoryId;
+
 async function createForwardedIndent(app, siteToken, storeToken, materialId) {
   const createRes = await request(app)
     .post('/api/material-requests')
     .set('Authorization', `Bearer ${siteToken}`)
     .send({ indentRequestType: 'ABOVE_5000',
+        requestedByName: 'Test Requester',
+        indentCategoryId: indentCategoryId,
         purpose: 'UAT test reason', items: [{ materialId: materialId.toString(), quantityRequested: 50 }] });
   assert.strictEqual(createRes.status, 201);
   const mrId = createRes.body.data.id;
@@ -48,6 +52,7 @@ describe('Executive procurement decision workflow', () => {
     coordinatorToken = await loginAs('coordinator@bekem.com');
     const ctx = await getSeedContext();
     material = ctx.material;
+    indentCategoryId = ctx.indentCategory._id.toString();
   });
 
   after(async () => {

@@ -15,7 +15,7 @@ async function buildConsigneeAddress(mr) {
   }
   if (storeUser) {
     const phone = storeUser.phone || storeUser.contactInfo || '';
-    lines.push(`Store Manager: ${storeUser.name}${phone ? ` — ${phone}` : ''}`);
+    lines.push(`Store Incharge: ${storeUser.name}${phone ? ` — ${phone}` : ''}`);
   }
   return lines.join('\n');
 }

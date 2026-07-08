@@ -49,6 +49,8 @@ const materialRequestSchema = new mongoose.Schema(
     quantityRequested: { type: Number },
     quantityAllocated: { type: Number, default: 0 },
     purpose: { type: String, default: '' },
+    /** Free-text name entered at indent creation (site manager flow). */
+    requestedByName: { type: String, default: '' },
     requiredByDate: { type: Date },
     requestedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     status: { type: String, enum: STATUSES, default: 'PENDING_STORE' },
@@ -80,6 +82,8 @@ const materialRequestSchema = new mongoose.Schema(
     origin: { type: String, enum: ['SITE', 'EXECUTIVE'], default: 'SITE' },
     /** BELOW_5000 = capped petty indent with visible pricing; ABOVE_5000 = standard indent. */
     indentRequestType: { type: String, enum: ['BELOW_5000', 'ABOVE_5000'], default: 'ABOVE_5000' },
+    /** Whole-indent category — routes executive notifications and visibility. */
+    indentCategoryId: { type: mongoose.Schema.Types.ObjectId, ref: 'IndentCategory' },
   },
   { timestamps: true }
 );

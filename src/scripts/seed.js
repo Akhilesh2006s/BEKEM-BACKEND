@@ -173,9 +173,14 @@ async function seedDatabase() {
     StockInventoryRecord.deleteMany({}),
   ]);
 
+  const { IndentCategory } = require('../models');
+  await IndentCategory.deleteMany({});
+
   await ensureDefaultAddresses();
   const { ensureMaterialCategories } = require('../services/materialCategoryService');
   await ensureMaterialCategories();
+  const { ensureIndentCategories } = require('../services/indentCategoryService');
+  await ensureIndentCategories();
 
   const projectBillingAddr = await Address.create({
     type: 'project_billing',
@@ -278,6 +283,12 @@ GST No.: 29AADCB5671Q1ZY`,
     if (u.role === 'CHAIRMAN') data.assignedProjectIds = [project._id, project2._id, project3._id];
     const created = await User.create(data);
     userMap[u.role] = created;
+  }
+
+  const indentCategories = await IndentCategory.find({ isActive: true }).select('_id');
+  if (userMap.EXECUTIVE && indentCategories.length) {
+    userMap.EXECUTIVE.assignedIndentCategoryIds = indentCategories.map((c) => c._id);
+    await userMap.EXECUTIVE.save();
   }
 
   const materialDocs = [];

@@ -10,11 +10,15 @@ const {
 } = require('./test/helpers');
 const { BranchTransfer, StockLedger, Site, Project, MaterialRequest } = require('./models');
 
+let indentCategoryId;
+
 async function createForwardedIndent(app, siteToken, storeToken, materialId) {
   const createRes = await request(app)
     .post('/api/material-requests')
     .set('Authorization', `Bearer ${siteToken}`)
     .send({ indentRequestType: 'ABOVE_5000',
+        requestedByName: 'Test Requester',
+        indentCategoryId: indentCategoryId,
         purpose: 'UAT test reason', items: [{ materialId: materialId.toString(), quantityRequested: 99999 }] });
   assert.strictEqual(createRes.status, 201);
   const mrId = createRes.body.data.id;
@@ -51,6 +55,7 @@ describe('Branch transfer workflow', () => {
     coordinatorToken = await loginAs('coordinator@bekem.com');
     const ctx = await getSeedContext();
     material = ctx.material;
+    indentCategoryId = ctx.indentCategory._id.toString();
     destProject = ctx.project;
     sourceProject = await Project.findOne({ _id: { $ne: destProject._id } });
     sourceSite = await Site.findOne({ projectId: sourceProject._id });

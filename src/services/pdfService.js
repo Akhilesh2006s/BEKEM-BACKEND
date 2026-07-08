@@ -410,9 +410,12 @@ function generateMaterialIssuePdf(issue) {
 
 function buildRfqPdfContent(doc, detail) {
   header(doc, 'REQUEST FOR QUOTATION', detail.rfqNumber);
+  if (detail.vendorName) row(doc, 'Vendor', detail.vendorName);
   row(doc, 'Project', detail.projectCode ? `${detail.projectCode} — ${detail.projectName || ''}` : '—');
   if (detail.indentNumber) row(doc, 'Indent', detail.indentNumber);
   if (detail.dueDate) row(doc, 'Due date', new Date(detail.dueDate).toLocaleDateString('en-IN'));
+  if (detail.paymentTerms) row(doc, 'Payment terms', detail.paymentTerms);
+  if (detail.deliveryTerms) row(doc, 'Delivery terms', detail.deliveryTerms);
   doc.moveDown(0.5);
 
   doc.fontSize(11).fillColor('#0F172A').text('Items');
@@ -447,7 +450,11 @@ function buildRfqPdfContent(doc, detail) {
 
 function generateRfqPdf(detail) {
   return (res) => {
-    const filename = `${(detail.rfqNumber || 'RFQ').replace(/[/\\?%*:|"<>]/g, '-')}.pdf`;
+    const base = (detail.rfqNumber || 'RFQ').replace(/[/\\?%*:|"<>]/g, '-');
+    const vendorSuffix = detail.vendorName
+      ? `-${detail.vendorName.replace(/[/\\?%*:|"<>]/g, '-').slice(0, 40)}`
+      : '';
+    const filename = `${base}${vendorSuffix}.pdf`;
     streamPdf(res, filename, (doc) => buildRfqPdfContent(doc, detail));
   };
 }

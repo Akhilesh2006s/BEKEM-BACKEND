@@ -12,7 +12,11 @@ const attachmentSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
     fileType: { type: String, default: 'application/octet-stream' },
-    category: { type: String, default: 'ISSUE_SLIP' },
+    category: {
+      type: String,
+      enum: ['ISSUE_SLIP', 'CONTRACTOR_ACK', 'OTHER'],
+      default: 'ISSUE_SLIP',
+    },
   },
   { _id: false }
 );
@@ -30,9 +34,11 @@ const materialIssueSchema = new mongoose.Schema(
     issueReason: { type: String, enum: ISSUE_REASONS },
     issueReasonOtherText: { type: String, default: '' },
     issueType: { type: String, enum: ['WORK_ISSUE', 'CONTRACT_ISSUE'] },
-    /** Who received the material at site (employee, contractor, or department). */
-    issuedToType: { type: String, enum: ['EMPLOYEE', 'CONTRACTOR', 'DEPARTMENT'] },
+    /** Who received the material at site (employee or contractor — Req 51). */
+    issuedToType: { type: String, enum: ['EMPLOYEE', 'CONTRACTOR'] },
     issuedToName: { type: String, default: '', trim: true },
+    /** Actual store issue date (Req 49). Defaults to createdAt if omitted. */
+    issuedAt: { type: Date, default: Date.now },
     note: { type: String, default: '' },
     attachments: { type: [attachmentSchema], default: [] },
   },

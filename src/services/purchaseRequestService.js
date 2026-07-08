@@ -3,6 +3,7 @@ const { PurchaseRequest, MaterialRequest, User } = require('../models');
 const { generatePrNumber } = require('./documentNumberService');
 const statusHistoryService = require('./statusHistoryService');
 const notificationService = require('./notificationService');
+const { notifyExecutivesForIndent } = require('./executiveRoutingService');
 const { computeIndentEstimatedValue } = require('./indentPricingService');
 
 async function estimateIndentAmount(mr) {
@@ -42,16 +43,12 @@ async function createPurchaseRequestForIndent(mr, actorUserId, amountEstimate, h
     historyNote || `PR ${prNumber} created`
   );
 
-  const executives = await User.find({ role: UserRole.EXECUTIVE });
-  await notificationService.notifyUsers(
-    executives.map((u) => u._id),
-    {
-      title: 'New purchase request',
-      body: `${prNumber} is in your Pending Purchase Requests queue.`,
-      relatedEntityType: 'PurchaseRequest',
-      relatedEntityId: pr._id,
-    }
-  );
+  await notifyExecutivesForIndent(mr.indentCategoryId, notificationService, {
+    title: 'New purchase request',
+    body: `${prNumber} is in your Pending Purchase Requests queue.`,
+    relatedEntityType: 'PurchaseRequest',
+    relatedEntityId: pr._id,
+  });
 
   return pr;
 }

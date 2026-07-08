@@ -175,8 +175,8 @@ exports.ROLE_COLORS = {
     [UserRole.CHAIRMAN]: { primary: '#1A4FA0', accent: '#E8F0FA' },
 };
 exports.ROLE_LABELS = {
-    [UserRole.SITE_INCHARGE]: 'Site Manager',
-    [UserRole.STORE_INCHARGE]: 'Store Manager',
+    [UserRole.SITE_INCHARGE]: 'Indent raiser',
+    [UserRole.STORE_INCHARGE]: 'Store Incharge',
     [UserRole.PROJECT_MANAGER]: 'Project Manager',
     [UserRole.EXECUTIVE]: 'Executive',
     [UserRole.COORDINATOR]: 'Coordinator',

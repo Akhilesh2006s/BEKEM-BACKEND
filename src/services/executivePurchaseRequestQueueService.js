@@ -1,4 +1,6 @@
-const { PurchaseRequest, PurchaseOrder } = require('../models');
+const { PurchaseRequest, PurchaseOrder, MaterialRequest } = require('../models');
+const { UserRole } = require('@afios/shared');
+const { buildExecutiveIndentCategoryFilter } = require('./executiveRoutingService');
 
 const EXECUTIVE_PR_STATUSES = ['OPEN'];
 
@@ -38,13 +40,37 @@ async function filterReadyForExecutivePo(prs) {
   return prs.filter((pr) => !orderedSet.has(pr._id.toString()));
 }
 
-async function listExecutivePendingPurchaseRequests() {
-  const open = await listOpenPurchaseRequests();
-  return filterReadyForExecutivePo(open);
+async function filterPurchaseRequestsForExecutive(user, prs) {
+  if (user?.role !== UserRole.EXECUTIVE) return prs;
+  const categoryFilter = buildExecutiveIndentCategoryFilter(user);
+  if (!categoryFilter.$or) return prs;
+
+  const mrIds = prs
+    .map((pr) => pr.materialRequestId?._id || pr.materialRequestId)
+    .filter(Boolean);
+  if (!mrIds.length) return prs;
+
+  const allowedMrs = await MaterialRequest.find({
+    _id: { $in: mrIds },
+    ...categoryFilter,
+  })
+    .select('_id')
+    .lean();
+  const allowed = new Set(allowedMrs.map((mr) => mr._id.toString()));
+  return prs.filter((pr) => {
+    const mrId = (pr.materialRequestId?._id || pr.materialRequestId)?.toString();
+    return mrId && allowed.has(mrId);
+  });
 }
 
-async function countExecutivePendingPurchaseRequests() {
-  const items = await listExecutivePendingPurchaseRequests();
+async function listExecutivePendingPurchaseRequests(user) {
+  const open = await listOpenPurchaseRequests();
+  const ready = await filterReadyForExecutivePo(open);
+  return filterPurchaseRequestsForExecutive(user, ready);
+}
+
+async function countExecutivePendingPurchaseRequests(user) {
+  const items = await listExecutivePendingPurchaseRequests(user);
   return items.length;
 }
 
@@ -53,5 +79,6 @@ module.exports = {
   executivePurchaseRequestFilter,
   listExecutivePendingPurchaseRequests,
   countExecutivePendingPurchaseRequests,
+  filterPurchaseRequestsForExecutive,
   filterReadyForExecutivePo,
 };

@@ -14,6 +14,7 @@ const {
 const {
   listExecutivePendingPurchaseRequests,
   countExecutivePendingPurchaseRequests,
+  filterPurchaseRequestsForExecutive,
 } = require('../services/executivePurchaseRequestQueueService');
 const {
   serializeExecutivePurchaseRequestListItem,
@@ -53,11 +54,11 @@ router.get('/', async (req, res, next) => {
       !req.query.tab;
 
     if (isExecutiveQueue) {
-      const items = await listExecutivePendingPurchaseRequests();
+      const items = await listExecutivePendingPurchaseRequests(req.user);
       const data = await Promise.all(items.map(serializeExecutivePurchaseRequestListItem));
       return res.json({
         data,
-        meta: { count: await countExecutivePendingPurchaseRequests() },
+        meta: { count: await countExecutivePendingPurchaseRequests(req.user) },
       });
     }
 
@@ -76,7 +77,8 @@ router.get('/', async (req, res, next) => {
       const items = await PurchaseRequest.find(filter)
         .sort({ createdAt: -1 })
         .populate(populateFields);
-      const data = await Promise.all(items.map(serializeExecutivePurchaseRequestListItem));
+      const filtered = await filterPurchaseRequestsForExecutive(req.user, items);
+      const data = await Promise.all(filtered.map(serializeExecutivePurchaseRequestListItem));
       return res.json({ data, meta: { count: data.length } });
     }
 

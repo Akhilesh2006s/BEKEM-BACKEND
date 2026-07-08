@@ -227,18 +227,19 @@ router.post(
 
       let quantity = 1;
       let purchaseHistory = [];
+      let indentLines = [];
       if (pr.materialRequestId) {
         const mr = await require('../models').MaterialRequest.findById(pr.materialRequestId).populate(
           'items.materialId'
         );
         if (mr) {
-          const lines = getIndentLineItems(mr);
-          quantity = lines.reduce((s, l) => s + (l.quantityRequested || 0), 0) || 1;
-          purchaseHistory = await buildPurchaseHistoryRows(lines);
+          indentLines = getIndentLineItems(mr);
+          quantity = indentLines.reduce((s, l) => s + (l.quantityRequested || 0), 0) || 1;
+          purchaseHistory = await buildPurchaseHistoryRows(indentLines);
         }
       }
 
-      const comparison = buildComparisonTable(quotations, quantity);
+      const comparison = buildComparisonTable(quotations, quantity, indentLines);
 
       let deliveryAddress = '';
       let lineItems = [];

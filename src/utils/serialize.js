@@ -52,6 +52,7 @@ function serializeUser(user) {
     role: user.role,
     assignedProjectIds: (user.assignedProjectIds || []).map((id) => id.toString()),
     assignedSiteId: user.assignedSiteId?.toString() || null,
+    assignedIndentCategoryIds: (user.assignedIndentCategoryIds || []).map((id) => id.toString()),
     avatarColor: user.avatarColor,
     locale: user.locale || 'en',
     notificationPrefs: {
@@ -134,6 +135,7 @@ function serializeMaterialRequest(mr, stockContext, pricingContext) {
     quantityRequested: first?.quantityRequested,
     quantityAllocated: first?.quantityAllocated || 0,
     purpose: mr.purpose || '',
+    requestedByName: mr.requestedByName || mr.requestedByUserId?.name || '',
     requiredByDate: mr.requiredByDate?.toISOString?.() || mr.requiredByDate || null,
     requestedByUserId: resolveId(mr.requestedByUserId),
     status: mr.status,
@@ -143,6 +145,7 @@ function serializeMaterialRequest(mr, stockContext, pricingContext) {
     storeStockVerified: !!mr.storeStockVerified,
     origin: mr.origin || 'SITE',
     indentRequestType: mr.indentRequestType || 'ABOVE_5000',
+    indentCategoryId: resolveId(mr.indentCategoryId) || undefined,
     canFullyIssue: stockContext?.canFullyIssue,
     hasShortfall: stockContext?.hasShortfall,
     createdAt: mr.createdAt?.toISOString?.() || mr.createdAt,
@@ -176,6 +179,12 @@ function serializeMaterialRequest(mr, stockContext, pricingContext) {
     base.requester = {
       id: mr.requestedByUserId._id.toString(),
       name: mr.requestedByUserId.name,
+    };
+  }
+  if (mr.indentCategoryId?.name) {
+    base.indentCategory = {
+      id: mr.indentCategoryId._id.toString(),
+      name: mr.indentCategoryId.name,
     };
   }
 

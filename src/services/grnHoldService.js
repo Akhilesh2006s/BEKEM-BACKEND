@@ -4,14 +4,13 @@ const {
   PurchaseOrder,
   PurchaseRequest,
   MaterialRequest,
-  StockLedger,
-  StockMovement,
   Site,
   User,
 } = require('../models');
 const statusHistoryService = require('./statusHistoryService');
 const notificationService = require('./notificationService');
 const { syncPoFulfillment } = require('./grnFulfillmentService');
+const { createBatchesFromGrn } = require('./fifoStockService');
 
 function assessGrnHold(varianceLines = [], { invoiceValue, ewayBillNumber, saveDraft = false } = {}) {
   let requiresHold = false;
@@ -77,29 +76,7 @@ async function applyGrnStockAndSideEffects(grn, actorUserId) {
   const pr = await PurchaseRequest.findById(po.purchaseRequestId);
   const projectId = pr?.projectId?._id || pr?.projectId;
 
-  for (const item of grn.items || []) {
-    if (item.quantityReceived <= 0) continue;
-    let ledger = await StockLedger.findOne({ siteId: grn.siteId, materialId: item.materialId });
-    if (!ledger) {
-      ledger = await StockLedger.create({
-        siteId: grn.siteId,
-        materialId: item.materialId,
-        quantityOnHand: 0,
-        lowStockThreshold: 10,
-      });
-    }
-    ledger.quantityOnHand += item.quantityReceived;
-    ledger.lastMovementAt = new Date();
-    await ledger.save();
-    await StockMovement.create({
-      siteId: grn.siteId,
-      materialId: item.materialId,
-      materialRequestId: pr?.materialRequestId || null,
-      quantityDelta: item.quantityReceived,
-      type: 'INCOMING',
-      actorUserId,
-    });
-  }
+  await createBatchesFromGrn(grn, actorUserId, pr?.materialRequestId || null);
 
   const fulfillment = await syncPoFulfillment(po, actorUserId);
 

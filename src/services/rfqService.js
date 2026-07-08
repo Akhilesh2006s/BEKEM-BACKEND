@@ -65,9 +65,13 @@ async function buildItemsPayload(lineItems) {
 async function getRfqComparison(rfqId, user) {
   assertRfqAccess(user);
   const { rfq, mr, lineItems, quantity, materialIds } = await loadRfqContext(rfqId);
-  await ensureDefaultVendorQuotations(rfq, rfq.purchaseRequestId, materialIds);
   const quotations = await Quotation.find({ rfqId: rfq._id }).populate('vendorId').sort({ amount: 1 });
-  const comparison = buildComparisonTable(quotations, quantity);
+  const hasAssignments = quotations.some((q) => (q.selectedMaterialIds || []).length > 0);
+  if (!hasAssignments) {
+    await ensureDefaultVendorQuotations(rfq, rfq.purchaseRequestId, materialIds);
+  }
+  const freshQuotations = await Quotation.find({ rfqId: rfq._id }).populate('vendorId').sort({ amount: 1 });
+  const comparison = buildComparisonTable(freshQuotations, quantity, lineItems);
   const purchaseHistory = await buildPurchaseHistoryRows(lineItems);
 
   return {
@@ -139,9 +143,39 @@ async function getRfqDetail(rfqId, user) {
   };
 }
 
+async function getRfqDetailForVendor(rfqId, user, vendorId) {
+  const detail = await getRfqDetail(rfqId, user);
+  if (!vendorId) return detail;
+
+  const quotation = await Quotation.findOne({ rfqId, vendorId }).populate('vendorId').lean();
+  if (!quotation) {
+    const err = new Error('Vendor quotation not found for this RFQ');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const selectedIds = new Set((quotation.selectedMaterialIds || []).map((id) => id.toString()));
+  const items = selectedIds.size
+    ? (detail.items || []).filter((item) => selectedIds.has(item.materialId))
+    : detail.items || [];
+
+  const vendor = quotation.vendorId;
+  const vendorName = vendor?.name || 'Vendor';
+  const comparisonVendor = (detail.quotations || []).find((v) => v.vendorId === vendorId);
+
+  return {
+    ...detail,
+    items,
+    vendorId,
+    vendorName,
+    paymentTerms: quotation.paymentTerms || comparisonVendor?.paymentTerms || '',
+    deliveryTerms: quotation.deliveryTerms || comparisonVendor?.deliveryTerms || '',
+  };
+}
+
 async function saveRfqQuotations(rfqId, user, { quotations: rows }) {
   assertRfqAccess(user);
-  const { rfq, quantity } = await loadRfqContext(rfqId);
+  const { rfq, quantity, lineItems } = await loadRfqContext(rfqId);
   if (!Array.isArray(rows) || !rows.length) {
     const err = new Error('At least one vendor quotation is required');
     err.statusCode = 400;
@@ -153,14 +187,16 @@ async function saveRfqQuotations(rfqId, user, { quotations: rows }) {
     gstPercent: Number(row.gstPercent ?? 18),
     paymentTerms: row.paymentTerms || '',
     deliveryTerms: row.deliveryTerms || '',
+      itemRates: Array.isArray(row.itemRates) ? row.itemRates : [],
+      selectedMaterialIds: Array.isArray(row.selectedMaterialIds) ? row.selectedMaterialIds : [],
   }));
-  await upsertRfqQuotations(rfq, normalized, quantity);
+  await upsertRfqQuotations(rfq, normalized, quantity, lineItems);
   return getRfqComparison(rfqId, user);
 }
 
 async function addRfqVendorQuotation(rfqId, user, body) {
   assertRfqAccess(user);
-  const { rfq, quantity } = await loadRfqContext(rfqId);
+  const { rfq, quantity, lineItems } = await loadRfqContext(rfqId);
   const vendor = await Vendor.findById(body.vendorId);
   if (!vendor) {
     const err = new Error('Vendor not found');
@@ -176,9 +212,12 @@ async function addRfqVendorQuotation(rfqId, user, body) {
         gstPercent: Number(body.gstPercent ?? 18),
         paymentTerms: body.paymentTerms || '',
         deliveryTerms: body.deliveryTerms || '',
+        itemRates: Array.isArray(body.itemRates) ? body.itemRates : [],
+        selectedMaterialIds: Array.isArray(body.selectedMaterialIds) ? body.selectedMaterialIds : [],
       },
     ],
-    quantity
+    quantity,
+    lineItems
   );
   return getRfqComparison(rfqId, user);
 }
@@ -197,9 +236,9 @@ async function finalizeRfq(rfqId, user, { selectedVendorId, whyWeChoseThisVendor
     throw err;
   }
 
-  const { rfq, quantity } = await loadRfqContext(rfqId);
+  const { rfq, quantity, lineItems } = await loadRfqContext(rfqId);
   const quotations = await Quotation.find({ rfqId: rfq._id }).populate('vendorId');
-  const l1 = pickL1Quotation(quotations, quantity);
+  const l1 = pickL1Quotation(quotations, quantity, lineItems);
   const l1VendorId = l1?.vendorId?._id?.toString() || l1?.vendorId?.toString();
   const isL1 = l1VendorId === selectedVendorId;
 
@@ -227,20 +266,22 @@ async function finalizeRfq(rfqId, user, { selectedVendorId, whyWeChoseThisVendor
 
 function buildRfqShareText(detail) {
   const lines = [
-    `RFQ ${detail.rfqNumber}`,
+    detail.vendorName ? `RFQ ${detail.rfqNumber} — ${detail.vendorName}` : `RFQ ${detail.rfqNumber}`,
     detail.projectCode ? `Project: ${detail.projectCode}` : '',
     '',
     'Items:',
-    ...detail.items.map((i, idx) => `${idx + 1}. ${i.name} — ${i.quantity} ${i.unit}`),
+    ...(detail.items || []).map((i, idx) => `${idx + 1}. ${i.name} — ${i.quantity} ${i.unit}`),
     '',
     'Terms & Conditions:',
-    ...detail.termsAndConditions.map((t, i) => `${i + 1}. ${t}`),
+    ...(detail.termsAndConditions || []).map((t, i) => `${i + 1}. ${t}`),
   ].filter(Boolean);
   return lines.join('\n');
 }
 
 async function sendRfqEmail(rfqId, user, { vendorId, vendorEmail } = {}) {
-  const detail = await getRfqDetail(rfqId, user);
+  const detail = vendorId
+    ? await getRfqDetailForVendor(rfqId, user, vendorId)
+    : await getRfqDetail(rfqId, user);
   const { generateRfqPdfBuffer } = require('./pdfService');
   const { sendRfqToVendor } = require('./emailService');
 
@@ -273,15 +314,17 @@ async function validatePoVendorSelection(
 
   const pr = await PurchaseRequest.findById(purchaseRequestId);
   let quantity = 1;
+  let lineItems = [];
   if (pr?.materialRequestId) {
     const mr = await MaterialRequest.findById(pr.materialRequestId);
     if (mr) {
-      quantity = getIndentLineItems(mr).reduce((s, l) => s + (l.quantityRequested || 0), 0) || 1;
+      lineItems = getIndentLineItems(mr);
+      quantity = lineItems.reduce((s, l) => s + (l.quantityRequested || 0), 0) || 1;
     }
   }
 
   const quotations = await Quotation.find({ rfqId: rfq._id }).populate('vendorId');
-  const l1 = pickL1Quotation(quotations, quantity);
+  const l1 = pickL1Quotation(quotations, quantity, lineItems);
   const l1VendorId = l1?.vendorId?._id?.toString() || l1?.vendorId?.toString();
 
   for (const vendorId of vendorIds) {
@@ -395,6 +438,7 @@ async function submitRfqWizard(
 module.exports = {
   listRfqs,
   getRfqDetail,
+  getRfqDetailForVendor,
   getRfqComparison,
   getRfqByPurchaseRequest,
   saveRfqQuotations,

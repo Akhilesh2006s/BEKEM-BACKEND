@@ -34,7 +34,7 @@ describe('Load / soak tests', () => {
 
   it('allocate endpoint handles sequential requests without 403 for valid store user', async () => {
     const app = getApp();
-    const { material } = await getSeedContext();
+    const { material, indentCategory } = await getSeedContext();
     const siteToken = await loginAs('request@bekem.com');
     const storeToken = await loginAs('storeincharge@bekem.com');
 
@@ -44,6 +44,8 @@ describe('Load / soak tests', () => {
         .set('Authorization', `Bearer ${siteToken}`)
         .send({
           indentRequestType: 'ABOVE_5000',
+          requestedByName: 'Test Requester',
+          indentCategoryId: indentCategory._id.toString(),
           materialId: material._id.toString(),
           quantityRequested: 1,
           purpose: `Load test ${i}`,
