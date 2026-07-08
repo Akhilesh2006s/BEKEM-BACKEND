@@ -24,6 +24,16 @@ export function hasMaterialUnitPrice(material: Pick<MaterialDto, 'unitPrice' | '
   return resolveMaterialUnitPrice(material) > 0;
 }
 
+/**
+ * True when the material's own unit price already meets/exceeds the Below ₹5,000 cap.
+ * Such materials must not be selectable on Below ₹5,000 indents.
+ */
+export function isMaterialOverBelowCap(
+  material: Pick<MaterialDto, 'unitPrice' | 'referenceUnitPrice'>
+): boolean {
+  return resolveMaterialUnitPrice(material) >= INDENT_VALUE_CAP_INR;
+}
+
 export function computeIndentLineTotal(quantity: number, unitPrice: number): number {
   return Math.round((quantity * unitPrice + Number.EPSILON) * 100) / 100;
 }

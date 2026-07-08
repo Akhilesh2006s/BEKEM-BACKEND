@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.INDENT_CAP_REACHED_MESSAGE = exports.INDENT_REQUEST_TYPE_LABELS = exports.INDENT_REQUEST_TYPES = exports.INDENT_VALUE_CAP_INR = void 0;
 exports.resolveMaterialUnitPrice = resolveMaterialUnitPrice;
 exports.hasMaterialUnitPrice = hasMaterialUnitPrice;
+exports.isMaterialOverBelowCap = isMaterialOverBelowCap;
 exports.computeIndentLineTotal = computeIndentLineTotal;
 exports.computeIndentRunningTotal = computeIndentRunningTotal;
 exports.hideIndentPricingForRole = hideIndentPricingForRole;
@@ -22,6 +23,13 @@ function resolveMaterialUnitPrice(material) {
 /** True when catalogue/API returned a usable positive unit price. */
 function hasMaterialUnitPrice(material) {
     return resolveMaterialUnitPrice(material) > 0;
+}
+/**
+ * True when the material's own unit price already meets/exceeds the Below ₹5,000 cap.
+ * Such materials must not be selectable on Below ₹5,000 indents.
+ */
+function isMaterialOverBelowCap(material) {
+    return resolveMaterialUnitPrice(material) >= exports.INDENT_VALUE_CAP_INR;
 }
 function computeIndentLineTotal(quantity, unitPrice) {
     return Math.round((quantity * unitPrice + Number.EPSILON) * 100) / 100;

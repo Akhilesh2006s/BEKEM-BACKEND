@@ -14,8 +14,10 @@ function assertIndentRequestType(indentRequestType) {
 }
 
 /**
- * Enforce below-₹5,000 cap on create (server-side).
- * Requires a resolvable unit price on every line so zero-price items cannot bypass the cap.
+ * Enforce below-₹5,000 rules on create (server-side):
+ * - every line must have a resolvable unit price
+ * - no single material unit price may be ≥ ₹5,000
+ * - indent running total must stay under ₹5,000
  * @param {string} indentRequestType
  * @param {Array<{ materialId: unknown, quantityRequested: number }>} resolvedItems
  */
@@ -42,10 +44,15 @@ async function validateIndentRequestTypeForCreate(indentRequestType, resolvedIte
         referenceUnitPrice: m.referenceUnitPrice,
       }))
     );
-    const missing = materials.filter((m) => {
-      const rate = rates.get(m._id.toString());
-      return !(Number(rate) > 0);
-    });
+
+    const missing = [];
+    const overCap = [];
+    for (const m of materials) {
+      const rate = Number(rates.get(m._id.toString())) || 0;
+      if (!(rate > 0)) missing.push(m);
+      else if (rate >= INDENT_VALUE_CAP_INR) overCap.push({ ...m, rate });
+    }
+
     if (missing.length) {
       const names = missing
         .slice(0, 3)
@@ -53,6 +60,18 @@ async function validateIndentRequestTypeForCreate(indentRequestType, resolvedIte
         .join(', ');
       const err = new Error(
         `Price not available for: ${names}. Ask HQ to set a Material Master reference rate, or use Above ₹5,000.`
+      );
+      err.statusCode = 400;
+      throw err;
+    }
+
+    if (overCap.length) {
+      const names = overCap
+        .slice(0, 3)
+        .map((m) => m.name || m.code)
+        .join(', ');
+      const err = new Error(
+        `These materials cost ₹5,000 or more per unit and cannot be added to a Below ₹5,000 indent: ${names}. Use Above ₹5,000.`
       );
       err.statusCode = 400;
       throw err;

@@ -6,6 +6,11 @@ export declare const INDENT_REQUEST_TYPE_LABELS: Record<IndentRequestType, strin
 export declare function resolveMaterialUnitPrice(material: Pick<MaterialDto, 'unitPrice' | 'referenceUnitPrice'>): number;
 /** True when catalogue/API returned a usable positive unit price. */
 export declare function hasMaterialUnitPrice(material: Pick<MaterialDto, 'unitPrice' | 'referenceUnitPrice'>): boolean;
+/**
+ * True when the material's own unit price already meets/exceeds the Below ₹5,000 cap.
+ * Such materials must not be selectable on Below ₹5,000 indents.
+ */
+export declare function isMaterialOverBelowCap(material: Pick<MaterialDto, 'unitPrice' | 'referenceUnitPrice'>): boolean;
 export declare function computeIndentLineTotal(quantity: number, unitPrice: number): number;
 export declare function computeIndentRunningTotal(lines: Array<{
     quantity: number;
