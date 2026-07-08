@@ -206,6 +206,7 @@ function dedupeMaterialSearchResults(rows) {
     unit: row.unit,
     category: row.category || '',
     unitPrice: row.unitPrice ?? null,
+    referenceUnitPrice: row.referenceUnitPrice ?? null,
     pickerSubtitle: row.pickerSubtitle,
   }));
 }

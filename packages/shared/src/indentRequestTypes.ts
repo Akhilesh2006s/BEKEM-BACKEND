@@ -14,7 +14,14 @@ export const INDENT_REQUEST_TYPE_LABELS: Record<IndentRequestType, string> = {
 export function resolveMaterialUnitPrice(material: Pick<MaterialDto, 'unitPrice' | 'referenceUnitPrice'>): number {
   const raw = material.unitPrice ?? material.referenceUnitPrice;
   const n = Number(raw);
-  return Number.isFinite(n) && n >= 0 ? n : 0;
+  // Treat missing / non-positive catalogue rates as 0 so the ₹5,000 cap
+  // still works; callers that need "price unavailable" should check hasMaterialUnitPrice.
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/** True when catalogue/API returned a usable positive unit price. */
+export function hasMaterialUnitPrice(material: Pick<MaterialDto, 'unitPrice' | 'referenceUnitPrice'>): boolean {
+  return resolveMaterialUnitPrice(material) > 0;
 }
 
 export function computeIndentLineTotal(quantity: number, unitPrice: number): number {

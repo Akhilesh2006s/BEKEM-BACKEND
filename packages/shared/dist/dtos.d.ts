@@ -663,11 +663,45 @@ export interface QuotationComparisonVendorDto {
     finalCost: number;
     paymentTerms: string;
     deliveryTerms: string;
+    itemRates?: Array<{
+        materialId: string;
+        materialName: string;
+        quantity: number;
+        unit: string;
+        rate: number;
+        gstPercent: number;
+        finalCost: number;
+    }>;
+    selectedMaterialIds?: string[];
     isL1: boolean;
     submittedAt?: string;
 }
 export interface QuotationComparisonDto {
     vendors: QuotationComparisonVendorDto[];
+    itemComparisons?: Array<{
+        materialId: string;
+        materialName: string;
+        quantity: number;
+        unit: string;
+        minOffer?: {
+            vendorId: string;
+            vendorName: string;
+            rate: number;
+            finalCost: number;
+        } | null;
+        maxOffer?: {
+            vendorId: string;
+            vendorName: string;
+            rate: number;
+            finalCost: number;
+        } | null;
+        offers?: Array<{
+            vendorId: string;
+            vendorName: string;
+            rate: number;
+            finalCost: number;
+        }>;
+    }>;
     l1VendorId?: string;
     l1QuotationId?: string;
 }

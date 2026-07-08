@@ -18,7 +18,8 @@
     "uat:walk": "node src/scripts/uatSmokeWalk.js",
     "import:po-index": "node src/scripts/importPoIndex.js",
     "dedupe:materials": "node src/scripts/dedupeMaterials.js",
-    "test": "node --test --test-concurrency=1 src/**/*.test.js"
+    "test": "node --test --test-concurrency=1 src/**/*.test.js",
+    "backfill:material-prices": "node src/scripts/backfillMaterialReferencePrices.js"
   },
   "dependencies": {
     "@afios/shared": "*",

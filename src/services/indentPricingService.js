@@ -1,6 +1,6 @@
 const { Material } = require('../models');
 const { getIndentLineItems } = require('./materialRequestHelpers');
-const { getLatestApprovedRates } = require('./materialPricingService');
+const { resolveUnitPricesForMaterials } = require('./materialPricingService');
 
 function round2(value) {
   return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
@@ -13,19 +13,9 @@ function resolveMaterialId(item) {
 }
 
 /**
- * Resolve unit price: latest approved PO rate, then Material Master referenceUnitPrice.
- */
-function resolveUnitPrice(materialId, rateByMaterial, referenceByMaterial) {
-  if (!materialId) return 0;
-  const id = materialId.toString();
-  if (rateByMaterial.has(id)) return rateByMaterial.get(id);
-  if (referenceByMaterial.has(id)) return referenceByMaterial.get(id);
-  return 0;
-}
-
-/**
  * Server-side indent line pricing and total estimated value.
- * Line total uses requested quantity × unit price (per UAT spec).
+ * Line total = requested qty × unit price.
+ * Price = approved PO rate → Material Master reference → inventory unitRate.
  */
 async function computeIndentPricing(mr) {
   const lineItems = getIndentLineItems(mr);
@@ -35,13 +25,16 @@ async function computeIndentPricing(mr) {
   }
 
   const materialIds = [...new Set(lineItems.map(resolveMaterialId).filter(Boolean))];
-  const [rateByMaterial, materials] = await Promise.all([
-    getLatestApprovedRates(materialIds),
-    Material.find({ _id: { $in: materialIds } }).select('referenceUnitPrice').lean(),
-  ]);
-
-  const referenceByMaterial = new Map(
-    materials.map((m) => [m._id.toString(), Number(m.referenceUnitPrice) || 0])
+  const materials = await Material.find({ _id: { $in: materialIds } })
+    .select('referenceUnitPrice code name')
+    .lean();
+  const rateByMaterial = await resolveUnitPricesForMaterials(
+    materials.map((m) => ({
+      id: m._id.toString(),
+      code: m.code,
+      name: m.name,
+      referenceUnitPrice: m.referenceUnitPrice,
+    }))
   );
 
   const byItemId = new Map();
@@ -49,7 +42,8 @@ async function computeIndentPricing(mr) {
 
   for (const item of lineItems) {
     const materialId = resolveMaterialId(item);
-    const unitPrice = resolveUnitPrice(materialId, rateByMaterial, referenceByMaterial);
+    const unitPrice =
+      materialId && rateByMaterial.has(materialId) ? Number(rateByMaterial.get(materialId)) || 0 : 0;
     const requestedQty = Math.max(0, Number(item.quantityRequested) || 0);
     const lineTotal = round2(requestedQty * unitPrice);
     totalEstimatedValue += lineTotal;
@@ -78,20 +72,28 @@ async function computeIndentEstimatedValue(mr) {
 async function computeDraftIndentTotal(items) {
   if (!items?.length) return 0;
 
-  const materialIds = [...new Set(items.map((i) => (i.materialId?._id || i.materialId)?.toString()).filter(Boolean))];
-  const [rateByMaterial, materials] = await Promise.all([
-    getLatestApprovedRates(materialIds),
-    Material.find({ _id: { $in: materialIds } }).select('referenceUnitPrice').lean(),
-  ]);
-
-  const referenceByMaterial = new Map(
-    materials.map((m) => [m._id.toString(), Number(m.referenceUnitPrice) || 0])
+  const materialIds = [
+    ...new Set(
+      items.map((i) => (i.materialId?._id || i.materialId)?.toString()).filter(Boolean)
+    ),
+  ];
+  const materials = await Material.find({ _id: { $in: materialIds } })
+    .select('referenceUnitPrice code name')
+    .lean();
+  const rateByMaterial = await resolveUnitPricesForMaterials(
+    materials.map((m) => ({
+      id: m._id.toString(),
+      code: m.code,
+      name: m.name,
+      referenceUnitPrice: m.referenceUnitPrice,
+    }))
   );
 
   let totalEstimatedValue = 0;
   for (const item of items) {
     const materialId = (item.materialId?._id || item.materialId)?.toString();
-    const unitPrice = resolveUnitPrice(materialId, rateByMaterial, referenceByMaterial);
+    const unitPrice =
+      materialId && rateByMaterial.has(materialId) ? Number(rateByMaterial.get(materialId)) || 0 : 0;
     const requestedQty = Math.max(0, Number(item.quantityRequested) || 0);
     totalEstimatedValue += round2(requestedQty * unitPrice);
   }

@@ -133,8 +133,7 @@ router.get('/catalog', async (req, res, next) => {
     const total = deduped.length;
     const materials = deduped.slice((page - 1) * limit, page * limit);
 
-    const { getLatestApprovedRates, attachUnitPrices } = require('../services/materialPricingService');
-    const rateByMaterial = await getLatestApprovedRates(materials.map((m) => m.id));
+    const { attachResolvedUnitPrices } = require('../services/materialPricingService');
 
     // Stats across full filtered catalog (not only current page)
     let inStock = 0;
@@ -150,7 +149,7 @@ router.get('/catalog', async (req, res, next) => {
     }
 
     res.json({
-      data: attachUnitPrices(
+      data: await attachResolvedUnitPrices(
         materials.map((m) => {
           const stock = stockByMaterial.get(m.id);
           const quantityOnHand = stock?.quantityOnHand ?? 0;
@@ -164,8 +163,7 @@ router.get('/catalog', async (req, res, next) => {
               hasLedger: Boolean(stock?.hasLedger),
             },
           };
-        }),
-        rateByMaterial
+        })
       ),
       meta: {
         siteId: resolvedSiteId || null,
@@ -188,9 +186,8 @@ router.get('/', async (req, res, next) => {
     const { dedupeMaterialListResults } = require('../services/materialDedupService');
     const filter = buildMaterialFilter(search);
     const materials = await Material.find(filter).sort({ name: 1, code: 1 }).limit(200);
-    const { getLatestApprovedRates, attachUnitPrices } = require('../services/materialPricingService');
-    const rateByMaterial = await getLatestApprovedRates(materials.map((m) => m._id.toString()));
-    const priced = attachUnitPrices(materials.map(serializeMaterial), rateByMaterial);
+    const { attachResolvedUnitPrices } = require('../services/materialPricingService');
+    const priced = await attachResolvedUnitPrices(materials.map(serializeMaterial));
     res.json({
       data: dedupeMaterialListResults(priced, { collapseDuplicateNames: true }),
     });
@@ -218,6 +215,7 @@ router.post(
   async (req, res, next) => {
     try {
       const { createOrResolveSiteMaterial } = require('../services/siteMaterialService');
+      const { attachResolvedUnitPrices } = require('../services/materialPricingService');
       const { material, created, reused } = await createOrResolveSiteMaterial({
         name: req.body.name,
         unit: req.body.unit,
@@ -226,8 +224,9 @@ router.post(
         description: req.body.description,
         createdByUserId: req.user._id,
       });
+      const [priced] = await attachResolvedUnitPrices([serializeMaterial(material)]);
       res.status(created ? 201 : 200).json({
-        data: serializeMaterial(material),
+        data: priced || serializeMaterial(material),
         meta: { created, reused },
       });
     } catch (err) {

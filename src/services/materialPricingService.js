@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const { PurchaseOrder } = require('../models');
+const { PurchaseOrder, Material, StockInventoryRecord, Quotation } = require('../models');
 
 const APPROVED_PO_STATUSES = ['APPROVED'];
 
@@ -36,10 +36,165 @@ async function getLatestApprovedRates(materialIds) {
 
   for (const row of rows) {
     const mid = row._id?.toString();
-    if (mid && row.rate != null) rateByMaterial.set(mid, Number(row.rate));
+    if (mid && row.rate != null && Number(row.rate) > 0) {
+      rateByMaterial.set(mid, Number(row.rate));
+    }
   }
 
   return rateByMaterial;
+}
+
+/**
+ * Material Master reference rates for items missing approved PO rates.
+ * @param {string[]} materialIds
+ * @returns {Promise<Map<string, number>>}
+ */
+async function getReferenceUnitPrices(materialIds) {
+  const ids = [...new Set((materialIds || []).map((id) => id?.toString()).filter(Boolean))];
+  const map = new Map();
+  if (!ids.length) return map;
+
+  const objectIds = ids
+    .filter((id) => mongoose.Types.ObjectId.isValid(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
+
+  const materials = await Material.find({ _id: { $in: objectIds } })
+    .select('referenceUnitPrice code name')
+    .lean();
+
+  for (const m of materials) {
+    const rate = Number(m.referenceUnitPrice);
+    if (Number.isFinite(rate) && rate > 0) {
+      map.set(m._id.toString(), rate);
+    }
+  }
+  return map;
+}
+
+/**
+ * Latest positive quotation item rate per material (RFQ responses).
+ * @param {string[]} materialIds
+ * @returns {Promise<Map<string, number>>}
+ */
+async function getLatestQuotationRates(materialIds) {
+  const ids = [...new Set((materialIds || []).map((id) => id?.toString()).filter(Boolean))];
+  const map = new Map();
+  if (!ids.length) return map;
+
+  const objectIds = ids
+    .filter((id) => mongoose.Types.ObjectId.isValid(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
+
+  const rows = await Quotation.aggregate([
+    { $sort: { submittedAt: -1, updatedAt: -1 } },
+    { $unwind: '$itemQuotes' },
+    {
+      $match: {
+        'itemQuotes.materialId': { $in: objectIds },
+        'itemQuotes.rate': { $gt: 0 },
+      },
+    },
+    {
+      $group: {
+        _id: '$itemQuotes.materialId',
+        rate: { $first: '$itemQuotes.rate' },
+      },
+    },
+  ]);
+
+  for (const row of rows) {
+    const mid = row._id?.toString();
+    const rate = Number(row.rate);
+    if (mid && rate > 0) map.set(mid, rate);
+  }
+  return map;
+}
+
+/**
+ * Latest positive unitRate from Stock Inventory by material code / name.
+ * Used when neither PO rate nor Material Master reference exists.
+ * @param {Array<{ id?: string, _id?: unknown, code?: string, name?: string }>} materials
+ * @returns {Promise<Map<string, number>>}
+ */
+async function getInventoryUnitRates(materials) {
+  const map = new Map();
+  const list = (materials || []).filter(Boolean);
+  if (!list.length) return map;
+
+  const codes = [
+    ...new Set(list.map((m) => String(m.code || m.itemCode || '').trim()).filter(Boolean)),
+  ];
+  const names = [...new Set(list.map((m) => String(m.name || '').trim()).filter(Boolean))];
+
+  const or = [];
+  if (codes.length) or.push({ itemCode: { $in: codes } });
+  if (names.length) or.push({ itemDescription: { $in: names } });
+  if (!or.length) return map;
+
+  const records = await StockInventoryRecord.find({
+    unitRate: { $gt: 0 },
+    $or: or,
+  })
+    .sort({ poDate: -1, updatedAt: -1 })
+    .select('itemCode itemDescription unitRate')
+    .limit(2000)
+    .lean();
+
+  const byCode = new Map();
+  const byName = new Map();
+  for (const row of records) {
+    const rate = Number(row.unitRate);
+    if (!(rate > 0)) continue;
+    const code = String(row.itemCode || '').trim().toUpperCase();
+    const name = String(row.itemDescription || '').trim().toUpperCase();
+    if (code && !byCode.has(code)) byCode.set(code, rate);
+    if (name && !byName.has(name)) byName.set(name, rate);
+  }
+
+  for (const m of list) {
+    const id = (m.id || m._id?.toString?.() || m._id)?.toString?.();
+    if (!id || map.has(id)) continue;
+    const code = String(m.code || m.itemCode || '').trim().toUpperCase();
+    const name = String(m.name || '').trim().toUpperCase();
+    const rate = (code && byCode.get(code)) || (name && byName.get(name)) || null;
+    if (rate > 0) map.set(id, rate);
+  }
+
+  return map;
+}
+
+/**
+ * Resolved display/purchase unit price:
+ * 1) latest approved PO rate
+ * 2) Material Master referenceUnitPrice
+ * 3) latest quotation item rate
+ * 4) latest Stock Inventory unitRate
+ */
+async function resolveUnitPricesForMaterials(materials) {
+  const list = (materials || []).map((m) => ({
+    ...m,
+    id: m.id || m._id?.toString?.() || m._id?.toString?.(),
+  }));
+  const ids = list.map((m) => m.id).filter(Boolean);
+
+  const [poRates, refRates, quoteRates, inventoryRates] = await Promise.all([
+    getLatestApprovedRates(ids),
+    getReferenceUnitPrices(ids),
+    getLatestQuotationRates(ids),
+    getInventoryUnitRates(list),
+  ]);
+
+  const resolved = new Map();
+  for (const id of ids) {
+    const rate =
+      (poRates.has(id) && poRates.get(id) > 0 ? poRates.get(id) : null) ??
+      (refRates.has(id) && refRates.get(id) > 0 ? refRates.get(id) : null) ??
+      (quoteRates.has(id) && quoteRates.get(id) > 0 ? quoteRates.get(id) : null) ??
+      (inventoryRates.has(id) && inventoryRates.get(id) > 0 ? inventoryRates.get(id) : null) ??
+      null;
+    if (rate != null) resolved.set(id, rate);
+  }
+  return resolved;
 }
 
 async function getLatestApprovedRate(materialId) {
@@ -51,15 +206,32 @@ async function getLatestApprovedRate(materialId) {
 function attachUnitPrices(materials, rateByMaterial) {
   return materials.map((m) => {
     const id = m.id || m._id?.toString();
-    const unitPrice = id ? rateByMaterial.get(id) ?? null : null;
-    return { ...m, unitPrice };
+    const fromMap = id && rateByMaterial?.get?.(id);
+    const existing = m.unitPrice ?? m.referenceUnitPrice ?? null;
+    const unitPrice =
+      fromMap != null && Number(fromMap) > 0
+        ? Number(fromMap)
+        : existing != null && Number(existing) > 0
+          ? Number(existing)
+          : fromMap ?? existing ?? null;
+    return {
+      ...m,
+      unitPrice,
+      referenceUnitPrice: m.referenceUnitPrice ?? (unitPrice != null ? unitPrice : undefined),
+    };
   });
 }
 
 /**
+ * @param {Array<object>} materials serialized or lean material docs
+ */
+async function attachResolvedUnitPrices(materials) {
+  const rateByMaterial = await resolveUnitPricesForMaterials(materials);
+  return attachUnitPrices(materials, rateByMaterial);
+}
+
+/**
  * Min / max approved PO line rate per material.
- * @param {string[]} materialIds
- * @returns {Promise<Map<string, { minRate: number|null, maxRate: number|null }>>}
  */
 async function getMaterialPurchaseRateRange(materialIds) {
   const ids = [...new Set((materialIds || []).map((id) => id?.toString()).filter(Boolean))];
@@ -95,10 +267,6 @@ async function getMaterialPurchaseRateRange(materialIds) {
   return rangeByMaterial;
 }
 
-/**
- * Purchase history rows for RFQ / PO wizard (min, max, latest approved rates).
- * @param {Array<{ materialId?: unknown, materialId?: { _id?: unknown, name?: string }, quantityRequested?: number }>} lineItems
- */
 async function buildPurchaseHistoryRows(lineItems) {
   const rows = [];
   const materialIds = [];
@@ -108,7 +276,9 @@ async function buildPurchaseHistoryRows(lineItems) {
   }
   const uniqueIds = [...new Set(materialIds)];
   const rateRange = await getMaterialPurchaseRateRange(uniqueIds);
-  const latestRates = await getLatestApprovedRates(uniqueIds);
+  const latestRates = await resolveUnitPricesForMaterials(
+    uniqueIds.map((id) => ({ id }))
+  );
 
   for (const line of lineItems || []) {
     const mid = (line.materialId?._id || line.materialId)?.toString?.() || line.materialId?.toString?.();
@@ -131,7 +301,12 @@ async function buildPurchaseHistoryRows(lineItems) {
 module.exports = {
   getLatestApprovedRate,
   getLatestApprovedRates,
+  getReferenceUnitPrices,
+  getLatestQuotationRates,
+  getInventoryUnitRates,
+  resolveUnitPricesForMaterials,
   getMaterialPurchaseRateRange,
   attachUnitPrices,
+  attachResolvedUnitPrices,
   buildPurchaseHistoryRows,
 };

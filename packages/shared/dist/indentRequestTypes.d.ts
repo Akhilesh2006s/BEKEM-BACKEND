@@ -4,6 +4,8 @@ export type IndentRequestType = 'BELOW_5000' | 'ABOVE_5000';
 export declare const INDENT_REQUEST_TYPES: IndentRequestType[];
 export declare const INDENT_REQUEST_TYPE_LABELS: Record<IndentRequestType, string>;
 export declare function resolveMaterialUnitPrice(material: Pick<MaterialDto, 'unitPrice' | 'referenceUnitPrice'>): number;
+/** True when catalogue/API returned a usable positive unit price. */
+export declare function hasMaterialUnitPrice(material: Pick<MaterialDto, 'unitPrice' | 'referenceUnitPrice'>): boolean;
 export declare function computeIndentLineTotal(quantity: number, unitPrice: number): number;
 export declare function computeIndentRunningTotal(lines: Array<{
     quantity: number;

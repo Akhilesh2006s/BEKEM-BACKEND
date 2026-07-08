@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.INDENT_CAP_REACHED_MESSAGE = exports.INDENT_REQUEST_TYPE_LABELS = exports.INDENT_REQUEST_TYPES = exports.INDENT_VALUE_CAP_INR = void 0;
 exports.resolveMaterialUnitPrice = resolveMaterialUnitPrice;
+exports.hasMaterialUnitPrice = hasMaterialUnitPrice;
 exports.computeIndentLineTotal = computeIndentLineTotal;
 exports.computeIndentRunningTotal = computeIndentRunningTotal;
 exports.hideIndentPricingForRole = hideIndentPricingForRole;
@@ -14,7 +15,13 @@ exports.INDENT_REQUEST_TYPE_LABELS = {
 function resolveMaterialUnitPrice(material) {
     const raw = material.unitPrice ?? material.referenceUnitPrice;
     const n = Number(raw);
-    return Number.isFinite(n) && n >= 0 ? n : 0;
+    // Treat missing / non-positive catalogue rates as 0 so the ₹5,000 cap
+    // still works; callers that need "price unavailable" should check hasMaterialUnitPrice.
+    return Number.isFinite(n) && n > 0 ? n : 0;
+}
+/** True when catalogue/API returned a usable positive unit price. */
+function hasMaterialUnitPrice(material) {
+    return resolveMaterialUnitPrice(material) > 0;
 }
 function computeIndentLineTotal(quantity, unitPrice) {
     return Math.round((quantity * unitPrice + Number.EPSILON) * 100) / 100;

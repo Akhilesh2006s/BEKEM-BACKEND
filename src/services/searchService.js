@@ -26,12 +26,11 @@ async function searchMaterials(q, user) {
     .limit(SEARCH_LIMIT)
     .lean();
 
-  const { getLatestApprovedRates } = require('./materialPricingService');
-  const rateByMaterial = await getLatestApprovedRates(materials.map((m) => m._id.toString()));
-
-  return dedupeMaterialSearchResults(
+  const { attachResolvedUnitPrices } = require('./materialPricingService');
+  const priced = await attachResolvedUnitPrices(
     materials.map((m) => ({
       id: m._id.toString(),
+      code: m.code,
       itemCode: m.code,
       description: m.description || m.name,
       name: m.name,
@@ -39,9 +38,11 @@ async function searchMaterials(q, user) {
       gstRate: m.gstRate ?? 18,
       unit: m.unit,
       category: m.category || '',
-      unitPrice: rateByMaterial.get(m._id.toString()) ?? null,
+      referenceUnitPrice: m.referenceUnitPrice ?? null,
     }))
   );
+
+  return dedupeMaterialSearchResults(priced);
 }
 
 async function searchVendors(q, user, { materialId } = {}) {
