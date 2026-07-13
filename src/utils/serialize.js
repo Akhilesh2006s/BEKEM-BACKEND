@@ -139,7 +139,7 @@ function serializeMaterialRequest(mr, stockContext, pricingContext) {
     requiredByDate: mr.requiredByDate?.toISOString?.() || mr.requiredByDate || null,
     requestedByUserId: resolveId(mr.requestedByUserId),
     status: mr.status,
-    pendingWith: pendingWithLabel(mr.status),
+    pendingWith: mr.pendingWithRole || pendingWithLabel(mr.status),
     estimatedValue: (pricingContext?.totalEstimatedValue ?? mr.estimatedValue) || 0,
     escalatedToHo: !!mr.escalatedToHo,
     storeStockVerified: !!mr.storeStockVerified,

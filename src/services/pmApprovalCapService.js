@@ -64,13 +64,18 @@ function wouldExceedPmDailyCap(currentTotal, requestValue) {
 async function checkPmCanApprove(pmUserId, mr) {
   const requestValue = mr.estimatedValue ?? (await estimateIndentAmount(mr));
   const dailyApprovedTotal = await getPmDailyApprovedTotal(pmUserId);
-  const wouldExceed = wouldExceedPmDailyCap(dailyApprovedTotal, requestValue);
+  // Below ₹5,000 indents stay with PM → Store; never count against HO daily-cap escalation.
+  const isBelowCap = mr.indentRequestType === 'BELOW_5000';
+  const wouldExceed = isBelowCap
+    ? false
+    : wouldExceedPmDailyCap(dailyApprovedTotal, requestValue);
   return {
     dailyApprovedTotal,
     requestValue,
     dailyCap: dailyCap(),
     wouldExceed,
     remaining: Math.max(0, dailyCap() - dailyApprovedTotal),
+    skippedCap: isBelowCap,
   };
 }
 

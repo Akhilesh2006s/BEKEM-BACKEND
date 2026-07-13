@@ -24,7 +24,8 @@ function pendingWithLabel(status) {
     PENDING_EXECUTIVE_DECISION: 'EXECUTIVE',
     EXECUTIVE_DECISION_PO: 'COORDINATOR',
     EXECUTIVE_DECISION_BRANCH_TRANSFER: 'COORDINATOR',
-    PM_APPROVED: 'EXECUTIVE',
+    // PM local close / Below ₹5,000 approve → Store purchases & allocates
+    PM_APPROVED: 'STORE_INCHARGE',
     PURCHASE_REQUESTED: 'EXECUTIVE',
     PO_CREATED: 'COORDINATOR',
     COORDINATOR_VERIFIED: 'CHAIRMAN',
@@ -47,7 +48,7 @@ const SITE_STATUS_STEPS = [
   { key: 'PENDING_EXECUTIVE_DECISION', label: 'Pending at Executive' },
   { key: 'EXECUTIVE_DECISION_PO', label: 'Pending at Coordinator' },
   { key: 'EXECUTIVE_DECISION_BRANCH_TRANSFER', label: 'Pending at Coordinator' },
-  { key: 'PM_APPROVED', label: 'Pending at Executive' },
+  { key: 'PM_APPROVED', label: 'Pending at Store' },
   { key: 'PURCHASE_REQUESTED', label: 'Pending at Executive' },
   { key: 'PO_CREATED', label: 'Pending at Coordinator' },
   { key: 'COORDINATOR_VERIFIED', label: 'Pending at Chairman' },

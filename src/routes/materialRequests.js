@@ -795,9 +795,11 @@ router.post(
         }
 
         if (!mr.estimatedValue) mr.estimatedValue = await estimateIndentAmount(mr);
+        const isBelowCap = mr.indentRequestType === 'BELOW_5000';
         const capCheck = await checkPmCanApprove(pmId, mr);
 
-        if (capCheck.wouldExceed) {
+        // Above ₹5,000 only: daily-cap overflow escalates to HO. Below ₹5,000 never goes to HO.
+        if (!isBelowCap && capCheck.wouldExceed) {
           const fromStatus = mr.status;
           mr.status = 'PENDING_HO';
           mr.escalatedToHo = true;
@@ -849,10 +851,35 @@ router.post(
       }
 
       const fromStatus = mr.status;
+      const isBelowCap = mr.indentRequestType === 'BELOW_5000';
       const toStatus = actingRole === UserRole.CHAIRMAN ? 'CHAIRMAN_APPROVED' : 'PM_APPROVED';
       mr.status = toStatus;
       if (!mr.estimatedValue) mr.estimatedValue = await estimateIndentAmount(mr);
-      await mr.save();
+
+      // Below ₹5,000: PM approval is final — Store purchases with approved funds (no HO PR).
+      if (toStatus === 'PM_APPROVED' && isBelowCap) {
+        const stockContext = await enrichIndentWithStock(mr);
+        if (stockContext.canFullyIssue) {
+          try {
+            await allocateIndentStock(mr, req.user._id);
+            mr.status = 'ALLOCATED';
+            mr.pendingWithRole = 'STORE_INCHARGE';
+          } catch (allocErr) {
+            if (allocErr.statusCode) {
+              return {
+                statusCode: allocErr.statusCode,
+                body: { statusCode: allocErr.statusCode, message: allocErr.message },
+              };
+            }
+            throw allocErr;
+          }
+        } else {
+          mr.pendingWithRole = 'STORE_INCHARGE';
+        }
+        await mr.save();
+      } else {
+        await mr.save();
+      }
 
       const note = delegationService.formatApprovalNote('Approved', req.approvalContext);
 
@@ -860,9 +887,11 @@ router.post(
         'MaterialRequest',
         mr._id,
         fromStatus,
-        toStatus,
+        mr.status,
         req.user._id,
-        note
+        isBelowCap && toStatus === 'PM_APPROVED'
+          ? `${note} (Below ₹5,000 — Store to purchase / allocate)`
+          : note
       );
 
       await notificationService.notifyUser(mr.requestedByUserId, {
@@ -872,11 +901,28 @@ router.post(
         relatedEntityId: mr._id,
       });
 
-      if (toStatus === 'PM_APPROVED') {
+      // Above ₹5,000 only: create HO purchase request. Below ₹5,000 stays with Store.
+      if (toStatus === 'PM_APPROVED' && !isBelowCap && mr.status === 'PM_APPROVED') {
         const mrForPr = await MaterialRequest.findById(mr._id)
           .populate('projectId')
           .populate('items.materialId');
         await createPurchaseRequestForIndent(mrForPr, req.user._id);
+      }
+
+      if (isBelowCap && ['PM_APPROVED', 'ALLOCATED'].includes(mr.status)) {
+        const storeUsers = await User.find({
+          role: UserRole.STORE_INCHARGE,
+          assignedSiteId: mr.siteId,
+        });
+        await notificationService.notifyUsers(
+          storeUsers.map((u) => u._id),
+          {
+            title: 'Below ₹5,000 indent approved by PM',
+            body: `${mr.indentNumber} — purchase with approved funds and allocate / issue.`,
+            relatedEntityType: 'MaterialRequest',
+            relatedEntityId: mr._id,
+          }
+        );
       }
 
       const dailyApprovedTotal =
@@ -981,8 +1027,10 @@ router.post(
       const pmId = req.approvalContext.principal._id;
       const stockContext = await enrichIndentWithStock(mr);
       const canIssueFromStock = stockContext.canFullyIssue;
+      const isBelowCap = mr.indentRequestType === 'BELOW_5000';
 
-      if (!canIssueFromStock) {
+      // Above ₹5,000 stock-short: daily cap may block local close. Below ₹5,000 never escalates.
+      if (!canIssueFromStock && !isBelowCap) {
         const capCheck = await checkPmCanApprove(pmId, mr);
         if (capCheck.wouldExceed) {
           return {
@@ -1027,7 +1075,7 @@ router.post(
         fromStatus,
         mr.status,
         req.user._id,
-        `PM approved & closed locally (no HO escalation): ${remark}`
+        `PM approved & closed locally (no HO escalation${isBelowCap ? ' · Below ₹5,000' : ''}): ${remark}`
       );
 
       const storeUsers = await User.find({
@@ -1037,8 +1085,16 @@ router.post(
       await notificationService.notifyUsers(
         storeUsers.map((u) => u._id),
         {
-          title: 'Indent approved by PM — ready to issue',
-          body: `${mr.indentNumber} approved — ${mr.status === 'ALLOCATED' ? 'stock reserved, issue material' : 'proceed with fulfillment'}.`,
+          title: isBelowCap
+            ? 'Below ₹5,000 indent approved by PM — purchase & allocate'
+            : 'Indent approved by PM — ready to issue',
+          body: `${mr.indentNumber} approved — ${
+            mr.status === 'ALLOCATED'
+              ? 'stock reserved, issue material'
+              : isBelowCap
+                ? 'purchase with approved funds and allocate'
+                : 'proceed with fulfillment'
+          }.`,
           relatedEntityType: 'MaterialRequest',
           relatedEntityId: mr._id,
         }
@@ -1073,6 +1129,17 @@ router.post(
 
       if (req.approvalContext.principal.role !== UserRole.PROJECT_MANAGER) {
         return { statusCode: 403, body: { statusCode: 403, message: 'Only Project Managers can forward to Head Office' } };
+      }
+
+      if (mr.indentRequestType === 'BELOW_5000') {
+        return {
+          statusCode: 400,
+          body: {
+            statusCode: 400,
+            message:
+              'Below ₹5,000 indents do not go to Head Office. Approve locally so Store can purchase and allocate.',
+          },
+        };
       }
 
       if (mr.status !== 'FORWARDED_TO_PM') {
