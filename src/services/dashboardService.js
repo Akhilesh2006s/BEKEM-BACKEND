@@ -408,15 +408,29 @@ async function getTodayActions(user) {
 
   if (role === UserRole.COORDINATOR) {
     const { countCoordinatorVerifyPos } = require('./coordinatorPoQueueService');
+    const { COORDINATOR_QUEUE_STATUSES } = require('./procurementDecisionService');
     const pending = await countCoordinatorVerifyPos();
     actions.push({
       id: 'coord-verify',
       title: pending > 0 ? `Verify ${pending} purchase order${pending > 1 ? 's' : ''}` : 'PO verification queue clear',
       subtitle: pending > 0 ? 'Review and approve purchase orders' : 'No POs awaiting verification',
-      href: pending > 0 ? '/coordinator/verify-pos' : '/coordinator/verify-pos',
+      href: '/coordinator/verify-pos',
       priority: pending > 0 ? 'high' : 'low',
       count: pending,
     });
+    const decisionPending = await MaterialRequest.countDocuments({
+      status: { $in: COORDINATOR_QUEUE_STATUSES },
+    });
+    if (decisionPending > 0) {
+      actions.push({
+        id: 'coord-procurement-decisions',
+        title: `Review ${decisionPending} procurement decision${decisionPending > 1 ? 's' : ''}`,
+        subtitle: 'Executive recommended PO / branch transfer — awaiting Coordinator',
+        href: '/coordinator/procurement-decisions',
+        priority: 'high',
+        count: decisionPending,
+      });
+    }
     const woPending = await WorkOrder.countDocuments({
       status: { $in: ['COORDINATOR_PENDING', 'CHAIRMAN_PENDING'] },
     });

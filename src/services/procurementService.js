@@ -357,7 +357,8 @@ async function createPurchaseOrderFromWizard({
   if (mr && !skipIndentStatusUpdate && !['PO_CREATED', 'CHAIRMAN_APPROVED', 'MATERIAL_RECEIVED', 'ISSUED', 'COMPLETED'].includes(mr.status)) {
     const fromStatus = mr.status;
     mr.status = 'PO_CREATED';
-    mr.pendingWithRole = 'COORDINATOR';
+    const { pendingRoleForPoStatus } = require('./linkedPoApprovalState');
+    mr.pendingWithRole = pendingRoleForPoStatus(initialStatus);
     await mr.save();
     await statusHistoryService.record(
       'MaterialRequest',
@@ -365,7 +366,7 @@ async function createPurchaseOrderFromWizard({
       fromStatus,
       'PO_CREATED',
       actorUserId,
-      `PO draft ${draftRef} created`
+      `PO draft ${draftRef} created — pending ${mr.pendingWithRole || 'approval'}`
     );
   }
 

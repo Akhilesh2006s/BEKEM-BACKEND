@@ -50,7 +50,7 @@ const SITE_STATUS_STEPS = [
   { key: 'EXECUTIVE_DECISION_BRANCH_TRANSFER', label: 'Pending at Coordinator' },
   { key: 'PM_APPROVED', label: 'Pending at Store' },
   { key: 'PURCHASE_REQUESTED', label: 'Pending at Executive' },
-  { key: 'PO_CREATED', label: 'Pending at Coordinator' },
+  { key: 'PO_CREATED', label: 'PO created' },
   { key: 'COORDINATOR_VERIFIED', label: 'Pending at Chairman' },
   { key: 'CHAIRMAN_APPROVED', label: 'Pending at Store' },
   { key: 'MATERIAL_RECEIVED', label: 'Material Received' },

@@ -214,6 +214,22 @@ async function serializeMaterialRequestEnriched(mr, viewerRole) {
     computeIndentPricing(mr),
   ]);
   const data = serializeMaterialRequest(mr, stockContext, pricingContext);
+
+  // Align "who holds it" with the live PO desk when indent is already at PO_CREATED.
+  if (data.status === 'PO_CREATED') {
+    const { PurchaseRequest } = require('../models');
+    const { resolveLinkedPoApprovalState } = require('../services/linkedPoApprovalState');
+    const pr = await PurchaseRequest.findOne({ materialRequestId: mr._id }).select('_id').lean();
+    if (pr) {
+      const linked = await resolveLinkedPoApprovalState(pr._id);
+      if (linked?.pendingWithRole) {
+        data.pendingWith = linked.pendingWithRole;
+      } else if (linked?.poStatus === 'APPROVED') {
+        data.pendingWith = null;
+      }
+    }
+  }
+
   if (viewerRole && hideIndentPricingForRole(viewerRole, data.indentRequestType)) {
     stripIndentPricingFromResponse(data);
   }

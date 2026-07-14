@@ -41,8 +41,25 @@ async function serializeExecutivePurchaseRequestListItem(pr) {
   const mr = pr.materialRequestId;
   const pmName = mr?._id ? await resolvePmName(mr._id) : null;
 
+  // PO_CREATED on PR means a PO exists — show the live PO desk, not a fake "Coordinator" label.
+  let status = base.status;
+  let pendingWith = null;
+  let linkedPoId = null;
+  if (pr.status === 'PO_CREATED') {
+    const { resolveLinkedPoApprovalState } = require('./linkedPoApprovalState');
+    const linked = await resolveLinkedPoApprovalState(pr._id);
+    if (linked) {
+      status = linked.poStatus;
+      pendingWith = linked.pendingWithRole;
+      linkedPoId = linked.poId;
+    }
+  }
+
   return {
     ...base,
+    status,
+    pendingWith,
+    linkedPoId,
     pmName,
     materialsSummary: buildMaterialsSummary(mr),
     totalValue: pr.amountEstimate,
@@ -62,8 +79,24 @@ async function enrichPurchaseRequestDetail(pr) {
   const lineItems = getIndentLineItems(mr);
   const pmName = await resolvePmName(mr._id);
 
+  let status = base.status;
+  let pendingWith = null;
+  let linkedPoId = null;
+  if (pr.status === 'PO_CREATED') {
+    const { resolveLinkedPoApprovalState } = require('./linkedPoApprovalState');
+    const linked = await resolveLinkedPoApprovalState(pr._id);
+    if (linked) {
+      status = linked.poStatus;
+      pendingWith = linked.pendingWithRole;
+      linkedPoId = linked.poId;
+    }
+  }
+
   return {
     ...base,
+    status,
+    pendingWith,
+    linkedPoId,
     pmName,
     pmRemarks: mr.pmForwardRemark || '',
     requestedBy: mr.requestedByUserId?.name || null,

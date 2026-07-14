@@ -624,6 +624,9 @@ export interface PurchaseRequestDto {
     pmRemarks?: string;
     requestedBy?: string | null;
     indentDate?: string | null;
+    /** Live PO desk role when PR is at PO_CREATED (Coordinator / PM / Chairman). */
+    pendingWith?: string | null;
+    linkedPoId?: string | null;
     executiveRecommendation?: 'PURCHASE_ORDER' | 'BRANCH_TRANSFER' | null;
     executiveRecommendationRemark?: string;
     executiveRecommendedAt?: string | null;
