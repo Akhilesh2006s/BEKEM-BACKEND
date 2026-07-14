@@ -110,9 +110,14 @@ const IN_PROGRESS_STATUSES = [
   'RFQ_OPEN',
   'QUOTED',
   'VENDOR_SELECTED',
+  /** Store received GRN — still open until issued to site */
+  'MATERIAL_RECEIVED',
+  /** Issued to site — awaiting Indent Raiser collect + verify (confirm-receipt) */
+  'ISSUED',
 ];
 
-const COMPLETED_RECEIVED_STATUSES = ['MATERIAL_RECEIVED', 'ISSUED', 'COMPLETED', 'CLOSED'];
+/** True closed loop only after Indent Raiser confirms receipt → COMPLETED */
+const COMPLETED_STATUSES = ['COMPLETED', 'CLOSED'];
 
 async function buildPmIndentNotification(mr) {
   const populated = await MaterialRequest.findById(mr._id)
@@ -220,8 +225,8 @@ router.get('/', async (req, res, next) => {
         filter.status = { $in: IN_PROGRESS_STATUSES };
       }
     } else if (tab === 'completed') {
-      filter.status = { $in: COMPLETED_RECEIVED_STATUSES };
-    } else     if (tab === 'rejected') {
+      filter.status = { $in: COMPLETED_STATUSES };
+    } else if (tab === 'rejected') {
       filter.status = 'REJECTED';
     }
 
