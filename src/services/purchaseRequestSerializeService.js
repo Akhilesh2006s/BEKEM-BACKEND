@@ -45,6 +45,8 @@ async function serializeExecutivePurchaseRequestListItem(pr) {
   let status = base.status;
   let pendingWith = null;
   let linkedPoId = null;
+  let linkedPoAmount = null;
+  let linkedPoRef = null;
   if (pr.status === 'PO_CREATED') {
     const { resolveLinkedPoApprovalState } = require('./linkedPoApprovalState');
     const linked = await resolveLinkedPoApprovalState(pr._id);
@@ -52,6 +54,8 @@ async function serializeExecutivePurchaseRequestListItem(pr) {
       status = linked.poStatus;
       pendingWith = linked.pendingWithRole;
       linkedPoId = linked.poId;
+      linkedPoAmount = linked.poAmount ?? null;
+      linkedPoRef = linked.poRef || null;
     }
   }
 
@@ -60,9 +64,13 @@ async function serializeExecutivePurchaseRequestListItem(pr) {
     status,
     pendingWith,
     linkedPoId,
+    linkedPoAmount,
+    linkedPoRef,
     pmName,
     materialsSummary: buildMaterialsSummary(mr),
-    totalValue: pr.amountEstimate,
+    // When a PO exists, approval routing uses PO amount — surface that as the list value.
+    totalValue: linkedPoAmount != null ? linkedPoAmount : pr.amountEstimate,
+    amountEstimate: pr.amountEstimate,
     requestDate: pr.createdAt?.toISOString?.() || null,
     priority: derivePriority(pr.amountEstimate, mr?.escalatedToHo),
     pmRemarks: mr?.pmForwardRemark || '',
@@ -82,6 +90,8 @@ async function enrichPurchaseRequestDetail(pr) {
   let status = base.status;
   let pendingWith = null;
   let linkedPoId = null;
+  let linkedPoAmount = null;
+  let linkedPoRef = null;
   if (pr.status === 'PO_CREATED') {
     const { resolveLinkedPoApprovalState } = require('./linkedPoApprovalState');
     const linked = await resolveLinkedPoApprovalState(pr._id);
@@ -89,6 +99,8 @@ async function enrichPurchaseRequestDetail(pr) {
       status = linked.poStatus;
       pendingWith = linked.pendingWithRole;
       linkedPoId = linked.poId;
+      linkedPoAmount = linked.poAmount ?? null;
+      linkedPoRef = linked.poRef || null;
     }
   }
 
@@ -97,6 +109,8 @@ async function enrichPurchaseRequestDetail(pr) {
     status,
     pendingWith,
     linkedPoId,
+    linkedPoAmount,
+    linkedPoRef,
     pmName,
     pmRemarks: mr.pmForwardRemark || '',
     requestedBy: mr.requestedByUserId?.name || null,
@@ -104,7 +118,8 @@ async function enrichPurchaseRequestDetail(pr) {
     requestDate: pr.createdAt?.toISOString?.() || null,
     priority: derivePriority(pr.amountEstimate, mr.escalatedToHo),
     materialsSummary: buildMaterialsSummary(mr),
-    totalValue: pr.amountEstimate,
+    totalValue: linkedPoAmount != null ? linkedPoAmount : pr.amountEstimate,
+    amountEstimate: pr.amountEstimate,
     executiveRecommendation: pr.executiveRecommendation || null,
     executiveRecommendationRemark: pr.executiveRecommendationRemark || '',
     executiveRecommendedAt: pr.executiveRecommendedAt?.toISOString?.() || null,

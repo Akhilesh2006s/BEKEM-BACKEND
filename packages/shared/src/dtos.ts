@@ -657,6 +657,9 @@ export interface PurchaseRequestDto {
   /** Live PO desk role when PR is at PO_CREATED (Coordinator / PM / Chairman). */
   pendingWith?: string | null;
   linkedPoId?: string | null;
+  /** Active linked PO amount — drives approval routing (may be much lower than amountEstimate). */
+  linkedPoAmount?: number | null;
+  linkedPoRef?: string | null;
   executiveRecommendation?: 'PURCHASE_ORDER' | 'BRANCH_TRANSFER' | null;
   executiveRecommendationRemark?: string;
   executiveRecommendedAt?: string | null;

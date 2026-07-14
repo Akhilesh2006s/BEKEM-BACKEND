@@ -38,7 +38,7 @@ async function resolveLinkedPoApprovalState(purchaseRequestId) {
     purchaseRequestId,
     status: { $ne: 'REJECTED' },
   })
-    .select('status amount createdAt')
+    .select('status amount createdAt draftRef poNumber')
     .sort({ createdAt: -1 })
     .lean();
   if (!pos.length) return null;
@@ -46,6 +46,8 @@ async function resolveLinkedPoApprovalState(purchaseRequestId) {
   return {
     poId: active._id.toString(),
     poStatus: active.status,
+    poAmount: active.amount != null ? Number(active.amount) : null,
+    poRef: active.draftRef || active.poNumber || null,
     pendingWithRole: pendingRoleForPoStatus(active.status),
   };
 }
