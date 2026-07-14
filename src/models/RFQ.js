@@ -12,6 +12,8 @@ const rfqSchema = new mongoose.Schema(
     vendorSelectionReason: { type: String, default: '' },
     /** Always required on RFQ finalization. */
     whyWeChoseThisVendor: { type: String, default: '' },
+    /** Materials included in this RFQ (skip stock-covered / user-excluded). Empty = derive from shortfall. */
+    procurementMaterialIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Material' }],
     finalizedAt: { type: Date },
     finalizedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   },

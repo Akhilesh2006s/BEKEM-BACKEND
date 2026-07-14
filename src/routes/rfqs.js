@@ -12,11 +12,13 @@ router.use(authenticate);
 router.post(
   '/wizard/preview',
   requireCapability('CREATE_RFQ'),
-  [body('purchaseRequestId').isMongoId()],
+  [body('purchaseRequestId').isMongoId(), body('includeMaterialIds').optional().isArray()],
   validate,
   async (req, res, next) => {
     try {
-      const data = await rfqService.previewRfqWizard(req.body.purchaseRequestId, req.user);
+      const data = await rfqService.previewRfqWizard(req.body.purchaseRequestId, req.user, {
+        includeMaterialIds: req.body.includeMaterialIds,
+      });
       res.json({ data });
     } catch (err) {
       if (err.statusCode) return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });

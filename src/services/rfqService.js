@@ -2,8 +2,9 @@ const { UserRole } = require('@afios/shared');
 const { RFQ, Quotation, PurchaseRequest, MaterialRequest, Material, Vendor } = require('../models');
 const { HO_ROLES } = require('./executiveIndentService');
 const { getIndentLineItems } = require('./materialRequestHelpers');
+const { enrichIndentWithStock } = require('./indentStockService');
 const { DEFAULT_PO_TERMS } = require('../constants/poTerms');
-  const { buildPurchaseHistoryRows } = require('./materialPricingService');
+const { buildPurchaseHistoryRows } = require('./materialPricingService');
 const {
   buildComparisonTable,
   upsertRfqQuotations,
@@ -20,7 +21,80 @@ function assertRfqAccess(user) {
   }
 }
 
-async function loadRfqContext(rfqId) {
+/**
+ * Resolve indent lines for RFQ/PO procurement.
+ * - Default: only lines with stock shortfall (requiredQty > 0), qty = shortfall
+ * - includeMaterialIds: force-include those materials (qty = shortfall or full request)
+ */
+async function resolveRfqProcurementLines(mr, { includeMaterialIds } = {}) {
+  const lineItems = getIndentLineItems(mr);
+  if (!lineItems.length) return [];
+
+  const { stockByLine } = await enrichIndentWithStock(mr);
+  const stockMap = new Map(stockByLine.map((s) => [s.materialId, s]));
+  const includeSet =
+    Array.isArray(includeMaterialIds) && includeMaterialIds.length
+      ? new Set(includeMaterialIds.map(String))
+      : null;
+
+  const result = [];
+  for (const line of lineItems) {
+    const materialId = (line.materialId?._id || line.materialId)?.toString();
+    if (!materialId) continue;
+    const stock = stockMap.get(materialId) || {
+      requestedQty: line.quantityRequested || 0,
+      availableQty: 0,
+      requiredQty: line.quantityRequested || 0,
+    };
+    const forceInclude = includeSet ? includeSet.has(materialId) : null;
+    const needsProcurement = (stock.requiredQty || 0) > 0;
+    const included = includeSet ? forceInclude : needsProcurement;
+    if (!included) continue;
+
+    const quantity = needsProcurement
+      ? stock.requiredQty
+      : stock.requestedQty || line.quantityRequested || 0;
+    if (!(quantity > 0)) continue;
+
+    result.push({
+      ...line,
+      materialId: line.materialId,
+      quantityRequested: quantity,
+      _stock: stock,
+      _coveredByStock: !needsProcurement,
+    });
+  }
+  return result;
+}
+
+async function buildStockCoveredSummary(mr) {
+  const lineItems = getIndentLineItems(mr);
+  const { stockByLine } = await enrichIndentWithStock(mr);
+  const stockMap = new Map(stockByLine.map((s) => [s.materialId, s]));
+  const covered = [];
+  for (const line of lineItems) {
+    const materialId = (line.materialId?._id || line.materialId)?.toString();
+    if (!materialId) continue;
+    const stock = stockMap.get(materialId);
+    if (!stock || stock.requiredQty > 0) continue;
+    const mat =
+      line.materialId && typeof line.materialId === 'object'
+        ? line.materialId
+        : await Material.findById(materialId);
+    covered.push({
+      materialId,
+      name: mat?.name || 'Item',
+      code: mat?.code || '',
+      requestedQty: stock.requestedQty,
+      availableQty: stock.availableQty,
+      requiredQty: 0,
+      unit: line.unit || mat?.unit || 'Nos',
+    });
+  }
+  return covered;
+}
+
+async function loadRfqContext(rfqId, { includeMaterialIds } = {}) {
   const rfq = await RFQ.findById(rfqId)
     .populate({
       path: 'purchaseRequestId',
@@ -36,7 +110,9 @@ async function loadRfqContext(rfqId) {
     throw err;
   }
   const mr = rfq.purchaseRequestId?.materialRequestId;
-  const lineItems = mr ? getIndentLineItems(mr) : [];
+  const lineItems = mr
+    ? await resolveRfqProcurementLines(mr, { includeMaterialIds })
+    : [];
   const quantity = lineItems.reduce((s, l) => s + (l.quantityRequested || 0), 0) || 1;
   const materialIds = lineItems
     .map((l) => (l.materialId?._id || l.materialId)?.toString())
@@ -51,12 +127,17 @@ async function buildItemsPayload(lineItems) {
       line.materialId && typeof line.materialId === 'object'
         ? line.materialId
         : await Material.findById(line.materialId);
+    const stock = line._stock;
     items.push({
       materialId: mat?._id?.toString() || line.materialId?.toString(),
       name: mat?.name || 'Item',
       code: mat?.code || '',
       quantity: line.quantityRequested,
       unit: line.unit || mat?.unit || 'Nos',
+      requestedQty: stock?.requestedQty ?? line.quantityRequested,
+      availableQty: stock?.availableQty,
+      requiredQty: stock?.requiredQty ?? line.quantityRequested,
+      coveredByStock: Boolean(line._coveredByStock),
     });
   }
   return items;
@@ -64,27 +145,45 @@ async function buildItemsPayload(lineItems) {
 
 async function getRfqComparison(rfqId, user) {
   assertRfqAccess(user);
-  const { rfq, mr, lineItems, quantity, materialIds } = await loadRfqContext(rfqId);
+  const rfqPeek = await RFQ.findById(rfqId).select('procurementMaterialIds').lean();
+  const storedIds = (rfqPeek?.procurementMaterialIds || []).map(String);
+  const { rfq, mr, lineItems, quantity, materialIds } = await loadRfqContext(rfqId, {
+    includeMaterialIds: storedIds.length ? storedIds : undefined,
+  });
+  // When nothing stored and no shortfall lines, fall back to full indent (legacy RFQs)
+  let activeLines = lineItems;
+  let activeQty = quantity;
+  let activeMaterialIds = materialIds;
+  if (!activeLines.length && mr) {
+    const all = getIndentLineItems(mr);
+    activeLines = all;
+    activeQty = all.reduce((s, l) => s + (l.quantityRequested || 0), 0) || 1;
+    activeMaterialIds = all
+      .map((l) => (l.materialId?._id || l.materialId)?.toString())
+      .filter(Boolean);
+  }
+
   const quotations = await Quotation.find({ rfqId: rfq._id }).populate('vendorId').sort({ amount: 1 });
   const hasAssignments = quotations.some((q) => (q.selectedMaterialIds || []).length > 0);
   if (!hasAssignments) {
-    await ensureDefaultVendorQuotations(rfq, rfq.purchaseRequestId, materialIds);
+    await ensureDefaultVendorQuotations(rfq, rfq.purchaseRequestId, activeMaterialIds);
   }
   const freshQuotations = await Quotation.find({ rfqId: rfq._id }).populate('vendorId').sort({ amount: 1 });
-  const comparison = buildComparisonTable(freshQuotations, quantity, lineItems);
-  const purchaseHistory = await buildPurchaseHistoryRows(lineItems);
+  const comparison = buildComparisonTable(freshQuotations, activeQty, activeLines);
+  const purchaseHistory = await buildPurchaseHistoryRows(activeLines);
 
   return {
     rfqId: rfq._id.toString(),
     rfqNumber: rfq.rfqNumber,
     status: rfq.status,
-    quantity,
+    quantity: activeQty,
     comparison,
     purchaseHistory,
     selectedVendorId: rfq.selectedVendorId?.toString(),
     vendorSelectionReason: rfq.vendorSelectionReason || '',
     whyWeChoseThisVendor: rfq.whyWeChoseThisVendor || '',
-    items: await buildItemsPayload(lineItems),
+    items: await buildItemsPayload(activeLines),
+    stockCoveredItems: mr ? await buildStockCoveredSummary(mr) : [],
     indentNumber: mr?.indentNumber,
     purchaseRequestId: rfq.purchaseRequestId?._id?.toString(),
   };
@@ -363,7 +462,7 @@ async function validatePoVendorSelection(
   }
 }
 
-async function previewRfqWizard(purchaseRequestId, user) {
+async function previewRfqWizard(purchaseRequestId, user, { includeMaterialIds } = {}) {
   assertRfqAccess(user);
   const pr = await PurchaseRequest.findById(purchaseRequestId).populate('projectId');
   if (!pr) {
@@ -373,12 +472,38 @@ async function previewRfqWizard(purchaseRequestId, user) {
   }
 
   let materialIds = [];
+  let mr = null;
   if (pr.materialRequestId) {
-    const mr = await MaterialRequest.findById(pr.materialRequestId);
+    mr = await MaterialRequest.findById(pr.materialRequestId).populate('items.materialId');
     if (mr) {
-      materialIds = getIndentLineItems(mr)
+      const procurementLines = await resolveRfqProcurementLines(mr, {
+        includeMaterialIds:
+          Array.isArray(includeMaterialIds) && includeMaterialIds.length
+            ? includeMaterialIds
+            : undefined,
+      });
+      materialIds = procurementLines
         .map((i) => (i.materialId?._id || i.materialId)?.toString())
         .filter(Boolean);
+
+      // Explicit empty include list with no auto-shortfall → error
+      if (
+        Array.isArray(includeMaterialIds) &&
+        includeMaterialIds.length === 0 &&
+        !materialIds.length
+      ) {
+        const err = new Error('Select at least one material that needs procurement for the RFQ');
+        err.statusCode = 400;
+        throw err;
+      }
+
+      if (!materialIds.length) {
+        const err = new Error(
+          'All indent materials are covered by available stock — nothing to include in RFQ'
+        );
+        err.statusCode = 400;
+        throw err;
+      }
     }
   }
 
@@ -387,6 +512,9 @@ async function previewRfqWizard(purchaseRequestId, user) {
   const { rfq } = await ensureRfqAndQuotations(pr, projectCode, user._id, materialIds, {
     creationNote: 'RFQ created via RFQ wizard',
   });
+
+  rfq.procurementMaterialIds = materialIds;
+  await rfq.save();
 
   const comparison = await getRfqComparison(rfq._id.toString(), user);
   const suggestedVendors = (await resolveVendorsForIndent(materialIds)).slice(0, 5).map((v) => ({
