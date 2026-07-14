@@ -240,6 +240,34 @@ async function getTodayActions(user) {
   const actions = [];
 
   if (role === UserRole.SITE_INCHARGE) {
+    const awaitingVerify = await MaterialRequest.countDocuments({
+      requestedByUserId: user._id,
+      status: 'ISSUED',
+    });
+    if (awaitingVerify > 0) {
+      const latestIssued = await MaterialRequest.findOne({
+        requestedByUserId: user._id,
+        status: 'ISSUED',
+      })
+        .sort({ updatedAt: -1 })
+        .select('_id')
+        .lean();
+      actions.push({
+        id: 'site-collect-verify',
+        title:
+          awaitingVerify === 1
+            ? 'Stock collection & verification'
+            : `${awaitingVerify} indents — collect & verify stock`,
+        subtitle: 'Material issued from store — confirm receipt to complete',
+        href:
+          awaitingVerify === 1 && latestIssued
+            ? `/requests/${latestIssued._id}`
+            : '/incidents?tab=pending',
+        priority: 'high',
+        count: awaitingVerify,
+      });
+    }
+
     const pending = await MaterialRequest.countDocuments({
       requestedByUserId: user._id,
       status: 'PENDING_STORE',
@@ -249,11 +277,11 @@ async function getTodayActions(user) {
         id: 'site-pending',
         title: `${pending} request${pending > 1 ? 's' : ''} waiting at store`,
         subtitle: 'Track progress or create a new indent',
-        href: '/requests?tab=pending',
-        priority: 'high',
+        href: '/incidents?tab=pending',
+        priority: awaitingVerify > 0 ? 'medium' : 'high',
         count: pending,
       });
-    } else {
+    } else if (awaitingVerify === 0) {
       actions.push({
         id: 'site-new',
         title: 'No open indents',
