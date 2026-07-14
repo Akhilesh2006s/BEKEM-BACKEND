@@ -1197,7 +1197,7 @@ router.post(
 
 router.post(
   '/:id/confirm-receipt',
-  requireCapability('CERTIFY_WO_WORK'),
+  requireCapability('CREATE_MATERIAL_REQUEST'),
   [param('id').isMongoId(), body('note').optional().trim()],
   validate,
   async (req, res, next) => {
