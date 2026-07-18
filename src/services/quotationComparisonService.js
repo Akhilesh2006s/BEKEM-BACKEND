@@ -126,11 +126,20 @@ function buildMaterialOffers(quotations, line) {
 
     const vendorName = vendor?.name || 'Vendor';
     const iq = (q.itemQuotes || []).find((it) => toId(it.materialId) === line.materialId);
-    // Only show vendors that actually quoted THIS line — never pad with null/header rates.
-    if (!iq || Number(iq.rate || 0) <= 0) continue;
+    const hasAnyItemRates = (q.itemQuotes || []).some((it) => Number(it.rate || 0) > 0);
+    let rate = 0;
+    let gstPercent = Number(q.gstPercent ?? 18);
+    if (iq && Number(iq.rate || 0) > 0) {
+      rate = Number(iq.rate || 0);
+      gstPercent = Number(iq.gstPercent ?? 18);
+    } else if (!hasAnyItemRates && Number(q.rate || 0) > 0) {
+      // Header-only quote (no per-item rates) — still show on this line for approval.
+      rate = Number(q.rate || 0);
+    } else {
+      // Vendor quoted other items but not this one — skip.
+      continue;
+    }
 
-    const rate = Number(iq.rate || 0);
-    const gstPercent = Number(iq.gstPercent ?? 18);
     const breakdown = computeGstBreakdown(line.quantity || 0, rate, gstPercent);
     offers.push({
       vendorId,

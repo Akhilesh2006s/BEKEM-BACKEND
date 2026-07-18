@@ -176,17 +176,72 @@ router.get('/:id', param('id').isMongoId(), validate, async (req, res, next) => 
     await assertCanViewPurchaseOrder(req.user, po);
 
     let quotations = [];
+    let comparison = null;
+    let rfqId = null;
+    let whyWeChoseThisVendor = '';
+    let vendorSelectionReason = po.vendorSelectionReason || '';
+
     const pr = await PurchaseRequest.findById(po.purchaseRequestId);
     if (pr) {
       const rfq = await RFQ.findOne({ purchaseRequestId: pr._id });
       if (rfq) {
+        rfqId = rfq._id.toString();
+        whyWeChoseThisVendor = rfq.whyWeChoseThisVendor || '';
+        if (!vendorSelectionReason) vendorSelectionReason = rfq.vendorSelectionReason || '';
         quotations = await Quotation.find({ rfqId: rfq._id }).populate('vendorId');
+
+        const { buildComparisonTable } = require('../services/quotationComparisonService');
+        const { getIndentLineItems } = require('../services/materialRequestHelpers');
+        const { Material } = require('../models');
+
+        // Prefer this PO's lines so approval shows vendors/prices for items on this order.
+        let lineItems = [];
+        const poMaterialIds = (po.lineItems || [])
+          .map((li) => (li.materialId?._id || li.materialId)?.toString?.() || '')
+          .filter(Boolean);
+
+        if (poMaterialIds.length) {
+          const mats = await Material.find({ _id: { $in: poMaterialIds } })
+            .select('name unit')
+            .lean();
+          const byId = new Map(mats.map((m) => [m._id.toString(), m]));
+          lineItems = (po.lineItems || [])
+            .map((li) => {
+              const mid = (li.materialId?._id || li.materialId)?.toString?.() || '';
+              if (!mid) return null;
+              const m = byId.get(mid);
+              return {
+                materialId: m
+                  ? { _id: m._id, name: m.name, unit: m.unit }
+                  : { _id: mid, name: li.description || 'Item', unit: li.unit || 'Nos' },
+                quantityRequested: Number(li.quantity || 0),
+                unit: m?.unit || li.unit || 'Nos',
+              };
+            })
+            .filter(Boolean);
+        }
+
+        if (!lineItems.length && pr.materialRequestId) {
+          const mr = await require('../models').MaterialRequest.findById(pr.materialRequestId).populate(
+            'items.materialId'
+          );
+          if (mr) lineItems = getIndentLineItems(mr);
+        }
+
+        const quantity =
+          lineItems.reduce((s, l) => s + (l.quantityRequested || l.quantity || 0), 0) || 1;
+        comparison = buildComparisonTable(quotations, quantity, lineItems);
       }
     }
 
     res.json({
       data: serializePurchaseOrder(po),
       quotations: quotations.map(serializeQuotation),
+      comparison,
+      rfqId,
+      whyWeChoseThisVendor,
+      vendorSelectionReason,
+      selectedVendorId: po.vendorId?._id?.toString?.() || po.vendorId?.toString?.() || null,
     });
   } catch (err) {
     if (err.statusCode) return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
