@@ -79,7 +79,7 @@ describe('Executive procurement decision workflow', () => {
     assert.ok(listRes.body.data.some((row) => row.id === mrId));
   });
 
-  it('executive proceed with PO queues Create PO without coordinator step', async () => {
+  it('executive proceed with PO queues RFQ (not Create PO) without coordinator step', async () => {
     const mrId = await createForwardedIndent(app, siteToken, storeToken, material._id);
 
     await request(app)
@@ -107,8 +107,18 @@ describe('Executive procurement decision workflow', () => {
       .query({ readyForPo: 'true' });
     assert.strictEqual(poQueue.status, 200);
     assert.ok(
-      poQueue.body.data.some((row) => row.materialRequestId === mrId),
-      'Create PO queue should include the purchase request'
+      !poQueue.body.data.some((row) => row.materialRequestId === mrId),
+      'Create PO queue should wait until RFQ is finalized with vendor quotes'
+    );
+
+    const rfqQueue = await request(app)
+      .get('/api/purchase-requests')
+      .set('Authorization', `Bearer ${executiveToken}`)
+      .query({ readyForRfq: 'true' });
+    assert.strictEqual(rfqQueue.status, 200);
+    assert.ok(
+      rfqQueue.body.data.some((row) => row.materialRequestId === mrId),
+      'Ready-for-RFQ queue should include the purchase request'
     );
 
     const mr = await MaterialRequest.findById(mrId);

@@ -10,6 +10,7 @@ const {
 } = require('./test/helpers');
 const mongoose = require('mongoose');
 const { MaterialRequest, StatusHistory, Notification, PurchaseRequest, Material } = require('./models');
+const { ensureFinalizedRfqForPo } = require('./test/ensureFinalizedRfqForPo');
 
 describe('Full chain integration', () => {
   before(async () => {
@@ -65,25 +66,28 @@ describe('Full chain integration', () => {
     assert.ok(pr, 'PR should be auto-created on PM approval');
     const prId = pr._id.toString();
 
-    const vendorsRes = await request(app)
-      .get('/api/vendors')
-      .set('Authorization', `Bearer ${execToken}`);
-
-    const vendorId = vendorsRes.body.data[0].id;
+    const setup = await ensureFinalizedRfqForPo(app, execToken, prId, {
+      rates: [1000, 1100, 1200],
+      whyWeChoseThisVendor: 'Best rate and delivery for integration test procurement',
+    });
 
     const poRes = await request(app)
       .post('/api/purchase-orders/wizard')
       .set('Authorization', `Bearer ${execToken}`)
       .send({
         purchaseRequestId: prId,
-        vendorId,
+        vendorId: setup.selectedVendorId,
         paymentTerms: 'Net 30 days',
         whyWeChoseThisVendor: 'Best rate and delivery for integration test procurement',
+        vendorSelectionReason:
+          setup.selectedVendorId === setup.l1VendorId
+            ? undefined
+            : 'Integration test non-L1 fallback',
       });
 
-    assert.strictEqual(poRes.status, 201);
+    assert.strictEqual(poRes.status, 201, JSON.stringify(poRes.body));
     const poId = poRes.body.data.id;
-    assert.ok(poRes.body.quotations?.length >= 1, 'RFQ/quotations should be auto-generated');
+    assert.ok(poRes.body.quotations?.length >= 1, 'RFQ/quotations should be present after finalize');
 
     const verifyRes = await request(app)
       .post(`/api/purchase-orders/${poId}/verify`)

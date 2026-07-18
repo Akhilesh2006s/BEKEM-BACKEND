@@ -19,6 +19,7 @@ const {
 } = require('./models');
 const { createPurchaseOrderFromWizard } = require('./services/procurementService');
 const { serializePurchaseOrder } = require('./utils/serializeProcurement');
+const { ensureFinalizedRfqForPo } = require('./test/ensureFinalizedRfqForPo');
 
 describe('POST /purchase-orders/:id/verify', () => {
   before(async () => {
@@ -59,9 +60,15 @@ describe('POST /purchase-orders/:id/verify', () => {
     });
 
     const vendor = await Vendor.findOne();
+    const execToken = await loginAs('executive@bekem.com');
+    const setup = await ensureFinalizedRfqForPo(app, execToken, pr._id.toString(), {
+      rates: [800, 900, 1000],
+      whyWeChoseThisVendor: 'L1 for verify test',
+    });
+
     const { po } = await createPurchaseOrderFromWizard({
       purchaseRequestId: pr._id,
-      vendorId: vendor._id,
+      vendorId: setup.selectedVendorId || vendor._id,
       paymentTerms: 'Net 30',
       actorUserId: exec._id,
     });

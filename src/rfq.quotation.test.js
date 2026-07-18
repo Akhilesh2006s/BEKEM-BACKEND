@@ -3,11 +3,11 @@ const assert = require('node:assert/strict');
 const request = require('supertest');
 const { setupTestDb, teardownTestDb, loginAs, getApp } = require('./test/helpers');
 const { RFQ, Quotation, Vendor, PurchaseRequest } = require('./models');
+const { ensureFinalizedRfqForPo } = require('./test/ensureFinalizedRfqForPo');
 
 describe('RFQ quotation comparison & vendor selection', () => {
   let app;
   let execToken;
-  let coordToken;
   let rfqId;
   let purchaseRequestId;
   let vendorIds;
@@ -16,25 +16,38 @@ describe('RFQ quotation comparison & vendor selection', () => {
     await setupTestDb();
     app = getApp();
     execToken = await loginAs('executive@bekem.com');
-    coordToken = await loginAs('coordinator@bekem.com');
 
     const pr = await PurchaseRequest.findOne({ status: 'OPEN' });
     assert.ok(pr, 'seed should have open purchase request');
     purchaseRequestId = pr._id.toString();
 
     const previewRes = await request(app)
-      .post('/api/purchase-orders/wizard/preview-quotations')
+      .post('/api/rfqs/wizard/preview')
       .set('Authorization', `Bearer ${execToken}`)
       .send({ purchaseRequestId });
     assert.strictEqual(previewRes.status, 200);
 
     const rfq = await RFQ.findOne({ purchaseRequestId: pr._id });
-    assert.ok(rfq, 'RFQ should be created via preview-quotations');
+    assert.ok(rfq, 'RFQ should be created via wizard preview');
     rfqId = rfq._id.toString();
 
     const vendors = await Vendor.find({ isActive: { $ne: false } }).limit(3);
     assert.ok(vendors.length >= 3, 'need at least 3 vendors');
     vendorIds = vendors.map((v) => v._id.toString());
+
+    // Seed initial quotes so comparison has vendors (may be empty until PUT)
+    await request(app)
+      .put(`/api/rfqs/${rfqId}/quotations`)
+      .set('Authorization', `Bearer ${execToken}`)
+      .send({
+        quotations: vendors.map((v, i) => ({
+          vendorId: v._id.toString(),
+          rate: 1000 + i * 100,
+          gstPercent: 18,
+          paymentTerms: 'Net 30',
+          deliveryTerms: 'FOB site',
+        })),
+      });
   });
 
   after(async () => {
@@ -107,24 +120,40 @@ describe('RFQ quotation comparison & vendor selection', () => {
   });
 
   it('requires Reason for Selection when non-L1 vendor is chosen', async () => {
+    const comparisonRes = await request(app)
+      .get(`/api/rfqs/${rfqId}/comparison`)
+      .set('Authorization', `Bearer ${execToken}`);
+    assert.strictEqual(comparisonRes.status, 200);
+    const l1Id = String(comparisonRes.body.data.comparison.l1VendorId || '');
+    assert.ok(l1Id, 'comparison should expose L1 vendor');
+    assert.ok(vendorIds.includes(l1Id), `L1 ${l1Id} should be one of quoted vendors ${vendorIds.join(',')}`);
+
+    const nonL1 = vendorIds.find((id) => id !== l1Id);
+    assert.ok(nonL1, 'need a non-L1 vendor');
+
     const res = await request(app)
       .post(`/api/rfqs/${rfqId}/finalize`)
       .set('Authorization', `Bearer ${execToken}`)
       .send({
-        selectedVendorId: vendorIds[0],
+        selectedVendorId: nonL1,
         whyWeChoseThisVendor: 'Vendor offers better payment flexibility for this project',
       });
 
-    assert.strictEqual(res.status, 400);
+    assert.strictEqual(res.status, 400, JSON.stringify(res.body));
     assert.match(res.body.message, /Reason for Selection/i);
   });
 
   it('finalizes RFQ with L1 vendor', async () => {
+    const comparisonRes = await request(app)
+      .get(`/api/rfqs/${rfqId}/comparison`)
+      .set('Authorization', `Bearer ${execToken}`);
+    const l1Id = String(comparisonRes.body.data.comparison.l1VendorId);
+
     const res = await request(app)
       .post(`/api/rfqs/${rfqId}/finalize`)
       .set('Authorization', `Bearer ${execToken}`)
       .send({
-        selectedVendorId: vendorIds[1],
+        selectedVendorId: l1Id,
         whyWeChoseThisVendor: 'L1',
       });
 
@@ -136,22 +165,21 @@ describe('RFQ quotation comparison & vendor selection', () => {
     assert.strictEqual(rfq.whyWeChoseThisVendor, 'L1');
   });
 
-  it('blocks PO when non-L1 vendor lacks selection reason', async () => {
+  it('blocks PO when RFQ is not finalized', async () => {
     const openPr = await PurchaseRequest.findOne({
       status: 'OPEN',
       _id: { $ne: purchaseRequestId },
     });
     if (!openPr) return;
 
-    await request(app)
-      .post('/api/purchase-orders/wizard/preview-quotations')
+    const preview = await request(app)
+      .post('/api/rfqs/wizard/preview')
       .set('Authorization', `Bearer ${execToken}`)
       .send({ purchaseRequestId: openPr._id.toString() });
-
-    const rfq = await RFQ.findOne({ purchaseRequestId: openPr._id });
-    assert.ok(rfq);
+    assert.strictEqual(preview.status, 200);
 
     const vendors = await Vendor.find({ isActive: { $ne: false } }).limit(3);
+    const rfq = await RFQ.findOne({ purchaseRequestId: openPr._id });
     await request(app)
       .put(`/api/rfqs/${rfq._id}/quotations`)
       .set('Authorization', `Bearer ${execToken}`)
@@ -165,7 +193,35 @@ describe('RFQ quotation comparison & vendor selection', () => {
         })),
       });
 
-    const nonL1 = vendors[2]._id.toString();
+    const res = await request(app)
+      .post('/api/purchase-orders/wizard')
+      .set('Authorization', `Bearer ${execToken}`)
+      .send({
+        purchaseRequestId: openPr._id.toString(),
+        vendorId: vendors[0]._id.toString(),
+        paymentTerms: 'Net 30 days',
+        whyWeChoseThisVendor: 'Selected for reliability despite slightly higher rate',
+      });
+
+    assert.strictEqual(res.status, 400);
+    assert.match(res.body.message, /Finalize|finaliz|quotations/i);
+  });
+
+  it('blocks PO when non-L1 vendor lacks selection reason', async () => {
+    const openPr = await PurchaseRequest.findOne({
+      status: 'OPEN',
+      _id: { $ne: purchaseRequestId },
+    });
+    if (!openPr) return;
+
+    // rates: v0=1000, v1=1100, v2=1200 → L1 is vendors[0]
+    const setup = await ensureFinalizedRfqForPo(app, execToken, openPr._id.toString(), {
+      rates: [1000, 1100, 1200],
+      selectedVendorIndex: 0,
+      whyWeChoseThisVendor: 'L1',
+    });
+
+    const nonL1 = setup.vendorIds[2];
     const res = await request(app)
       .post('/api/purchase-orders/wizard')
       .set('Authorization', `Bearer ${execToken}`)
@@ -184,34 +240,26 @@ describe('RFQ quotation comparison & vendor selection', () => {
     const openPrs = await PurchaseRequest.find({
       status: 'OPEN',
       _id: { $ne: purchaseRequestId },
-    }).limit(2);
-    const openPr = openPrs[1] || openPrs[0];
+    }).limit(3);
+    // Prefer a PR that does not already have a PO from prior tests
+    let openPr = null;
+    for (const pr of openPrs) {
+      const existing = await RFQ.findOne({ purchaseRequestId: pr._id, status: 'FINALIZED' });
+      if (!existing || existing._id.toString() === rfqId) continue;
+      // skip PRs already used if PO exists — try last unused
+      openPr = pr;
+    }
+    openPr = openPr || openPrs[openPrs.length - 1] || openPrs[0];
     if (!openPr) return;
+    if (openPr._id.toString() === purchaseRequestId) return;
 
-    await request(app)
-      .post('/api/purchase-orders/wizard/preview-quotations')
-      .set('Authorization', `Bearer ${execToken}`)
-      .send({ purchaseRequestId: openPr._id.toString() });
+    const setup = await ensureFinalizedRfqForPo(app, execToken, openPr._id.toString(), {
+      rates: [800, 900, 1000],
+      selectedVendorIndex: 0,
+      whyWeChoseThisVendor: 'L1',
+    });
 
-    const rfq = await RFQ.findOne({ purchaseRequestId: openPr._id });
-    assert.ok(rfq);
-
-    const vendors = await Vendor.find({ isActive: { $ne: false } }).limit(3);
-    await request(app)
-      .put(`/api/rfqs/${rfq._id}/quotations`)
-      .set('Authorization', `Bearer ${execToken}`)
-      .send({
-        quotations: vendors.map((v, i) => ({
-          vendorId: v._id.toString(),
-          rate: 800 + i * 100,
-          gstPercent: 18,
-          paymentTerms: 'Net 30',
-          deliveryTerms: 'Site delivery',
-        })),
-      });
-
-    const nonL1 = vendors[2]._id.toString();
-
+    const nonL1 = setup.vendorIds[2];
     const res = await request(app)
       .post('/api/purchase-orders/wizard')
       .set('Authorization', `Bearer ${execToken}`)

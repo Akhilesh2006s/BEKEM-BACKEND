@@ -439,26 +439,12 @@ async function validatePoVendorSelection(
     }
   }
 
-  if (!skipFinalizeRequirement && (rfq.status !== 'FINALIZED' || !rfq.whyWeChoseThisVendor?.trim())) {
-    const why = String(whyWeChoseThisVendor || rfq.whyWeChoseThisVendor || '').trim();
-    if (!why) {
-      const err = new Error(
-        'Why We Chose This Vendor is required before generating PO'
-      );
-      err.statusCode = 400;
-      throw err;
-    }
-    rfq.whyWeChoseThisVendor = why;
-    rfq.selectedVendorId = vendorIds[0];
-    if (vendorIds[0] !== l1VendorId) {
-      rfq.vendorSelectionReason = String(
-        vendorSelectionReasons[vendorIds[0]] || rfq.vendorSelectionReason || ''
-      ).trim();
-    }
-    rfq.status = 'FINALIZED';
-    rfq.finalizedAt = new Date();
-    if (actorUserId) rfq.finalizedByUserId = actorUserId;
-    await rfq.save();
+  if (!skipFinalizeRequirement && rfq.status !== 'FINALIZED') {
+    const err = new Error(
+      'Finalize the RFQ after receiving vendor quotations before creating a PO'
+    );
+    err.statusCode = 400;
+    throw err;
   }
 }
 

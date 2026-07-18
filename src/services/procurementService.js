@@ -80,7 +80,7 @@ async function ensureRfqAndQuotations(
   projectCode,
   actorUserId,
   materialIds,
-  { creationNote = 'RFQ auto-generated during PO wizard' } = {}
+  { creationNote = 'RFQ created', seedDemoQuotes = false } = {}
 ) {
   let rfq = await RFQ.findOne({ purchaseRequestId: purchaseRequest._id });
   const vendors = await resolveVendorsForIndent(materialIds);
@@ -104,40 +104,79 @@ async function ensureRfqAndQuotations(
       creationNote
     );
 
-    let totalQty = 1;
-    if (purchaseRequest.materialRequestId) {
-      const mr = await MaterialRequest.findById(purchaseRequest.materialRequestId);
-      if (mr) {
-        totalQty =
-          getIndentLineItems(mr).reduce((s, l) => s + (l.quantityRequested || 0), 0) || 1;
+    // Demo/test only — real flow waits for vendors to share quotations.
+    if (seedDemoQuotes) {
+      let totalQty = 1;
+      if (purchaseRequest.materialRequestId) {
+        const mr = await MaterialRequest.findById(purchaseRequest.materialRequestId);
+        if (mr) {
+          totalQty =
+            getIndentLineItems(mr).reduce((s, l) => s + (l.quantityRequested || 0), 0) || 1;
+        }
       }
-    }
 
-    for (const vendor of vendors.slice(0, 3)) {
-      const baseAmount = purchaseRequest.amountEstimate || 100000;
-      const variance = 0.9 + Math.random() * 0.2;
-      const lineSubtotal = Math.round(baseAmount * variance);
-      const rate = Math.max(1, Math.round(lineSubtotal / totalQty));
-      const { computeFinalCost } = require('./quotationComparisonService');
-      await Quotation.create({
-        rfqId: rfq._id,
-        vendorId: vendor._id,
-        rate,
-        gstPercent: 18,
-        paymentTerms: '100% payment within 30 days from the date of supply',
-        deliveryTerms: 'Delivery as per project schedule',
-        amount: computeFinalCost(rate, totalQty, 18),
-        terms: '100% payment within 30 days from the date of supply',
-        submittedAt: new Date(),
-      });
+      for (const vendor of vendors.slice(0, 3)) {
+        const baseAmount = purchaseRequest.amountEstimate || 100000;
+        const variance = 0.9 + Math.random() * 0.2;
+        const lineSubtotal = Math.round(baseAmount * variance);
+        const rate = Math.max(1, Math.round(lineSubtotal / totalQty));
+        const { computeFinalCost } = require('./quotationComparisonService');
+        await Quotation.create({
+          rfqId: rfq._id,
+          vendorId: vendor._id,
+          rate,
+          gstPercent: 18,
+          paymentTerms: '100% payment within 30 days from the date of supply',
+          deliveryTerms: 'Delivery as per project schedule',
+          amount: computeFinalCost(rate, totalQty, 18),
+          terms: '100% payment within 30 days from the date of supply',
+          submittedAt: new Date(),
+        });
+      }
     }
   }
 
   const quotations = await Quotation.find({ rfqId: rfq._id }).populate('vendorId');
-  const { ensureDefaultVendorQuotations } = require('./quotationComparisonService');
-  await ensureDefaultVendorQuotations(rfq, purchaseRequest, materialIds);
+  if (seedDemoQuotes) {
+    const { ensureDefaultVendorQuotations } = require('./quotationComparisonService');
+    await ensureDefaultVendorQuotations(rfq, purchaseRequest, materialIds);
+  }
   const allQuotes = await Quotation.find({ rfqId: rfq._id }).populate('vendorId');
   return { rfq, quotations: allQuotes.length ? allQuotes : quotations };
+}
+
+/**
+ * PO may be raised only after RFQ is shared, vendor quotes received, and RFQ finalized.
+ */
+async function requireFinalizedRfqForPo(purchaseRequestId) {
+  const rfq = await RFQ.findOne({ purchaseRequestId }).populate('selectedVendorId');
+  if (!rfq) {
+    const err = new Error(
+      'Create and share an RFQ first, then wait for vendor quotations before raising a PO'
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+  if (rfq.status !== 'FINALIZED') {
+    const err = new Error(
+      'RFQ is still open — wait for vendor quotations, compare them, and finalize the RFQ before Create PO'
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+  const quotations = await Quotation.find({ rfqId: rfq._id }).populate('vendorId');
+  const priced = quotations.filter(
+    (q) =>
+      (Number(q.rate) > 0 || Number(q.amount) > 0 || (q.itemQuotes || []).some((iq) => Number(iq.rate) > 0))
+  );
+  if (!priced.length) {
+    const err = new Error(
+      'No vendor quotations on this RFQ yet — record quotes from vendors before Create PO'
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+  return { rfq, quotations };
 }
 
 function normalizeWizardLineItems(rawItems, mr, fallbackAmount, { requireExplicitLines = false } = {}) {
@@ -262,22 +301,15 @@ async function createPurchaseOrderFromWizard({
 
   const projectCode =
     pr.projectId?.code || (await require('../models').Project.findById(pr.projectId))?.code;
-  const { rfq, quotations } = await ensureRfqAndQuotations(
-    pr,
-    projectCode,
-    actorUserId,
-    materialIds
-  );
+  const { rfq, quotations } = await requireFinalizedRfqForPo(pr._id);
 
   let quotation = quotations.find((q) => q.vendorId._id.toString() === vendorId.toString());
   if (!quotation) {
-    quotation = await Quotation.create({
-      rfqId: rfq._id,
-      vendorId,
-      amount: pr.amountEstimate,
-      terms: paymentTerms || '100% payment within 30 days from the date of supply',
-      submittedAt: new Date(),
-    });
+    const err = new Error(
+      'Selected vendor has no quotation on the finalized RFQ — pick a vendor that submitted a quote'
+    );
+    err.statusCode = 400;
+    throw err;
   }
 
   const draftRef = await generateDraftPoRef(projectCode);
@@ -450,6 +482,7 @@ async function createPurchaseOrdersFromWizardBatch({
 
 module.exports = {
   ensureRfqAndQuotations,
+  requireFinalizedRfqForPo,
   resolveVendorsForIndent,
   createPurchaseOrderFromWizard,
   createPurchaseOrdersFromWizardBatch,

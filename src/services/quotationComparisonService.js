@@ -33,9 +33,10 @@ function computeQuotationTotals(q, lineItems = [], fallbackQuantity = 1) {
     };
   }
 
-  const explicitSelection = Array.isArray(q.selectedMaterialIds);
-  const selected = new Set((q.selectedMaterialIds || []).map((id) => toId(id)).filter(Boolean));
-  const useSubset = explicitSelection;
+  const selectedIds = (q.selectedMaterialIds || []).map((id) => toId(id)).filter(Boolean);
+  // Empty selectedMaterialIds means "all indent lines" (vendor quoted the full RFQ scope).
+  const useSubset = Array.isArray(q.selectedMaterialIds) && selectedIds.length > 0;
+  const selected = new Set(selectedIds);
   const byMaterial = new Map(
     (q.itemQuotes || []).map((it) => [toId(it.materialId), { rate: Number(it.rate || 0), gstPercent: Number(it.gstPercent ?? 18) }])
   );

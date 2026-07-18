@@ -37,7 +37,41 @@ async function filterReadyForExecutivePo(prs) {
     status: { $ne: 'REJECTED' },
   });
   const orderedSet = new Set(orderedPrIds.map((id) => id.toString()));
-  return prs.filter((pr) => !orderedSet.has(pr._id.toString()));
+  const withoutPo = prs.filter((pr) => !orderedSet.has(pr._id.toString()));
+  if (!withoutPo.length) return [];
+
+  const { RFQ } = require('../models');
+  const finalized = await RFQ.find({
+    purchaseRequestId: { $in: withoutPo.map((p) => p._id) },
+    status: 'FINALIZED',
+  })
+    .select('purchaseRequestId')
+    .lean();
+  const ready = new Set(finalized.map((r) => r.purchaseRequestId.toString()));
+  return withoutPo.filter((pr) => ready.has(pr._id.toString()));
+}
+
+/** OPEN PRs that still need RFQ share / vendor quotes (not yet finalized). */
+async function filterReadyForRfq(prs) {
+  if (!prs.length) return [];
+  const prIds = prs.map((pr) => pr._id);
+  const orderedPrIds = await PurchaseOrder.distinct('purchaseRequestId', {
+    purchaseRequestId: { $in: prIds },
+    status: { $ne: 'REJECTED' },
+  });
+  const orderedSet = new Set(orderedPrIds.map((id) => id.toString()));
+  const withoutPo = prs.filter((pr) => !orderedSet.has(pr._id.toString()));
+  if (!withoutPo.length) return [];
+
+  const { RFQ } = require('../models');
+  const finalized = await RFQ.find({
+    purchaseRequestId: { $in: withoutPo.map((p) => p._id) },
+    status: 'FINALIZED',
+  })
+    .select('purchaseRequestId')
+    .lean();
+  const done = new Set(finalized.map((r) => r.purchaseRequestId.toString()));
+  return withoutPo.filter((pr) => !done.has(pr._id.toString()));
 }
 
 async function filterPurchaseRequestsForExecutive(user, prs) {
@@ -69,6 +103,12 @@ async function listExecutivePendingPurchaseRequests(user) {
   return filterPurchaseRequestsForExecutive(user, ready);
 }
 
+async function listExecutiveReadyForRfq(user) {
+  const open = await listOpenPurchaseRequests();
+  const ready = await filterReadyForRfq(open);
+  return filterPurchaseRequestsForExecutive(user, ready);
+}
+
 async function countExecutivePendingPurchaseRequests(user) {
   const items = await listExecutivePendingPurchaseRequests(user);
   return items.length;
@@ -78,7 +118,9 @@ module.exports = {
   EXECUTIVE_PR_STATUSES,
   executivePurchaseRequestFilter,
   listExecutivePendingPurchaseRequests,
+  listExecutiveReadyForRfq,
   countExecutivePendingPurchaseRequests,
   filterPurchaseRequestsForExecutive,
   filterReadyForExecutivePo,
+  filterReadyForRfq,
 };

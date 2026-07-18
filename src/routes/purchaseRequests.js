@@ -14,6 +14,7 @@ const {
 const {
   listExecutivePendingPurchaseRequests,
   countExecutivePendingPurchaseRequests,
+  listExecutiveReadyForRfq,
   filterPurchaseRequestsForExecutive,
 } = require('../services/executivePurchaseRequestQueueService');
 const {
@@ -50,15 +51,22 @@ router.get('/', async (req, res, next) => {
       req.user.role === UserRole.EXECUTIVE &&
       (req.query.queue === 'pending-po' ||
         req.query.readyForPo === 'true' ||
-        req.query.readyForPo === '1') &&
+        req.query.readyForPo === '1' ||
+        req.query.readyForRfq === 'true' ||
+        req.query.readyForRfq === '1') &&
       !req.query.tab;
 
     if (isExecutiveQueue) {
-      const items = await listExecutivePendingPurchaseRequests(req.user);
+      const forRfq = req.query.readyForRfq === 'true' || req.query.readyForRfq === '1';
+      const items = forRfq
+        ? await listExecutiveReadyForRfq(req.user)
+        : await listExecutivePendingPurchaseRequests(req.user);
       const data = await Promise.all(items.map(serializeExecutivePurchaseRequestListItem));
       return res.json({
         data,
-        meta: { count: await countExecutivePendingPurchaseRequests(req.user) },
+        meta: {
+          count: forRfq ? data.length : await countExecutivePendingPurchaseRequests(req.user),
+        },
       });
     }
 

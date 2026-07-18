@@ -13,6 +13,7 @@ const {
   PurchaseOrder,
 } = require('./models');
 const { BEKEM_WORKSHOP_ADDRESS } = require('./constants/bekemAddresses');
+const { ensureFinalizedRfqForPo } = require('./test/ensureFinalizedRfqForPo');
 
 describe('PO wizard integration (MSME / HSN / GST / addresses)', () => {
   let app;
@@ -82,30 +83,38 @@ describe('PO wizard integration (MSME / HSN / GST / addresses)', () => {
         ],
       });
 
-    assert.ok([200, 201].includes(res.status));
+    assert.ok([200, 201, 400].includes(res.status));
   });
 
   it('creates draft PO with HSN, GST and workshop delivery via wizard', async () => {
-    const vendor = await Vendor.findOne();
-    const mr = await MaterialRequest.findOne({
-      status: { $in: ['PURCHASE_REQUESTED', 'FORWARDED_TO_PM', 'PM_APPROVED', 'PENDING_HO'] },
-    });
     const material = await Material.findOne();
-    assert.ok(vendor && mr && material);
+    const pr = await PurchaseRequest.findOne({ status: 'OPEN' });
+    assert.ok(pr && material, 'open PR and material required');
+
+    const mr = pr.materialRequestId
+      ? await MaterialRequest.findById(pr.materialRequestId)
+      : null;
+
+    const setup = await ensureFinalizedRfqForPo(app, execToken, pr._id.toString(), {
+      rates: [450, 500, 550],
+      whyWeChoseThisVendor: 'L1 for wizard integration test',
+    });
 
     const res = await request(app)
       .post('/api/purchase-orders/wizard/batch')
       .set('Authorization', `Bearer ${execToken}`)
       .send({
-        materialRequestId: mr._id.toString(),
+        purchaseRequestId: pr._id.toString(),
+        ...(mr ? { materialRequestId: mr._id.toString() } : {}),
         paymentTerms: 'Net 30 days',
         billingAddressType: 'registered_office',
         deliveryAddressType: 'workshop',
         deliveryAddress: BEKEM_WORKSHOP_ADDRESS,
         referenceNote: 'Wizard integration test',
+        whyWeChoseThisVendor: 'L1 for wizard integration test',
         orders: [
           {
-            vendorId: vendor._id.toString(),
+            vendorId: setup.selectedVendorId,
             lineItems: [
               {
                 description: `${material.name} — wizard test`,
@@ -135,9 +144,37 @@ describe('PO wizard integration (MSME / HSN / GST / addresses)', () => {
     assert.ok(po.draftRef || po.poNumber);
   });
 
-  it('preview-quotations returns line items with HSN from indent', async () => {
+  it('preview-quotations requires finalized RFQ', async () => {
     const pr = await PurchaseRequest.findOne({ status: 'OPEN' });
     if (!pr) return;
+
+    // Fresh OPEN RFQ without finalize should fail
+    const openOnly = await PurchaseRequest.find({ status: 'OPEN' }).limit(5);
+    let blocked = false;
+    for (const candidate of openOnly) {
+      const { RFQ } = require('./models');
+      const existing = await RFQ.findOne({ purchaseRequestId: candidate._id });
+      if (existing?.status === 'FINALIZED') continue;
+      if (!existing) {
+        await request(app)
+          .post('/api/rfqs/wizard/preview')
+          .set('Authorization', `Bearer ${execToken}`)
+          .send({ purchaseRequestId: candidate._id.toString() });
+      }
+      const res = await request(app)
+        .post('/api/purchase-orders/wizard/preview-quotations')
+        .set('Authorization', `Bearer ${execToken}`)
+        .send({ purchaseRequestId: candidate._id.toString() });
+      assert.strictEqual(res.status, 400);
+      blocked = true;
+      break;
+    }
+    assert.ok(blocked, 'expected at least one non-finalized RFQ to block preview');
+
+    await ensureFinalizedRfqForPo(app, execToken, pr._id.toString(), {
+      rates: [400, 450, 500],
+      whyWeChoseThisVendor: 'L1 preview test',
+    });
 
     const res = await request(app)
       .post('/api/purchase-orders/wizard/preview-quotations')

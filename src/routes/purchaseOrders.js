@@ -26,7 +26,7 @@ const {
 } = require('../services/poVerifySideEffects');
 const { userCanAccessProject } = require('../utils/serialize');
 const {
-  ensureRfqAndQuotations,
+  requireFinalizedRfqForPo,
   createPurchaseOrderFromWizard,
   createPurchaseOrdersFromWizardBatch,
   buildLineItemsFromIndent,
@@ -203,22 +203,7 @@ router.post(
     try {
       const pr = await PurchaseRequest.findById(req.body.purchaseRequestId).populate('projectId');
       if (!pr) return res.status(404).json({ statusCode: 404, message: 'PR not found' });
-      let materialIds = [];
-      if (pr.materialRequestId) {
-        const mr = await require('../models').MaterialRequest.findById(pr.materialRequestId);
-        if (mr) {
-          materialIds = require('../services/materialRequestHelpers')
-            .getIndentLineItems(mr)
-            .map((i) => (i.materialId?._id || i.materialId)?.toString())
-            .filter(Boolean);
-        }
-      }
-      const { quotations, rfq } = await ensureRfqAndQuotations(
-        pr,
-        pr.projectId.code,
-        req.user._id,
-        materialIds
-      );
+      const { quotations, rfq } = await requireFinalizedRfqForPo(pr._id);
 
       const { buildComparisonTable, applyL1QuoteRatesToLineItems } = require('../services/quotationComparisonService');
       const { buildPurchaseHistoryRows } = require('../services/materialPricingService');
