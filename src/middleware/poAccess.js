@@ -73,6 +73,20 @@ async function assertCanViewPurchaseOrder(user, po) {
     err.statusCode = 403;
     throw err;
   }
+
+  // Store / PM may only open POs linked to procurement they raised.
+  if (user.role === UserRole.STORE_INCHARGE || user.role === UserRole.PROJECT_MANAGER) {
+    const {
+      findRaisedPurchaseRequestIds,
+    } = require('../services/procurementRequestVisibilityService');
+    const allowed = await findRaisedPurchaseRequestIds(user._id || user.id);
+    const prId = (po.purchaseRequestId?._id || po.purchaseRequestId)?.toString();
+    if (!prId || !allowed.some((id) => id.toString() === prId)) {
+      const err = new Error('Forbidden — only purchase orders from your raised procurement requests');
+      err.statusCode = 403;
+      throw err;
+    }
+  }
   return true;
 }
 
@@ -105,11 +119,11 @@ async function purchaseOrderListFilter(user, baseFilter = {}) {
   if (HO_ROLES.has(user.role)) return baseFilter;
 
   if (user.role === UserRole.PROJECT_MANAGER || user.role === UserRole.STORE_INCHARGE) {
-    const projectIds = user.assignedProjectIds || [];
-    if (!projectIds.length) return { _id: null };
-    const prIds = await PurchaseRequest.find({
-      projectId: { $in: projectIds },
-    }).distinct('_id');
+    const {
+      findRaisedPurchaseRequestIds,
+    } = require('../services/procurementRequestVisibilityService');
+    const prIds = await findRaisedPurchaseRequestIds(user._id || user.id);
+    if (!prIds.length) return { _id: null };
     return {
       ...baseFilter,
       purchaseRequestId: { $in: prIds },

@@ -82,6 +82,20 @@ router.get('/', async (req, res, next) => {
       return res.json({ data, meta: { count: data.length } });
     }
 
+    // Store / PM / Coord / Chairman browse — Store & PM see only PRs they raised.
+    if (
+      req.query.scope === 'procurement' ||
+      [UserRole.STORE_INCHARGE, UserRole.COORDINATOR, UserRole.CHAIRMAN].includes(req.user.role) ||
+      (req.user.role === UserRole.PROJECT_MANAGER && req.query.scope !== 'project')
+    ) {
+      const {
+        listProcurementRequestsForUser,
+      } = require('../services/procurementRequestVisibilityService');
+      const items = await listProcurementRequestsForUser(req.user);
+      const data = await Promise.all(items.map(serializeExecutivePurchaseRequestListItem));
+      return res.json({ data, meta: { count: data.length } });
+    }
+
     const filter = {};
     if (req.user.role === UserRole.PROJECT_MANAGER) {
       filter.projectId = { $in: req.user.assignedProjectIds };
