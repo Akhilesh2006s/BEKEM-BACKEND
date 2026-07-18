@@ -312,13 +312,19 @@ router.post(
   validate,
   async (req, res, next) => {
     try {
-      if (req.user.role !== UserRole.EXECUTIVE) {
-        return res.status(403).json({ statusCode: 403, message: 'Only Executive can generate HO indents' });
+      if (req.user.role !== UserRole.COORDINATOR) {
+        return res.status(403).json({ statusCode: 403, message: 'Only Coordinator can generate HO indents' });
       }
-      const { createExecutiveIndent } = require('../services/executiveIndentService');
-      const mr = await createExecutiveIndent(req.user, req.body);
+      const { createHoIndent } = require('../services/executiveIndentService');
+      const { mr, rfq } = await createHoIndent(req.user, req.body);
       const populated = await MaterialRequest.findById(mr._id).populate(populateFields);
-      res.status(201).json({ data: await serializeMaterialRequestEnriched(populated, req.user.role) });
+      res.status(201).json({
+        data: {
+          indent: await serializeMaterialRequestEnriched(populated, req.user.role),
+          rfqId: rfq._id.toString(),
+          rfqNumber: rfq.rfqNumber,
+        },
+      });
     } catch (err) {
       if (err.statusCode) return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
       next(err);

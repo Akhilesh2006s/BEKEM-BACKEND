@@ -10,7 +10,6 @@ describe('HO indent workflow', () => {
   let coordinatorToken;
   let projectId;
   let materialId;
-  let indentId;
 
   before(async () => {
     await setupTestDb();
@@ -27,39 +26,44 @@ describe('HO indent workflow', () => {
     await teardownTestDb();
   });
 
-  it('executive creates HO indent hidden from PM', async () => {
+  it('executive cannot generate HO indents', async () => {
     const createRes = await request(getApp())
       .post('/api/material-requests/ho-indents')
       .set('Authorization', `Bearer ${executiveToken}`)
       .send({
         projectId,
         items: [{ materialId, quantityRequested: 5 }],
+        purpose: 'HO workflow test blocked',
+      });
+    assert.equal(createRes.status, 403);
+  });
+
+  it('coordinator creates HO indent hidden from PM and generates RFQ', async () => {
+    const createRes = await request(getApp())
+      .post('/api/material-requests/ho-indents')
+      .set('Authorization', `Bearer ${coordinatorToken}`)
+      .send({
+        projectId,
+        items: [{ materialId, quantityRequested: 5 }],
         purpose: 'HO workflow test indent',
       });
     assert.equal(createRes.status, 201);
-    indentId = createRes.body.data.id;
-    assert.equal(createRes.body.data.origin, 'EXECUTIVE');
+    const indentId = createRes.body.data.indent.id;
+    assert.equal(createRes.body.data.indent.origin, 'EXECUTIVE');
+    assert.ok(createRes.body.data.rfqId);
+    assert.ok(createRes.body.data.rfqNumber);
 
     const pmList = await request(getApp())
       .get('/api/material-requests')
       .set('Authorization', `Bearer ${pmToken}`);
     assert.equal(pmList.status, 200);
     assert.ok(!pmList.body.data.some((r) => r.id === indentId));
-  });
-
-  it('coordinator approves HO indent and generates RFQ', async () => {
-    const approveRes = await request(getApp())
-      .post(`/api/material-requests/ho-indents/${indentId}/coordinator-approve`)
-      .set('Authorization', `Bearer ${coordinatorToken}`);
-    assert.equal(approveRes.status, 200);
-    assert.ok(approveRes.body.data.rfqNumber);
-    assert.ok(approveRes.body.data.rfqId);
 
     const rfqRes = await request(getApp())
-      .get(`/api/rfqs/${approveRes.body.data.rfqId}`)
+      .get(`/api/rfqs/${createRes.body.data.rfqId}`)
       .set('Authorization', `Bearer ${executiveToken}`);
     assert.equal(rfqRes.status, 200);
-    assert.equal(rfqRes.body.data.rfqNumber, approveRes.body.data.rfqNumber);
+    assert.equal(rfqRes.body.data.rfqNumber, createRes.body.data.rfqNumber);
     assert.ok(rfqRes.body.data.items.length > 0);
     assert.ok(rfqRes.body.data.termsAndConditions.length > 0);
   });

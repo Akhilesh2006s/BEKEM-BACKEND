@@ -78,7 +78,7 @@ const materialRequestSchema = new mongoose.Schema(
     coordinatorProcurementRemark: { type: String, default: '' },
     coordinatorProcurementDecidedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     coordinatorProcurementDecidedAt: { type: Date },
-    /** SITE = site-raised indent; EXECUTIVE = HO-only indent (hidden from site/store/PM). */
+    /** SITE = site-raised indent; EXECUTIVE = HO-only indent (Coordinator-generated; hidden from site/store/PM). */
     origin: { type: String, enum: ['SITE', 'EXECUTIVE'], default: 'SITE' },
     /** BELOW_5000 = capped petty indent with visible pricing; ABOVE_5000 = standard indent. */
     indentRequestType: { type: String, enum: ['BELOW_5000', 'ABOVE_5000'], default: 'ABOVE_5000' },

@@ -28,9 +28,13 @@ async function resolveSiteForProject(projectId) {
   return site;
 }
 
-async function createExecutiveIndent(user, { projectId, items, purpose, requiredByDate }) {
-  if (user.role !== UserRole.EXECUTIVE) {
-    const err = new Error('Only Executive can generate HO indents');
+/**
+ * Head-office indent (not site-raised). Only Coordinator may generate.
+ * origin stays 'EXECUTIVE' so existing filters keep HO indents hidden from Site/Store/PM.
+ */
+async function createHoIndent(user, { projectId, items, purpose, requiredByDate }) {
+  if (user.role !== UserRole.COORDINATOR) {
+    const err = new Error('Only Coordinator can generate HO indents');
     err.statusCode = 403;
     throw err;
   }
@@ -59,7 +63,7 @@ async function createExecutiveIndent(user, { projectId, items, purpose, required
     items: resolvedItems,
     materialId: resolvedItems[0].materialId,
     quantityRequested: resolvedItems[0].quantityRequested,
-    purpose: purpose || 'Executive HO indent',
+    purpose: purpose || 'Coordinator HO indent',
     requiredByDate: requiredByDate || undefined,
     requestedByUserId: user._id,
     status: 'HO_PENDING_COORDINATOR',
@@ -77,24 +81,19 @@ async function createExecutiveIndent(user, { projectId, items, purpose, required
     null,
     'HO_PENDING_COORDINATOR',
     user._id,
-    `Executive HO indent ${indentNumber} submitted for Coordinator approval`
+    `Coordinator HO indent ${indentNumber} created`
   );
 
-  const coordinators = await User.find({ role: UserRole.COORDINATOR });
-  await notificationService.notifyUsers(
-    coordinators.map((u) => u._id),
-    {
-      title: 'HO indent awaiting approval',
-      body: `${indentNumber} — review and approve to generate RFQ.`,
-      relatedEntityType: 'MaterialRequest',
-      relatedEntityId: mr._id,
-    }
-  );
-
-  return mr;
+  // Coordinator is the HO raiser — generate PR + RFQ in the same step (no self-approval queue).
+  return approveHoIndent(user, mr._id.toString());
 }
 
-async function approveExecutiveIndent(user, indentId) {
+/** @deprecated use createHoIndent */
+async function createExecutiveIndent(user, body) {
+  return createHoIndent(user, body);
+}
+
+async function approveHoIndent(user, indentId) {
   if (user.role !== UserRole.COORDINATOR) {
     const err = new Error('Only Coordinator can approve HO indents');
     err.statusCode = 403;
@@ -146,7 +145,7 @@ async function approveExecutiveIndent(user, indentId) {
     fromStatus,
     'RFQ_OPEN',
     user._id,
-    `Coordinator approved — RFQ ${rfq.rfqNumber} generated`
+    `HO indent ready — RFQ ${rfq.rfqNumber} generated`
   );
 
   const executives = await User.find({ role: UserRole.EXECUTIVE });
@@ -163,9 +162,16 @@ async function approveExecutiveIndent(user, indentId) {
   return { mr, pr, rfq };
 }
 
+/** @deprecated use approveHoIndent */
+async function approveExecutiveIndent(user, indentId) {
+  return approveHoIndent(user, indentId);
+}
+
 module.exports = {
   HO_ROLES,
   assertHoRole,
+  createHoIndent,
   createExecutiveIndent,
+  approveHoIndent,
   approveExecutiveIndent,
 };
