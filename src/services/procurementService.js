@@ -140,18 +140,33 @@ async function ensureRfqAndQuotations(
   return { rfq, quotations: allQuotes.length ? allQuotes : quotations };
 }
 
-function normalizeWizardLineItems(rawItems, mr, fallbackAmount) {
+function normalizeWizardLineItems(rawItems, mr, fallbackAmount, { requireExplicitLines = false } = {}) {
   if (!Array.isArray(rawItems) || rawItems.length === 0) {
+    if (requireExplicitLines) {
+      const err = new Error('Each vendor PO must include only its assigned line items');
+      err.statusCode = 400;
+      throw err;
+    }
     return buildLineItemsFromIndent(mr, fallbackAmount);
   }
 
   const indentItems = mr ? getIndentLineItems(mr) : [];
+  const indentByMaterial = new Map(
+    indentItems.map((item) => {
+      const mid = (item.materialId?._id || item.materialId)?.toString();
+      return [mid, item];
+    })
+  );
   const lineItems = [];
   let subtotal = 0;
 
   for (let i = 0; i < rawItems.length; i++) {
     const row = rawItems[i];
-    const indentLine = indentItems[i];
+    const materialId = (row.materialId?._id || row.materialId)?.toString();
+    const indentLine =
+      (materialId && indentByMaterial.get(materialId)) ||
+      // Fallback only when materialId missing — prefer material match over positional.
+      (!materialId ? indentItems[i] : null);
     const mat = indentLine?.materialId;
     const gstPercent =
       row.gstPercent != null
@@ -283,7 +298,9 @@ async function createPurchaseOrderFromWizard({
   const { lineItems, subtotal } = normalizeWizardLineItems(
     lineItemsOverride,
     mr,
-    quotation.amount
+    quotation.amount,
+    // Wizard/batch always sends per-vendor lines — never expand to the full indent.
+    { requireExplicitLines: Array.isArray(lineItemsOverride) }
   );
 
   const poAttachments = Array.isArray(attachments)

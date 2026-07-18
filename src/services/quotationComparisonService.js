@@ -120,27 +120,27 @@ function buildMaterialOffers(quotations, line) {
     if (!vendorId) continue;
     const selected = (q.selectedMaterialIds || []).map((id) => toId(id));
     const hasExplicitSelection = selected.length > 0;
+    // Vendor must be assigned to this material when RFQ has per-item vendor assignment.
     if (hasExplicitSelection && !selected.includes(line.materialId)) continue;
+
     const vendorName = vendor?.name || 'Vendor';
     const iq = (q.itemQuotes || []).find((it) => toId(it.materialId) === line.materialId);
-    if (iq) {
-      const rate = Number(iq.rate || 0);
-      const gstPercent = Number(iq.gstPercent ?? 18);
-      const breakdown = computeGstBreakdown(line.quantity || 0, rate, gstPercent);
-      offers.push({
-        vendorId,
-        vendorName,
-        rate,
-        finalCost: breakdown.finalAmount,
-      });
-    } else {
-      offers.push({ vendorId, vendorName, rate: null, finalCost: null });
-    }
+    // Only show vendors that actually quoted THIS line — never pad with null/header rates.
+    if (!iq || Number(iq.rate || 0) <= 0) continue;
+
+    const rate = Number(iq.rate || 0);
+    const gstPercent = Number(iq.gstPercent ?? 18);
+    const breakdown = computeGstBreakdown(line.quantity || 0, rate, gstPercent);
+    offers.push({
+      vendorId,
+      vendorName,
+      rate,
+      gstPercent,
+      finalCost: breakdown.finalAmount,
+    });
   }
   offers.sort((a, b) => {
     if (a.rate != null && b.rate != null) return a.rate - b.rate;
-    if (a.rate != null) return -1;
-    if (b.rate != null) return 1;
     return a.vendorName.localeCompare(b.vendorName);
   });
   return offers;
