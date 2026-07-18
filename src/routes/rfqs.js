@@ -169,6 +169,21 @@ router.post(
 );
 
 router.post(
+  '/:id/quotes-obtained',
+  param('id').isMongoId(),
+  validate,
+  async (req, res, next) => {
+    try {
+      const data = await rfqService.markQuotesObtained(req.params.id, req.user);
+      res.json({ data });
+    } catch (err) {
+      if (err.statusCode) return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
+      next(err);
+    }
+  }
+);
+
+router.post(
   '/:id/finalize',
   param('id').isMongoId(),
   [

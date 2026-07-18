@@ -146,32 +146,29 @@ async function ensureRfqAndQuotations(
 }
 
 /**
- * PO may be raised only after RFQ is shared, vendor quotes received, and RFQ finalized.
+ * PO may be raised only after RFQ was shared and executive marked quotes obtained
+ * (vendor choice / L1 remarks happen on Create PO).
  */
 async function requireFinalizedRfqForPo(purchaseRequestId) {
   const rfq = await RFQ.findOne({ purchaseRequestId }).populate('selectedVendorId');
   if (!rfq) {
     const err = new Error(
-      'Create and share an RFQ first, then wait for vendor quotations before raising a PO'
+      'Create and share an RFQ first, then mark RFQs Obtained before raising a PO'
     );
     err.statusCode = 400;
     throw err;
   }
   if (rfq.status !== 'FINALIZED') {
     const err = new Error(
-      'RFQ is still open — wait for vendor quotations, compare them, and finalize the RFQ before Create PO'
+      'Mark RFQs Obtained on the RFQ detail page after vendors reply, then Proceed with PO Creation'
     );
     err.statusCode = 400;
     throw err;
   }
   const quotations = await Quotation.find({ rfqId: rfq._id }).populate('vendorId');
-  const priced = quotations.filter(
-    (q) =>
-      (Number(q.rate) > 0 || Number(q.amount) > 0 || (q.itemQuotes || []).some((iq) => Number(iq.rate) > 0))
-  );
-  if (!priced.length) {
+  if (!quotations.length) {
     const err = new Error(
-      'No vendor quotations on this RFQ yet — record quotes from vendors before Create PO'
+      'No vendors assigned on this RFQ — assign vendors when creating the RFQ, then proceed to Create PO'
     );
     err.statusCode = 400;
     throw err;
@@ -306,7 +303,7 @@ async function createPurchaseOrderFromWizard({
   let quotation = quotations.find((q) => q.vendorId._id.toString() === vendorId.toString());
   if (!quotation) {
     const err = new Error(
-      'Selected vendor has no quotation on the finalized RFQ — pick a vendor that submitted a quote'
+      'Selected vendor has no quotation on this RFQ — pick a vendor that was assigned when the RFQ was shared'
     );
     err.statusCode = 400;
     throw err;

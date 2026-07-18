@@ -165,6 +165,34 @@ describe('RFQ quotation comparison & vendor selection', () => {
     assert.strictEqual(rfq.whyWeChoseThisVendor, 'L1');
   });
 
+  it('marks RFQs Obtained without vendor selection', async () => {
+    const openPr = await PurchaseRequest.findOne({
+      status: 'OPEN',
+      _id: { $ne: purchaseRequestId },
+    });
+    if (!openPr) return;
+
+    const preview = await request(app)
+      .post('/api/rfqs/wizard/preview')
+      .set('Authorization', `Bearer ${execToken}`)
+      .send({ purchaseRequestId: openPr._id.toString() });
+    assert.strictEqual(preview.status, 200);
+    const openRfqId = preview.body.data.rfqId;
+
+    const res = await request(app)
+      .post(`/api/rfqs/${openRfqId}/quotes-obtained`)
+      .set('Authorization', `Bearer ${execToken}`);
+
+    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+    assert.strictEqual(res.body.data.status, 'FINALIZED');
+    assert.ok(res.body.data.quotesObtainedAt);
+
+    const rfq = await RFQ.findById(openRfqId);
+    assert.strictEqual(rfq.status, 'FINALIZED');
+    assert.ok(rfq.quotesObtainedAt);
+    assert.ok(!rfq.selectedVendorId);
+  });
+
   it('blocks PO when RFQ is not finalized', async () => {
     const openPr = await PurchaseRequest.findOne({
       status: 'OPEN',

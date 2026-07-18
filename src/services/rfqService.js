@@ -237,6 +237,7 @@ async function getRfqDetail(rfqId, user) {
     selectedVendorId: comparison.selectedVendorId,
     vendorSelectionReason: comparison.vendorSelectionReason,
     whyWeChoseThisVendor: comparison.whyWeChoseThisVendor,
+    quotesObtainedAt: rfq.quotesObtainedAt?.toISOString?.() || null,
     purchaseRequestId: comparison.purchaseRequestId,
     createdAt: rfq.createdAt?.toISOString?.(),
   };
@@ -370,11 +371,45 @@ async function finalizeRfq(rfqId, user, { selectedVendorId, whyWeChoseThisVendor
   rfq.selectedVendorId = selectedVendorId;
   rfq.whyWeChoseThisVendor = why;
   rfq.status = 'FINALIZED';
+  rfq.quotesObtainedAt = rfq.quotesObtainedAt || new Date();
+  rfq.quotesObtainedByUserId = rfq.quotesObtainedByUserId || user._id;
   rfq.finalizedAt = new Date();
   rfq.finalizedByUserId = user._id;
   await rfq.save();
 
   return getRfqComparison(rfqId, user);
+}
+
+/**
+ * Executive confirms vendor RFQ replies were received — unlocks Create PO.
+ * Vendor / L1 selection happens later on the PO wizard.
+ */
+async function markQuotesObtained(rfqId, user) {
+  assertRfqAccess(user);
+  const { rfq } = await loadRfqContext(rfqId);
+
+  if (rfq.status === 'FINALIZED') {
+    return getRfqDetail(rfqId, user);
+  }
+
+  const quotations = await Quotation.find({ rfqId: rfq._id });
+  if (!quotations.length) {
+    const err = new Error(
+      'Assign at least one vendor on the RFQ before marking RFQs Obtained'
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const now = new Date();
+  rfq.quotesObtainedAt = now;
+  rfq.quotesObtainedByUserId = user._id;
+  rfq.status = 'FINALIZED';
+  rfq.finalizedAt = now;
+  rfq.finalizedByUserId = user._id;
+  await rfq.save();
+
+  return getRfqDetail(rfqId, user);
 }
 
 function buildRfqShareText(detail) {
@@ -455,10 +490,23 @@ async function validatePoVendorSelection(
 
   if (!skipFinalizeRequirement && rfq.status !== 'FINALIZED') {
     const err = new Error(
-      'Finalize the RFQ after receiving vendor quotations before creating a PO'
+      'Mark RFQs Obtained on the RFQ after vendors reply, then create the PO'
     );
     err.statusCode = 400;
     throw err;
+  }
+
+  const why = String(whyWeChoseThisVendor || '').trim();
+  if (why) {
+    rfq.whyWeChoseThisVendor = why;
+  }
+  if (vendorIds.length === 1) {
+    rfq.selectedVendorId = vendorIds[0];
+    const reason = String(vendorSelectionReasons[vendorIds[0]] || '').trim();
+    if (reason) rfq.vendorSelectionReason = reason;
+  }
+  if (why || vendorIds.length) {
+    await rfq.save();
   }
 }
 
@@ -572,6 +620,7 @@ module.exports = {
   saveRfqQuotations,
   addRfqVendorQuotation,
   finalizeRfq,
+  markQuotesObtained,
   previewRfqWizard,
   submitRfqWizard,
   validatePoVendorSelection,
