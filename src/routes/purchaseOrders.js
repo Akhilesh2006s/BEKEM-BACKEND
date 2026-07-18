@@ -22,7 +22,6 @@ const {
   notifyExecutivesReturned,
   coordinatorVerifyPurchaseOrder,
   coordinatorOverrideApprove,
-  pmApprovePurchaseOrder,
   finalizePurchaseOrder,
 } = require('../services/poVerifySideEffects');
 const { userCanAccessProject } = require('../utils/serialize');
@@ -560,7 +559,7 @@ router.post(
         populate: { path: 'materialRequestId' },
       });
       if (!po) return { statusCode: 404, body: { statusCode: 404, message: 'Not found' } };
-      if (!['PENDING_REVIEW', 'COORDINATOR_PENDING'].includes(po.status)) {
+      if (!['PENDING_REVIEW', 'COORDINATOR_PENDING', 'PM_PENDING'].includes(po.status)) {
         if (req.body.action === 'APPROVE' && !['DRAFT', 'REJECTED'].includes(po.status)) {
           const populated = await PurchaseOrder.findById(po._id).populate(poPopulate);
           return { statusCode: 200, body: { data: serializePurchaseOrder(populated) } };
@@ -596,36 +595,11 @@ router.post(
 
 router.post(
   '/:id/pm-approve',
-  requireCapability('APPROVE_MATERIAL_REQUEST'),
-  [param('id').isMongoId(), body('note').optional().trim()],
-  validate,
-  async (req, res, next) => {
-    try {
-      if (req.user.role !== UserRole.PROJECT_MANAGER) {
-        return res.status(403).json({ statusCode: 403, message: 'Project Manager only' });
-      }
-
-      const po = await PurchaseOrder.findById(req.params.id).populate({
-        path: 'purchaseRequestId',
-        populate: [{ path: 'projectId' }, { path: 'materialRequestId' }],
-      });
-      if (!po) return res.status(404).json({ statusCode: 404, message: 'Not found' });
-
-      const projectId =
-        po.purchaseRequestId?.projectId?._id || po.purchaseRequestId?.projectId;
-      if (!userCanAccessProject(req.user, projectId)) {
-        return res.status(403).json({ statusCode: 403, message: 'Not your project' });
-      }
-
-      await pmApprovePurchaseOrder(po, req.user._id, req.body.note);
-      const populated = await PurchaseOrder.findById(po._id).populate(poPopulate);
-      res.json({ data: serializePurchaseOrder(populated) });
-    } catch (err) {
-      if (err.statusCode) {
-        return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
-      }
-      next(err);
-    }
+  async (req, res) => {
+    return res.status(403).json({
+      statusCode: 403,
+      message: 'PO approval is Coordinator / Chairman only — Project Manager PO approval is retired',
+    });
   }
 );
 
@@ -641,7 +615,7 @@ router.post(
       }
       const po = await PurchaseOrder.findById(req.params.id);
       if (!po) return res.status(404).json({ statusCode: 404, message: 'Not found' });
-      if (!['PENDING_REVIEW', 'COORDINATOR_PENDING'].includes(po.status)) {
+      if (!['PENDING_REVIEW', 'COORDINATOR_PENDING', 'PM_PENDING'].includes(po.status)) {
         return res.status(400).json({ statusCode: 400, message: 'PO not pending verification' });
       }
       const fromStatus = po.status;

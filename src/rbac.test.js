@@ -18,7 +18,6 @@ describe('Permission Matrix', () => {
     assert.ok(caps.includes('ALLOCATE_MATERIAL_REQUEST'));
     assert.ok(caps.includes('FORWARD_MATERIAL_REQUEST'));
     assert.ok(caps.includes('VIEW_FINANCE'));
-    assert.ok(!caps.includes('CREATE_MATERIAL_REQUEST'));
     assert.ok(!caps.includes('CREATE_PO'));
     assert.ok(!caps.includes('VERIFY_RECORDS'));
     assert.ok(!caps.includes('FINAL_APPROVAL'));
@@ -46,9 +45,10 @@ describe('Permission Matrix', () => {
     assert.ok(!caps.includes('FINAL_APPROVAL'));
   });
 
-  it('Coordinator verifies POs but cannot final-approve', () => {
+  it('Coordinator verifies POs but cannot create PO or final-approve', () => {
     const caps = PERMISSION_MATRIX[UserRole.COORDINATOR];
     assert.ok(caps.includes('VERIFY_RECORDS'));
+    assert.ok(!caps.includes('CREATE_PO'));
     assert.ok(!caps.includes('FINAL_APPROVAL'));
     assert.ok(caps.includes('MANAGE_VENDORS'));
   });

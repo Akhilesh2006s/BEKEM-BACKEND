@@ -9,8 +9,6 @@ const { assignOfficialProcurementNumbers } = require('./procurementReferenceServ
 const { recordPoSent } = require('./poTimelineService');
 const {
   requiresChairmanApproval,
-  requiresCoordinatorFinalApproval,
-  requiresPmApproval,
 } = require('../constants/approvalPolicy');
 
 const PO_ALERT_ROLES = [
@@ -125,22 +123,16 @@ async function runPostApprovalDispatch(po) {
 
 /**
  * Coordinator verify:
- * - < ₹5k should be PM (reject if wrongly here)
- * - ₹5k–₹10k → final approve
- * - > ₹10k → Chairman queue
+ * - ≤ Coordinator max → final approve
+ * - > Coordinator max → Chairman queue
+ * (PO approval is Coordinator / Chairman only — no PM band.)
  */
 async function coordinatorVerifyPurchaseOrder(po, actorUserId, note) {
-  if (requiresPmApproval(po.amount)) {
-    const err = new Error('POs under ₹5,000 must be approved by the Project Manager');
-    err.statusCode = 400;
-    throw err;
-  }
-
-  if (requiresCoordinatorFinalApproval(po.amount)) {
+  if (!requiresChairmanApproval(po.amount)) {
     return finalizePurchaseOrder(
       po,
       actorUserId,
-      note || 'Coordinator approved (₹5,000–₹10,000 band)',
+      note || 'Coordinator approved',
       null,
       { chairmanOverride: false }
     );
@@ -155,7 +147,7 @@ async function coordinatorVerifyPurchaseOrder(po, actorUserId, note) {
     fromStatus,
     'CHAIRMAN_PENDING',
     actorUserId,
-    note || 'Coordinator verified — forwarded to Chairman (above ₹10,000)'
+    note || 'Coordinator verified — forwarded to Chairman (above coordinator limit)'
   );
   await notifyChairmen(po);
   return po;
@@ -173,7 +165,7 @@ async function coordinatorOverrideApprove(po, actorUserId, remark) {
     err.statusCode = 400;
     throw err;
   }
-  const allowedStatuses = ['CHAIRMAN_PENDING', 'COORDINATOR_PENDING', 'PENDING_REVIEW'];
+  const allowedStatuses = ['CHAIRMAN_PENDING', 'COORDINATOR_PENDING', 'PENDING_REVIEW', 'PM_PENDING'];
   if (!allowedStatuses.includes(po.status)) {
     const err = new Error('PO is not awaiting Coordinator or Chairman approval');
     err.statusCode = 400;
@@ -185,24 +177,10 @@ async function coordinatorOverrideApprove(po, actorUserId, remark) {
   });
 }
 
-async function pmApprovePurchaseOrder(po, actorUserId, note) {
-  if (!requiresPmApproval(po.amount)) {
-    const err = new Error('Only POs under ₹5,000 can be approved by Project Manager');
-    err.statusCode = 400;
-    throw err;
-  }
-  if (po.status !== 'PM_PENDING') {
-    const err = new Error('PO is not pending Project Manager approval');
-    err.statusCode = 400;
-    throw err;
-  }
-  return finalizePurchaseOrder(
-    po,
-    actorUserId,
-    note || 'Project Manager approved (under ₹5,000)',
-    null,
-    { chairmanOverride: false }
-  );
+async function pmApprovePurchaseOrder() {
+  const err = new Error('PO approval is Coordinator / Chairman only');
+  err.statusCode = 403;
+  throw err;
 }
 
 async function finalizePurchaseOrder(po, actorUserId, note, approvalContext, options = {}) {

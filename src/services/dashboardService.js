@@ -447,23 +447,7 @@ async function getTodayActions(user) {
   }
 
   if (role === UserRole.PROJECT_MANAGER) {
-    const pmPos = await PurchaseOrder.find({ status: 'PM_PENDING' })
-      .populate({ path: 'purchaseRequestId', select: 'projectId' })
-      .limit(50);
-    const myPmPos = pmPos.filter((po) => {
-      const pid = po.purchaseRequestId?.projectId?.toString();
-      return (user.assignedProjectIds || []).some((id) => id.toString() === pid);
-    });
-    if (myPmPos.length > 0) {
-      actions.push({
-        id: 'pm-po-approve',
-        title: `Approve ${myPmPos.length} low-value PO${myPmPos.length > 1 ? 's' : ''}`,
-        subtitle: 'POs under ₹5,000 — Project Manager final approval',
-        href: `/pm/po/${myPmPos[0]._id}`,
-        priority: 'high',
-        count: myPmPos.length,
-      });
-    }
+    // PO approval is Coordinator / Chairman only — no PM PO queue actions.
   }
 
   if (role === UserRole.CHAIRMAN) {

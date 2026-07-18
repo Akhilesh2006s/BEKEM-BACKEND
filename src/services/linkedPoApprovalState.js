@@ -13,9 +13,8 @@ const PENDING_PO_PRIORITY = [
  * Map live PO status → who holds the next action (for indent/PR labels).
  */
 function pendingRoleForPoStatus(poStatus) {
-  if (['COORDINATOR_PENDING', 'PENDING_REVIEW'].includes(poStatus)) return 'COORDINATOR';
+  if (['COORDINATOR_PENDING', 'PENDING_REVIEW', 'PM_PENDING'].includes(poStatus)) return 'COORDINATOR';
   if (['CHAIRMAN_PENDING', 'PENDING_APPROVAL'].includes(poStatus)) return 'CHAIRMAN';
-  if (poStatus === 'PM_PENDING') return 'PROJECT_MANAGER';
   if (poStatus === 'APPROVED') return null;
   return 'COORDINATOR';
 }

@@ -144,7 +144,6 @@ exports.PERMISSION_MATRIX = {
         'VIEW_ALL_PROJECTS',
         'VERIFY_RECORDS',
         'EDIT_COORDINATOR_RECORDS',
-        'CREATE_PO',
         'CREATE_WORK_ORDER',
         'VIEW_FINANCE',
         'VIEW_AUDIT_LOGS',

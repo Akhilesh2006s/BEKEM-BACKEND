@@ -1,7 +1,11 @@
 const { PurchaseOrder } = require('../models');
 
-/** Statuses where Coordinator must verify/review before PM final or Chairman routing. */
-const COORDINATOR_VERIFY_PO_STATUSES = ['COORDINATOR_PENDING', 'PENDING_REVIEW'];
+/** Statuses where Coordinator must verify/review (includes legacy PM_PENDING). */
+const COORDINATOR_VERIFY_PO_STATUSES = [
+  'COORDINATOR_PENDING',
+  'PENDING_REVIEW',
+  'PM_PENDING',
+];
 
 function coordinatorVerifyPoFilter(extra = {}) {
   return {

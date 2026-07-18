@@ -298,7 +298,7 @@ async function createPurchaseOrderFromWizard({
     : [];
 
   const poAmount = subtotal || quotation.amount;
-  const { initialPoStatusForAmount, requiresPmApproval } = require('../constants/approvalPolicy');
+  const { initialPoStatusForAmount } = require('../constants/approvalPolicy');
   const initialStatus = initialPoStatusForAmount(poAmount);
 
   const po = await PurchaseOrder.create({
@@ -328,31 +328,10 @@ async function createPurchaseOrderFromWizard({
     null,
     initialStatus,
     actorUserId,
-    requiresPmApproval(poAmount)
-      ? 'PO created — pending Project Manager approval (under ₹5,000)'
-      : 'PO created — pending coordinator review'
+    'PO created — pending coordinator review'
   );
 
   await recordPoCreated(po._id, actorUserId);
-
-  if (requiresPmApproval(poAmount) && pr.projectId) {
-    const projectId = pr.projectId._id || pr.projectId;
-    const pms = await User.find({
-      role: 'PROJECT_MANAGER',
-      assignedProjectIds: projectId,
-    });
-    if (pms.length) {
-      await notificationService.notifyUsers(
-        pms.map((u) => u._id),
-        {
-          title: 'PO awaiting PM approval',
-          body: `${po.draftRef} (₹${Number(poAmount).toLocaleString('en-IN')}) needs Project Manager approval.`,
-          relatedEntityType: 'PurchaseOrder',
-          relatedEntityId: po._id,
-        }
-      );
-    }
-  }
 
   if (mr && !skipIndentStatusUpdate && !['PO_CREATED', 'CHAIRMAN_APPROVED', 'MATERIAL_RECEIVED', 'ISSUED', 'COMPLETED'].includes(mr.status)) {
     const fromStatus = mr.status;

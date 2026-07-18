@@ -24,8 +24,8 @@ function requiresChairmanApproval(amount) {
   return poAmount(amount) > limits().poCoordinatorMaxInr;
 }
 
-function initialPoStatusForAmount(amount) {
-  if (requiresPmApproval(amount)) return 'PM_PENDING';
+function initialPoStatusForAmount(_amount) {
+  // PO creation is Executive-only; approval is Coordinator → Chairman (no PM band).
   return 'COORDINATOR_PENDING';
 }
 
@@ -35,7 +35,7 @@ function poApprovalRoutingNote(po) {
   const fmt = (n) => `₹${n.toLocaleString('en-IN')}`;
 
   if (po?.status === 'PM_PENDING') {
-    return `Amount ${fmt(amount)} is below ${fmt(poPmMaxInr)} — Project Manager final approval only.`;
+    return `Legacy low-value PO — now approved by Coordinator (under ${fmt(poPmMaxInr)}).`;
   }
   if (po?.status === 'CHAIRMAN_PENDING' || po?.status === 'PENDING_APPROVAL') {
     return `Amount ${fmt(amount)} is above ${fmt(poCoordinatorMaxInr)} — Chairman final approval required (or Coordinator may approve only if Chairman is not on premises, with a written reason).`;
@@ -44,19 +44,13 @@ function poApprovalRoutingNote(po) {
     if (requiresChairmanApproval(amount)) {
       return `Amount ${fmt(amount)} is above ${fmt(poCoordinatorMaxInr)}. Coordinator verifies then routes to Chairman, or may approve with a note that Chairman is not on premises.`;
     }
-    if (requiresCoordinatorFinalApproval(amount)) {
-      return `Amount ${fmt(amount)} is between ${fmt(poPmMaxInr)} and ${fmt(poCoordinatorMaxInr)} — Coordinator final approval.`;
-    }
-    return `Amount ${fmt(amount)} is below ${fmt(poPmMaxInr)} — should be with Project Manager.`;
+    return `Amount ${fmt(amount)} is up to ${fmt(poCoordinatorMaxInr)} — Coordinator final approval.`;
   }
   if (po?.status === 'APPROVED') {
-    if (requiresPmApproval(amount)) {
-      return `Approved by Project Manager (under ${fmt(poPmMaxInr)}).`;
+    if (requiresChairmanApproval(amount)) {
+      return `Approved via Chairman queue (above ${fmt(poCoordinatorMaxInr)}), or Coordinator exception (Chairman not on premises).`;
     }
-    if (requiresCoordinatorFinalApproval(amount)) {
-      return `Approved by Coordinator (${fmt(poPmMaxInr)}–${fmt(poCoordinatorMaxInr)} band).`;
-    }
-    return `Approved via Chairman queue (above ${fmt(poCoordinatorMaxInr)}), or Coordinator exception (Chairman not on premises).`;
+    return `Approved by Coordinator (up to ${fmt(poCoordinatorMaxInr)}).`;
   }
   return limits().approvalRoutingNote;
 }
