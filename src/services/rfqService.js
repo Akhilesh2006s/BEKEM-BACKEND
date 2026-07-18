@@ -269,6 +269,14 @@ async function getRfqDetailForVendor(rfqId, user, vendorId) {
     vendorName,
     paymentTerms: quotation.paymentTerms || comparisonVendor?.paymentTerms || '',
     deliveryTerms: quotation.deliveryTerms || comparisonVendor?.deliveryTerms || '',
+    transportation: quotation.transportation || comparisonVendor?.transportation || '',
+    deliveryTime:
+      quotation.deliveryTime ||
+      quotation.deliveryTerms ||
+      comparisonVendor?.deliveryTime ||
+      comparisonVendor?.deliveryTerms ||
+      '',
+    make: quotation.make || comparisonVendor?.make || '',
   };
 }
 
@@ -285,9 +293,12 @@ async function saveRfqQuotations(rfqId, user, { quotations: rows }) {
     rate: Number(row.rate),
     gstPercent: Number(row.gstPercent ?? 18),
     paymentTerms: row.paymentTerms || '',
-    deliveryTerms: row.deliveryTerms || '',
-      itemRates: Array.isArray(row.itemRates) ? row.itemRates : [],
-      selectedMaterialIds: Array.isArray(row.selectedMaterialIds) ? row.selectedMaterialIds : [],
+    deliveryTerms: row.deliveryTime || row.deliveryTerms || '',
+    transportation: row.transportation || '',
+    deliveryTime: row.deliveryTime || row.deliveryTerms || '',
+    make: row.make || '',
+    itemRates: Array.isArray(row.itemRates) ? row.itemRates : [],
+    selectedMaterialIds: Array.isArray(row.selectedMaterialIds) ? row.selectedMaterialIds : [],
   }));
   await upsertRfqQuotations(rfq, normalized, quantity, lineItems);
   return getRfqComparison(rfqId, user);
@@ -310,7 +321,10 @@ async function addRfqVendorQuotation(rfqId, user, body) {
         rate: Number(body.rate) || 0,
         gstPercent: Number(body.gstPercent ?? 18),
         paymentTerms: body.paymentTerms || '',
-        deliveryTerms: body.deliveryTerms || '',
+        deliveryTerms: body.deliveryTime || body.deliveryTerms || '',
+        transportation: body.transportation || '',
+        deliveryTime: body.deliveryTime || body.deliveryTerms || '',
+        make: body.make || '',
         itemRates: Array.isArray(body.itemRates) ? body.itemRates : [],
         selectedMaterialIds: Array.isArray(body.selectedMaterialIds) ? body.selectedMaterialIds : [],
       },

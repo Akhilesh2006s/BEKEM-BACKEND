@@ -9,6 +9,11 @@ const quotationSchema = new mongoose.Schema(
     gstPercent: { type: Number, default: 18 },
     paymentTerms: { type: String, default: '' },
     deliveryTerms: { type: String, default: '' },
+    /** Commercial terms shown on quotation comparison. */
+    transportation: { type: String, default: '' },
+    deliveryTime: { type: String, default: '' },
+    /** Brand / make offered by the vendor. */
+    make: { type: String, default: '' },
     /** Optional item-level quotations for multi-item indents. */
     itemQuotes: [
       {

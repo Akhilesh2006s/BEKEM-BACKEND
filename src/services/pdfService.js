@@ -415,7 +415,11 @@ function buildRfqPdfContent(doc, detail) {
   if (detail.indentNumber) row(doc, 'Indent', detail.indentNumber);
   if (detail.dueDate) row(doc, 'Due date', new Date(detail.dueDate).toLocaleDateString('en-IN'));
   if (detail.paymentTerms) row(doc, 'Payment terms', detail.paymentTerms);
-  if (detail.deliveryTerms) row(doc, 'Delivery terms', detail.deliveryTerms);
+  if (detail.transportation) row(doc, 'Transportation', detail.transportation);
+  if (detail.deliveryTime || detail.deliveryTerms) {
+    row(doc, 'Delivery time', detail.deliveryTime || detail.deliveryTerms);
+  }
+  if (detail.make) row(doc, 'Make', detail.make);
   doc.moveDown(0.5);
 
   doc.fontSize(11).fillColor('#0F172A').text('Items');

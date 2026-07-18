@@ -102,7 +102,10 @@ function serializeQuotation(q) {
     finalCost: q.amount,
     amount: q.amount,
     paymentTerms: q.paymentTerms || q.terms || '',
-    deliveryTerms: q.deliveryTerms || '',
+    deliveryTerms: q.deliveryTerms || q.deliveryTime || '',
+    transportation: q.transportation || '',
+    deliveryTime: q.deliveryTime || q.deliveryTerms || '',
+    make: q.make || '',
     terms: q.terms,
     submittedAt: q.submittedAt?.toISOString?.(),
   };

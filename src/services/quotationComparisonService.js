@@ -79,6 +79,7 @@ function serializeQuotationRow(q, { quantity = 1, isL1 = false, lineItems = [] }
   const gstPercent = q.gstPercent ?? 18;
   const totals = computeQuotationTotals(q, lineItems, quantity);
   const paymentTerms = q.paymentTerms || q.terms || '';
+  const deliveryTime = q.deliveryTime || q.deliveryTerms || '';
   return {
     id: q._id.toString(),
     rfqId: q.rfqId?.toString?.() || String(q.rfqId),
@@ -90,7 +91,10 @@ function serializeQuotationRow(q, { quantity = 1, isL1 = false, lineItems = [] }
     gstAmount: totals.gstAmount,
     finalCost: totals.finalCost,
     paymentTerms,
-    deliveryTerms: q.deliveryTerms || '',
+    deliveryTerms: q.deliveryTerms || deliveryTime,
+    transportation: q.transportation || '',
+    deliveryTime,
+    make: q.make || '',
     itemRates: totals.itemRates,
     selectedMaterialIds: (q.selectedMaterialIds || []).map((id) => toId(id)),
     isL1,
@@ -196,7 +200,18 @@ async function upsertRfqQuotations(rfq, vendorQuotes, quantity, lineItems = []) 
   const results = [];
   const lineMap = new Map(buildLineMeta(lineItems).map((line) => [line.materialId, line]));
   for (const row of vendorQuotes) {
-    const { vendorId, rate, gstPercent, paymentTerms, deliveryTerms, itemRates, selectedMaterialIds } = row;
+    const {
+      vendorId,
+      rate,
+      gstPercent,
+      paymentTerms,
+      deliveryTerms,
+      transportation,
+      deliveryTime,
+      make,
+      itemRates,
+      selectedMaterialIds,
+    } = row;
     let finalCost = computeFinalCost(rate, quantity, gstPercent);
     const normalizedItemQuotes = Array.isArray(itemRates)
       ? itemRates
@@ -219,12 +234,18 @@ async function upsertRfqQuotations(rfq, vendorQuotes, quantity, lineItems = []) 
       finalCost = Math.round(normalizedItemQuotes.reduce((sum, it) => sum + Number(it.amount || 0), 0));
     }
     const terms = paymentTerms || '';
+    const resolvedDeliveryTime = String(deliveryTime || deliveryTerms || '').trim();
+    const resolvedTransportation = String(transportation || '').trim();
+    const resolvedMake = String(make || '').trim();
     let q = await Quotation.findOne({ rfqId: rfq._id, vendorId });
     if (q) {
       q.rate = rate;
       q.gstPercent = gstPercent ?? 18;
       q.paymentTerms = paymentTerms || '';
-      q.deliveryTerms = deliveryTerms || '';
+      q.deliveryTerms = resolvedDeliveryTime;
+      q.deliveryTime = resolvedDeliveryTime;
+      q.transportation = resolvedTransportation;
+      q.make = resolvedMake;
       q.amount = finalCost;
       q.terms = terms;
       q.itemQuotes = normalizedItemQuotes;
@@ -237,7 +258,10 @@ async function upsertRfqQuotations(rfq, vendorQuotes, quantity, lineItems = []) 
         rate,
         gstPercent: gstPercent ?? 18,
         paymentTerms: paymentTerms || '',
-        deliveryTerms: deliveryTerms || '',
+        deliveryTerms: resolvedDeliveryTime,
+        deliveryTime: resolvedDeliveryTime,
+        transportation: resolvedTransportation,
+        make: resolvedMake,
         amount: finalCost,
         terms,
         itemQuotes: normalizedItemQuotes,

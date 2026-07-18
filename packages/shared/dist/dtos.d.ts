@@ -653,6 +653,9 @@ export interface QuotationDto {
     amount: number;
     paymentTerms?: string;
     deliveryTerms?: string;
+    transportation?: string;
+    deliveryTime?: string;
+    make?: string;
     terms: string;
     isL1?: boolean;
     submittedAt: string;
@@ -669,6 +672,9 @@ export interface QuotationComparisonVendorDto {
     finalCost: number;
     paymentTerms: string;
     deliveryTerms: string;
+    transportation?: string;
+    deliveryTime?: string;
+    make?: string;
     itemRates?: Array<{
         materialId: string;
         materialName: string;
