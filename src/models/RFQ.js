@@ -14,6 +14,8 @@ const rfqSchema = new mongoose.Schema(
     whyWeChoseThisVendor: { type: String, default: '' },
     /** Materials included in this RFQ (skip stock-covered / user-excluded). Empty = derive from shortfall. */
     procurementMaterialIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Material' }],
+    /** Executive (or Coordinator for HO indent) who raised this RFQ. */
+    createdByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     /** Executive confirmed vendor RFQ replies were received — unlocks Create PO. */
     quotesObtainedAt: { type: Date },
     quotesObtainedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },

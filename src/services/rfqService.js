@@ -103,7 +103,8 @@ async function loadRfqContext(rfqId, { includeMaterialIds } = {}) {
         { path: 'projectId' },
       ],
     })
-    .populate('vendorIds');
+    .populate('vendorIds')
+    .populate('createdByUserId', 'name role');
   if (!rfq) {
     const err = new Error('RFQ not found');
     err.statusCode = 404;
@@ -196,6 +197,49 @@ async function getRfqByPurchaseRequest(purchaseRequestId, user) {
   return getRfqComparison(rfq._id.toString(), user);
 }
 
+async function resolveRfqRaiser(rfq) {
+  const StatusHistory = require('../models').StatusHistory;
+  let raiser = rfq.createdByUserId;
+  if (raiser && typeof raiser === 'object' && raiser.name) {
+    return {
+      raisedByUserId: raiser._id?.toString?.() || raiser.id || null,
+      raisedByName: raiser.name || null,
+      raisedByRole: raiser.role || null,
+    };
+  }
+
+  if (raiser) {
+    const User = require('../models').User;
+    const user = await User.findById(raiser).select('name role').lean();
+    if (user) {
+      return {
+        raisedByUserId: user._id.toString(),
+        raisedByName: user.name || null,
+        raisedByRole: user.role || null,
+      };
+    }
+  }
+
+  const history = await StatusHistory.findOne({
+    entityType: 'RFQ',
+    entityId: rfq._id,
+    toStatus: 'OPEN',
+  })
+    .sort({ timestamp: 1 })
+    .populate('actorUserId', 'name role')
+    .lean();
+
+  const actor = history?.actorUserId;
+  if (!actor) {
+    return { raisedByUserId: null, raisedByName: null, raisedByRole: null };
+  }
+  return {
+    raisedByUserId: actor._id?.toString?.() || null,
+    raisedByName: actor.name || null,
+    raisedByRole: actor.role || null,
+  };
+}
+
 async function listRfqs(user) {
   assertRfqAccess(user);
   const rfqs = await RFQ.find()
@@ -205,22 +249,30 @@ async function listRfqs(user) {
       path: 'purchaseRequestId',
       populate: { path: 'materialRequestId', select: 'indentNumber origin projectId' },
     })
+    .populate('createdByUserId', 'name role')
     .lean();
 
-  return rfqs.map((r) => ({
-    id: r._id.toString(),
-    rfqNumber: r.rfqNumber,
-    status: r.status,
-    dueDate: r.dueDate?.toISOString?.() || r.dueDate,
-    indentNumber: r.purchaseRequestId?.materialRequestId?.indentNumber,
-    purchaseRequestId: r.purchaseRequestId?._id?.toString(),
-    createdAt: r.createdAt?.toISOString?.() || r.createdAt,
-  }));
+  return Promise.all(
+    rfqs.map(async (r) => {
+      const raiser = await resolveRfqRaiser(r);
+      return {
+        id: r._id.toString(),
+        rfqNumber: r.rfqNumber,
+        status: r.status,
+        dueDate: r.dueDate?.toISOString?.() || r.dueDate,
+        indentNumber: r.purchaseRequestId?.materialRequestId?.indentNumber,
+        purchaseRequestId: r.purchaseRequestId?._id?.toString(),
+        createdAt: r.createdAt?.toISOString?.() || r.createdAt,
+        ...raiser,
+      };
+    })
+  );
 }
 
 async function getRfqDetail(rfqId, user) {
   const comparison = await getRfqComparison(rfqId, user);
   const { rfq } = await loadRfqContext(rfqId);
+  const raiser = await resolveRfqRaiser(rfq);
   return {
     id: comparison.rfqId,
     rfqNumber: comparison.rfqNumber,
@@ -240,6 +292,7 @@ async function getRfqDetail(rfqId, user) {
     quotesObtainedAt: rfq.quotesObtainedAt?.toISOString?.() || null,
     purchaseRequestId: comparison.purchaseRequestId,
     createdAt: rfq.createdAt?.toISOString?.(),
+    ...raiser,
   };
 }
 

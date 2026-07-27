@@ -93,6 +93,7 @@ async function ensureRfqAndQuotations(
       vendorIds: vendors.map((v) => v._id),
       dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
       status: 'OPEN',
+      createdByUserId: actorUserId || undefined,
     });
 
     await statusHistoryService.record(
@@ -103,6 +104,29 @@ async function ensureRfqAndQuotations(
       actorUserId,
       creationNote
     );
+
+    // Coordinator visibility: when Executive raises RFQ, notify Coordinators with attribution.
+    try {
+      const raiser = actorUserId
+        ? await User.findById(actorUserId).select('name role').lean()
+        : null;
+      if (raiser?.role === UserRole.EXECUTIVE) {
+        const coordinators = await User.find({ role: UserRole.COORDINATOR }).select('_id').lean();
+        if (coordinators.length) {
+          await notificationService.notifyUsers(
+            coordinators.map((u) => u._id),
+            {
+              title: 'RFQ raised by Executive',
+              body: `${rfqNumber} raised by ${raiser.name || 'Executive'} — review in RFQ inbox.`,
+              relatedEntityType: 'RFQ',
+              relatedEntityId: rfq._id,
+            }
+          );
+        }
+      }
+    } catch {
+      /* non-fatal */
+    }
 
     // Demo/test only — real flow waits for vendors to share quotations.
     if (seedDemoQuotes) {

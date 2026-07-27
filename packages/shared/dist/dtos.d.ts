@@ -634,6 +634,11 @@ export interface PurchaseRequestDto {
     executiveRecommendationRemark?: string;
     executiveRecommendedAt?: string | null;
     canExecutiveDecide?: boolean;
+    /** Linked RFQ (when Executive has raised RFQ for this PR). */
+    rfqId?: string | null;
+    rfqNumber?: string | null;
+    rfqRaisedByName?: string | null;
+    rfqRaisedByRole?: string | null;
     items?: Array<{
         id: string;
         materialId: string;
@@ -1053,6 +1058,9 @@ export interface RfqListItemDto {
     indentNumber?: string;
     purchaseRequestId?: string;
     createdAt: string;
+    raisedByUserId?: string | null;
+    raisedByName?: string | null;
+    raisedByRole?: string | null;
 }
 export interface RfqDetailDto {
     id: string;
@@ -1076,6 +1084,8 @@ export interface RfqDetailDto {
     selectedVendorId?: string;
     vendorSelectionReason?: string;
     whyWeChoseThisVendor?: string;
+    /** Set when executive marks RFQs Obtained (ready for Create PO). */
+    quotesObtainedAt?: string | null;
     vendors: Array<{
         id: string;
         name: string;
@@ -1083,6 +1093,9 @@ export interface RfqDetailDto {
     }>;
     purchaseRequestId?: string;
     createdAt?: string;
+    raisedByUserId?: string | null;
+    raisedByName?: string | null;
+    raisedByRole?: string | null;
 }
 export interface TallySyncStatusDto {
     pending: number;

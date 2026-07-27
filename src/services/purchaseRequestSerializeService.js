@@ -25,6 +25,45 @@ async function resolvePmName(materialRequestId) {
   return history?.actorUserId?.name || null;
 }
 
+async function resolveRfqRaisedByForPr(purchaseRequestId) {
+  if (!purchaseRequestId) {
+    return { rfqId: null, rfqNumber: null, rfqRaisedByName: null, rfqRaisedByRole: null };
+  }
+  const { RFQ, User, StatusHistory: SH } = require('../models');
+  const rfq = await RFQ.findOne({ purchaseRequestId })
+    .select('_id rfqNumber createdByUserId')
+    .lean();
+  if (!rfq) {
+    return { rfqId: null, rfqNumber: null, rfqRaisedByName: null, rfqRaisedByRole: null };
+  }
+
+  let raisedByName = null;
+  let raisedByRole = null;
+  if (rfq.createdByUserId) {
+    const user = await User.findById(rfq.createdByUserId).select('name role').lean();
+    raisedByName = user?.name || null;
+    raisedByRole = user?.role || null;
+  } else {
+    const history = await SH.findOne({
+      entityType: 'RFQ',
+      entityId: rfq._id,
+      toStatus: 'OPEN',
+    })
+      .sort({ timestamp: 1 })
+      .populate('actorUserId', 'name role')
+      .lean();
+    raisedByName = history?.actorUserId?.name || null;
+    raisedByRole = history?.actorUserId?.role || null;
+  }
+
+  return {
+    rfqId: rfq._id.toString(),
+    rfqNumber: rfq.rfqNumber || null,
+    rfqRaisedByName: raisedByName,
+    rfqRaisedByRole: raisedByRole,
+  };
+}
+
 function buildMaterialsSummary(mr) {
   if (!mr) return '';
   const items = getIndentLineItems(mr);
@@ -40,6 +79,7 @@ async function serializeExecutivePurchaseRequestListItem(pr) {
   const base = serializePurchaseRequest(pr);
   const mr = pr.materialRequestId;
   const pmName = mr?._id ? await resolvePmName(mr._id) : null;
+  const rfqMeta = await resolveRfqRaisedByForPr(pr._id);
 
   // PO_CREATED on PR means a PO exists — show the live PO desk, not a fake "Coordinator" label.
   let status = base.status;
@@ -76,6 +116,7 @@ async function serializeExecutivePurchaseRequestListItem(pr) {
     pmRemarks: mr?.pmForwardRemark || '',
     executiveRecommendation: pr.executiveRecommendation || null,
     executiveRecommendationRemark: pr.executiveRecommendationRemark || '',
+    ...rfqMeta,
   };
 }
 
@@ -86,6 +127,7 @@ async function enrichPurchaseRequestDetail(pr) {
 
   const lineItems = getIndentLineItems(mr);
   const pmName = await resolvePmName(mr._id);
+  const rfqMeta = await resolveRfqRaisedByForPr(pr._id);
 
   let status = base.status;
   let pendingWith = null;
@@ -124,6 +166,7 @@ async function enrichPurchaseRequestDetail(pr) {
     executiveRecommendationRemark: pr.executiveRecommendationRemark || '',
     executiveRecommendedAt: pr.executiveRecommendedAt?.toISOString?.() || null,
     canExecutiveDecide: pr.status === 'OPEN' && !pr.executiveRecommendation,
+    ...rfqMeta,
     items: lineItems.map((item) => {
       const mat = item.materialId;
       return {
