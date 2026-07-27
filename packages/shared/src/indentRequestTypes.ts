@@ -49,13 +49,13 @@ export function computeIndentRunningTotal(
   return Math.round((sum + Number.EPSILON) * 100) / 100;
 }
 
-/** Site / store must not see pricing on above-cap indents. */
+/** Site / store must not see pricing on indents (Below or Above ₹5,000). */
 export function hideIndentPricingForRole(
   role: string,
   indentRequestType?: IndentRequestType | null
 ): boolean {
-  if (indentRequestType !== 'ABOVE_5000') return false;
-  return role === 'SITE_INCHARGE' || role === 'STORE_INCHARGE';
+  if (role !== 'SITE_INCHARGE' && role !== 'STORE_INCHARGE') return false;
+  return indentRequestType === 'BELOW_5000' || indentRequestType === 'ABOVE_5000' || !indentRequestType;
 }
 
 export const INDENT_CAP_REACHED_MESSAGE =

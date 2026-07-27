@@ -1,6 +1,10 @@
 const express = require('express');
 const { body, param } = require('express-validator');
-const { UserRole } = require('@afios/shared');
+const {
+  UserRole,
+  canEditIndentOneLevelAhead,
+  indentEditLockedMessage,
+} = require('@afios/shared');
 const {
   MaterialRequest,
   Material,
@@ -455,6 +459,10 @@ router.get('/:id', param('id').isMongoId(), validate, async (req, res, next) => 
     }
 
     const data = await serializeMaterialRequestEnriched(mr, req.user.role);
+    if (req.user.role === UserRole.SITE_INCHARGE) {
+      const requesterId = resolveId(mr.requestedByUserId);
+      data.canEdit = !!data.canEdit && requesterId === req.user._id.toString();
+    }
     if (req.user.role === UserRole.PROJECT_MANAGER) {
       const { enrichIndentWithCrossProjectStock } = require('../services/pmCrossProjectStockService');
       const cross = await enrichIndentWithCrossProjectStock(mr, req.user);
@@ -470,6 +478,138 @@ router.get('/:id', param('id').isMongoId(), validate, async (req, res, next) => 
     next(err);
   }
 });
+
+router.patch(
+  '/:id',
+  requireCapability('EDIT_MATERIAL_REQUEST'),
+  [
+    param('id').isMongoId(),
+    body('purpose').optional().trim().notEmpty().isLength({ max: 500 }),
+    body('requestedByName').optional().trim().notEmpty().isLength({ max: 120 }),
+    body('location').optional({ nullable: true }).trim().isLength({ max: 200 }),
+    body('requiredByDate').optional({ nullable: true }).isISO8601(),
+    body('indentCategoryId').optional().isMongoId(),
+    body('indentRequestType').optional().isIn(['BELOW_5000', 'ABOVE_5000']),
+    body('items').optional().isArray({ min: 1, max: 1 }),
+    body('items.*.materialId').optional().isMongoId(),
+    body('items.*.unit').optional().trim(),
+    body('items.*.quantityRequested').optional().isFloat({ min: 0.01 }),
+  ],
+  validate,
+  async (req, res, next) => {
+    try {
+      const mr = await MaterialRequest.findById(req.params.id);
+      if (!mr) {
+        return res.status(404).json({ statusCode: 404, message: 'Request not found' });
+      }
+
+      if (!canEditIndentOneLevelAhead(req.user.role, mr.status)) {
+        return res.status(403).json({
+          statusCode: 403,
+          message: indentEditLockedMessage(req.user.role, mr.status),
+        });
+      }
+
+      if (req.user.role === UserRole.SITE_INCHARGE) {
+        if (resolveId(mr.requestedByUserId) !== req.user._id.toString()) {
+          return res.status(403).json({ statusCode: 403, message: 'Forbidden' });
+        }
+      } else if (req.user.role === UserRole.STORE_INCHARGE) {
+        if (!userCanAccessSite(req.user, mr.siteId)) {
+          return res.status(403).json({ statusCode: 403, message: 'Forbidden' });
+        }
+      } else if (req.user.role === UserRole.PROJECT_MANAGER) {
+        if (!userCanAccessProject(req.user, mr.projectId)) {
+          return res.status(403).json({ statusCode: 403, message: 'Forbidden' });
+        }
+      }
+
+      const fromStatus = mr.status;
+      const updates = [];
+
+      if (req.body.purpose != null) {
+        mr.purpose = String(req.body.purpose).trim();
+        updates.push('purpose');
+      }
+      if (req.body.requestedByName != null) {
+        mr.requestedByName = String(req.body.requestedByName).trim();
+        updates.push('requestedByName');
+      }
+      if (req.body.location != null) {
+        mr.location = String(req.body.location).trim();
+        updates.push('location');
+      }
+      if (req.body.requiredByDate !== undefined) {
+        mr.requiredByDate = req.body.requiredByDate
+          ? new Date(req.body.requiredByDate)
+          : undefined;
+        updates.push('requiredByDate');
+      }
+      if (req.body.indentCategoryId) {
+        await resolveIndentCategory(req.body.indentCategoryId);
+        mr.indentCategoryId = req.body.indentCategoryId;
+        updates.push('indentCategoryId');
+      }
+
+      if (req.body.items?.length) {
+        let items = req.body.items;
+        if (items.length > 1) items = items.slice(0, 1);
+        const resolvedItems = await resolveIndentLineItems(items, req.user._id);
+        if (!resolvedItems.length) {
+          return res.status(400).json({
+            statusCode: 400,
+            message: 'At least one material item is required',
+          });
+        }
+        const nextType = req.body.indentRequestType || mr.indentRequestType;
+        const { validateIndentRequestTypeForCreate } = require('../services/indentRequestTypeService');
+        await validateIndentRequestTypeForCreate(nextType, resolvedItems);
+        mr.items = resolvedItems;
+        mr.materialId = resolvedItems[0].materialId;
+        mr.quantityRequested = resolvedItems[0].quantityRequested;
+        updates.push('items');
+      }
+
+      if (req.body.indentRequestType) {
+        const { validateIndentRequestTypeForCreate } = require('../services/indentRequestTypeService');
+        await validateIndentRequestTypeForCreate(req.body.indentRequestType, getIndentLineItems(mr));
+        mr.indentRequestType = req.body.indentRequestType;
+        updates.push('indentRequestType');
+      }
+
+      if (!updates.length) {
+        return res.status(400).json({ statusCode: 400, message: 'No changes provided' });
+      }
+
+      mr.estimatedValue = await estimateIndentAmount(mr);
+      await mr.save();
+
+      await statusHistoryService.record(
+        'MaterialRequest',
+        mr._id,
+        fromStatus,
+        mr.status,
+        req.user._id,
+        `Indent updated by ${req.user.role} (one-level-ahead): ${updates.join(', ')}`
+      );
+
+      req.auditEntityType = 'MaterialRequest';
+      req.auditEntityId = mr._id;
+
+      const populated = await MaterialRequest.findById(mr._id).populate(populateFields);
+      const data = await serializeMaterialRequestEnriched(populated, req.user.role);
+      if (req.user.role === UserRole.SITE_INCHARGE) {
+        data.canEdit = true;
+      }
+      res.json({ data, message: 'Indent updated' });
+    } catch (err) {
+      if (err.statusCode) {
+        return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
+      }
+      next(err);
+    }
+  }
+);
 
 async function resolveIndentLineItems(rawItems, createdByUserId) {
   const { resolveIndentLineItems: resolveItems } = require('../services/siteMaterialService');
@@ -491,6 +631,7 @@ router.post(
     body('requestedByName').trim().notEmpty().withMessage('Request by name is required').isLength({ max: 120 }),
     body('indentCategoryId').isMongoId().withMessage('Indent category is required'),
     body('indentRequestType').isIn(['BELOW_5000', 'ABOVE_5000']),
+    body('location').optional({ nullable: true }).trim().isLength({ max: 200 }),
     body('requiredByDate').optional().isISO8601(),
   ],
   validate,
@@ -510,6 +651,11 @@ router.post(
           });
         }
         items = [{ materialId: req.body.materialId, quantityRequested: req.body.quantityRequested }];
+      }
+
+      // Site/store indents are single-product only.
+      if (items.length > 1) {
+        items = items.slice(0, 1);
       }
 
       const resolvedItems = await resolveIndentLineItems(items, req.user._id);
@@ -535,6 +681,7 @@ router.post(
         requestedByUserId: req.user._id,
         purpose: req.body.purpose.trim(),
         requestedByName: req.body.requestedByName.trim(),
+        location: String(req.body.location || '').trim(),
         indentCategoryId: req.body.indentCategoryId,
         indentRequestType: req.body.indentRequestType,
         requiredByDate: req.body.requiredByDate ? new Date(req.body.requiredByDate) : undefined,

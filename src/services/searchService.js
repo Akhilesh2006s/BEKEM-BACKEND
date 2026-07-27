@@ -47,10 +47,20 @@ async function searchMaterials(q, user) {
 
 async function searchVendors(q, user, { materialId } = {}) {
   const term = String(q || '').trim();
-  const clauses = [
-    { isActive: { $ne: false } },
-    { authorizationStatus: { $in: ['AUTHORIZED', null] } },
-  ];
+  const { hasCapability } = require('../middleware/rbac');
+  const canCreate = hasCapability(user.role, 'CREATE_VENDOR');
+  const authClause = canCreate
+    ? {
+        $or: [
+          { isActive: { $ne: false }, authorizationStatus: { $in: ['AUTHORIZED', null] } },
+          { authorizationStatus: 'PENDING' },
+        ],
+      }
+    : {
+        isActive: { $ne: false },
+        authorizationStatus: { $in: ['AUTHORIZED', null] },
+      };
+  const clauses = [authClause];
   if (materialId) {
     const material = await Material.findById(materialId).lean();
     const orClauses = [
@@ -72,16 +82,15 @@ async function searchVendors(q, user, { materialId } = {}) {
         { gstNumber: regex },
         { category: regex },
         { contactPerson: regex },
+        { phone: regex },
+        { contactInfo: regex },
       ],
     });
   }
   const filter = clauses.length > 1 ? { $and: clauses } : clauses[0];
   let vendors = await Vendor.find(filter).sort({ name: 1 }).limit(SEARCH_LIMIT).lean();
   if (!vendors.length) {
-    const broadClauses = [
-      { isActive: { $ne: false } },
-      { authorizationStatus: { $in: ['AUTHORIZED', null] } },
-    ];
+    const broadClauses = [authClause];
     if (term.length >= 1) {
       const regex = new RegExp(escapeRegex(term), 'i');
       broadClauses.push({
@@ -91,6 +100,8 @@ async function searchVendors(q, user, { materialId } = {}) {
           { gstNumber: regex },
           { category: regex },
           { contactPerson: regex },
+          { phone: regex },
+          { contactInfo: regex },
         ],
       });
     }
@@ -107,6 +118,7 @@ async function searchVendors(q, user, { materialId } = {}) {
     name: v.name,
     gstNumber: v.gstNumber || '',
     category: v.category || '',
+    phone: v.phone || '',
   }));
 }
 

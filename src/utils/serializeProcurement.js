@@ -145,6 +145,7 @@ function serializePurchaseOrder(po) {
       itemCode: li.itemCode || '',
       hsnCode: li.hsnCode,
       quantity: li.quantity,
+      unit: li.unit || '',
       rate: li.rate,
       gstPercent: li.gstPercent,
       amount: li.amount,

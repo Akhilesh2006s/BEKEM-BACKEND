@@ -16,6 +16,6 @@ export declare function computeIndentRunningTotal(lines: Array<{
     quantity: number;
     material: Pick<MaterialDto, 'unitPrice' | 'referenceUnitPrice'>;
 }>): number;
-/** Site / store must not see pricing on above-cap indents. */
+/** Site / store must not see pricing on indents (Below or Above ₹5,000). */
 export declare function hideIndentPricingForRole(role: string, indentRequestType?: IndentRequestType | null): boolean;
 export declare const INDENT_CAP_REACHED_MESSAGE = "The \u20B95,000 limit for this indent has been reached. Please create an Above \u20B95,000 indent request if additional materials are required.";

@@ -1,4 +1,4 @@
-const { UserRole, hideIndentPricingForRole } = require('@afios/shared');
+const { UserRole, hideIndentPricingForRole, canEditIndentOneLevelAhead } = require('@afios/shared');
 const { getIndentLineItems, pendingWithLabel } = require('../services/materialRequestHelpers');
 
 function resolveId(ref) {
@@ -135,6 +135,7 @@ function serializeMaterialRequest(mr, stockContext, pricingContext) {
     quantityRequested: first?.quantityRequested,
     quantityAllocated: first?.quantityAllocated || 0,
     purpose: mr.purpose || '',
+    location: mr.location || '',
     requestedByName: mr.requestedByName || mr.requestedByUserId?.name || '',
     requiredByDate: mr.requiredByDate?.toISOString?.() || mr.requiredByDate || null,
     requestedByUserId: resolveId(mr.requestedByUserId),
@@ -233,6 +234,7 @@ async function serializeMaterialRequestEnriched(mr, viewerRole) {
   if (viewerRole && hideIndentPricingForRole(viewerRole, data.indentRequestType)) {
     stripIndentPricingFromResponse(data);
   }
+  data.canEdit = canEditIndentOneLevelAhead(viewerRole, data.status);
   return data;
 }
 

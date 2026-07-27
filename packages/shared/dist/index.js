@@ -100,10 +100,16 @@ var ProjectStatus;
     ProjectStatus["COMPLETED"] = "COMPLETED";
 })(ProjectStatus || (exports.ProjectStatus = ProjectStatus = {}));
 exports.PERMISSION_MATRIX = {
-    [UserRole.SITE_INCHARGE]: ['VIEW_OWN_SCOPE', 'CREATE_MATERIAL_REQUEST', 'REPORT_INCIDENT'],
+    [UserRole.SITE_INCHARGE]: [
+        'VIEW_OWN_SCOPE',
+        'CREATE_MATERIAL_REQUEST',
+        'EDIT_MATERIAL_REQUEST',
+        'REPORT_INCIDENT',
+    ],
     [UserRole.STORE_INCHARGE]: [
         'VIEW_OWN_SCOPE',
         'CREATE_MATERIAL_REQUEST',
+        'EDIT_MATERIAL_REQUEST',
         'VIEW_FINANCE',
         'ALLOCATE_MATERIAL_REQUEST',
         'FORWARD_MATERIAL_REQUEST',
@@ -116,6 +122,7 @@ exports.PERMISSION_MATRIX = {
     ],
     [UserRole.PROJECT_MANAGER]: [
         'VIEW_OWN_SCOPE',
+        'EDIT_MATERIAL_REQUEST',
         'ALLOCATE_MATERIAL_REQUEST',
         'FORWARD_MATERIAL_REQUEST',
         'APPROVE_MATERIAL_REQUEST',
@@ -130,6 +137,7 @@ exports.PERMISSION_MATRIX = {
     ],
     [UserRole.EXECUTIVE]: [
         'VIEW_ALL_PROJECTS',
+        'EDIT_MATERIAL_REQUEST',
         'APPROVE_MATERIAL_REQUEST',
         'CREATE_PURCHASE_REQUEST',
         'CREATE_RFQ',
@@ -142,6 +150,7 @@ exports.PERMISSION_MATRIX = {
     ],
     [UserRole.COORDINATOR]: [
         'VIEW_ALL_PROJECTS',
+        'EDIT_MATERIAL_REQUEST',
         'VERIFY_RECORDS',
         'EDIT_COORDINATOR_RECORDS',
         'CREATE_WORK_ORDER',
@@ -174,7 +183,7 @@ exports.ROLE_COLORS = {
     [UserRole.CHAIRMAN]: { primary: '#1A4FA0', accent: '#E8F0FA' },
 };
 exports.ROLE_LABELS = {
-    [UserRole.SITE_INCHARGE]: 'Indent raiser',
+    [UserRole.SITE_INCHARGE]: 'New indent',
     [UserRole.STORE_INCHARGE]: 'Store Incharge',
     [UserRole.PROJECT_MANAGER]: 'Project Manager',
     [UserRole.EXECUTIVE]: 'Executive',
@@ -187,3 +196,4 @@ __exportStar(require("./locales"), exports);
 __exportStar(require("./materialConstants"), exports);
 __exportStar(require("./gstMath"), exports);
 __exportStar(require("./indentRequestTypes"), exports);
+__exportStar(require("./indentEditPolicy"), exports);

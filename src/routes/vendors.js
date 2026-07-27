@@ -91,17 +91,40 @@ router.get('/', async (req, res, next) => {
         strict: strict === 'true' || strict === '1',
       });
     } else {
-      const filter =
-        includePending === 'true' && hasCapability(req.user.role, 'MANAGE_VENDORS')
-          ? {}
+      const manageAll = includePending === 'true' && hasCapability(req.user.role, 'MANAGE_VENDORS');
+      const canCreate = hasCapability(req.user.role, 'CREATE_VENDOR');
+      /** Authorized vendors, plus PENDING ones so Executive can reuse RFQ-created vendors. */
+      const filter = manageAll
+        ? {}
+        : canCreate
+          ? {
+              $or: [
+                { isActive: { $ne: false }, authorizationStatus: { $in: ['AUTHORIZED', null] } },
+                { authorizationStatus: 'PENDING' },
+              ],
+            }
           : { isActive: { $ne: false }, authorizationStatus: { $in: ['AUTHORIZED', null] } };
       if (search) {
         const term = search.trim();
-        filter.$or = [
-          { name: { $regex: term, $options: 'i' } },
-          { category: { $regex: term, $options: 'i' } },
-          { address: { $regex: term, $options: 'i' } },
+        filter.$and = [
+          ...(filter.$and || []),
+          {
+            $or: [
+              { name: { $regex: term, $options: 'i' } },
+              { category: { $regex: term, $options: 'i' } },
+              { address: { $regex: term, $options: 'i' } },
+              { phone: { $regex: term, $options: 'i' } },
+              { contactPerson: { $regex: term, $options: 'i' } },
+              { gstNumber: { $regex: term, $options: 'i' } },
+              { code: { $regex: term, $options: 'i' } },
+            ],
+          },
         ];
+        if (filter.$or && !manageAll) {
+          // Keep auth $or as first clause under $and
+          filter.$and.unshift({ $or: filter.$or });
+          delete filter.$or;
+        }
       }
       vendors = await Vendor.find(filter).populate('materialIds').sort({ name: 1 });
     }

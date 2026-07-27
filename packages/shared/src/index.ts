@@ -86,6 +86,7 @@ export type Capability =
   | 'VIEW_OWN_SCOPE'
   | 'VIEW_ALL_PROJECTS'
   | 'CREATE_MATERIAL_REQUEST'
+  | 'EDIT_MATERIAL_REQUEST'
   | 'ALLOCATE_MATERIAL_REQUEST'
   | 'FORWARD_MATERIAL_REQUEST'
   | 'APPROVE_MATERIAL_REQUEST'
@@ -122,10 +123,16 @@ export type Capability =
   | 'VIEW_USER_ANALYTICS';
 
 export const PERMISSION_MATRIX: Record<UserRole, Capability[]> = {
-  [UserRole.SITE_INCHARGE]: ['VIEW_OWN_SCOPE', 'CREATE_MATERIAL_REQUEST', 'REPORT_INCIDENT'],
+  [UserRole.SITE_INCHARGE]: [
+    'VIEW_OWN_SCOPE',
+    'CREATE_MATERIAL_REQUEST',
+    'EDIT_MATERIAL_REQUEST',
+    'REPORT_INCIDENT',
+  ],
   [UserRole.STORE_INCHARGE]: [
     'VIEW_OWN_SCOPE',
     'CREATE_MATERIAL_REQUEST',
+    'EDIT_MATERIAL_REQUEST',
     'VIEW_FINANCE',
     'ALLOCATE_MATERIAL_REQUEST',
     'FORWARD_MATERIAL_REQUEST',
@@ -138,6 +145,7 @@ export const PERMISSION_MATRIX: Record<UserRole, Capability[]> = {
   ],
   [UserRole.PROJECT_MANAGER]: [
     'VIEW_OWN_SCOPE',
+    'EDIT_MATERIAL_REQUEST',
     'ALLOCATE_MATERIAL_REQUEST',
     'FORWARD_MATERIAL_REQUEST',
     'APPROVE_MATERIAL_REQUEST',
@@ -152,6 +160,7 @@ export const PERMISSION_MATRIX: Record<UserRole, Capability[]> = {
   ],
   [UserRole.EXECUTIVE]: [
     'VIEW_ALL_PROJECTS',
+    'EDIT_MATERIAL_REQUEST',
     'APPROVE_MATERIAL_REQUEST',
     'CREATE_PURCHASE_REQUEST',
     'CREATE_RFQ',
@@ -164,6 +173,7 @@ export const PERMISSION_MATRIX: Record<UserRole, Capability[]> = {
   ],
   [UserRole.COORDINATOR]: [
     'VIEW_ALL_PROJECTS',
+    'EDIT_MATERIAL_REQUEST',
     'VERIFY_RECORDS',
     'EDIT_COORDINATOR_RECORDS',
     'CREATE_WORK_ORDER',
@@ -198,7 +208,7 @@ export const ROLE_COLORS: Record<UserRole, { primary: string; accent: string }> 
 };
 
 export const ROLE_LABELS: Record<UserRole, string> = {
-  [UserRole.SITE_INCHARGE]: 'Indent raiser',
+  [UserRole.SITE_INCHARGE]: 'New indent',
   [UserRole.STORE_INCHARGE]: 'Store Incharge',
   [UserRole.PROJECT_MANAGER]: 'Project Manager',
   [UserRole.EXECUTIVE]: 'Executive',
@@ -212,3 +222,4 @@ export * from './locales';
 export * from './materialConstants';
 export * from './gstMath';
 export * from './indentRequestTypes';
+export * from './indentEditPolicy';

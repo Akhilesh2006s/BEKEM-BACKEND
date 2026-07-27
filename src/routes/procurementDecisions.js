@@ -63,7 +63,7 @@ router.post(
   [
     param('id').isMongoId(),
     body('method').optional().isIn(['PURCHASE_ORDER', 'BRANCH_TRANSFER']),
-    body('remark').trim().notEmpty().withMessage('Remark is required'),
+    body('remark').optional().trim(),
   ],
   validate,
   async (req, res, next) => {
@@ -72,7 +72,7 @@ router.post(
       if (!mr) return { statusCode: 404, body: { statusCode: 404, message: 'Not found' } };
       const data = await executiveDecide(mr, req.user, {
         method: req.body.method || 'PURCHASE_ORDER',
-        remark: req.body.remark.trim(),
+        remark: (req.body.remark || '').trim(),
       });
       return { statusCode: 200, body: { data } };
     }, next);

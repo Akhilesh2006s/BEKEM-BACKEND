@@ -195,10 +195,25 @@ router.get('/:id', param('id').isMongoId(), validate, async (req, res, next) => 
         const { Material } = require('../models');
 
         // Prefer this PO's lines so approval shows vendors/prices for items on this order.
+        // Unit must come from PO/indent line (e.g. bags), not Material Master default (e.g. Mts).
         let lineItems = [];
         const poMaterialIds = (po.lineItems || [])
           .map((li) => (li.materialId?._id || li.materialId)?.toString?.() || '')
           .filter(Boolean);
+
+        let indentUnitByMaterial = new Map();
+        if (pr.materialRequestId) {
+          const mr = await require('../models').MaterialRequest.findById(pr.materialRequestId).populate(
+            'items.materialId'
+          );
+          if (mr) {
+            for (const item of getIndentLineItems(mr)) {
+              const mid = (item.materialId?._id || item.materialId)?.toString?.() || '';
+              if (mid) indentUnitByMaterial.set(mid, item.unit || item.materialId?.unit || '');
+            }
+            if (!poMaterialIds.length) lineItems = getIndentLineItems(mr);
+          }
+        }
 
         if (poMaterialIds.length) {
           const mats = await Material.find({ _id: { $in: poMaterialIds } })
@@ -210,22 +225,17 @@ router.get('/:id', param('id').isMongoId(), validate, async (req, res, next) => 
               const mid = (li.materialId?._id || li.materialId)?.toString?.() || '';
               if (!mid) return null;
               const m = byId.get(mid);
+              const unit =
+                String(li.unit || indentUnitByMaterial.get(mid) || m?.unit || 'Nos').trim() || 'Nos';
               return {
                 materialId: m
-                  ? { _id: m._id, name: m.name, unit: m.unit }
-                  : { _id: mid, name: li.description || 'Item', unit: li.unit || 'Nos' },
+                  ? { _id: m._id, name: m.name, unit }
+                  : { _id: mid, name: li.description || 'Item', unit },
                 quantityRequested: Number(li.quantity || 0),
-                unit: m?.unit || li.unit || 'Nos',
+                unit,
               };
             })
             .filter(Boolean);
-        }
-
-        if (!lineItems.length && pr.materialRequestId) {
-          const mr = await require('../models').MaterialRequest.findById(pr.materialRequestId).populate(
-            'items.materialId'
-          );
-          if (mr) lineItems = getIndentLineItems(mr);
         }
 
         const quantity =
@@ -335,6 +345,7 @@ router.post(
     body('orders.*.lineItems.*.materialId').optional().isMongoId(),
     body('orders.*.lineItems.*.hsnCode').optional().isString(),
     body('orders.*.lineItems.*.quantity').optional().isFloat({ min: 0 }),
+    body('orders.*.lineItems.*.unit').optional().trim(),
     body('orders.*.lineItems.*.rate').optional().isFloat({ min: 0 }),
     body('orders.*.lineItems.*.gstPercent').optional().isFloat({ min: 0 }),
     body('orders.*.lineItems.*.amount').optional().isFloat({ min: 0 }),
@@ -408,6 +419,7 @@ router.post(
     body('lineItems.*.materialId').optional().isMongoId(),
     body('lineItems.*.hsnCode').optional().isString(),
     body('lineItems.*.quantity').optional().isFloat({ min: 0 }),
+    body('lineItems.*.unit').optional().trim(),
     body('lineItems.*.rate').optional().isFloat({ min: 0 }),
     body('lineItems.*.gstPercent').optional().isFloat({ min: 0 }),
     body('lineItems.*.amount').optional().isFloat({ min: 0 }),

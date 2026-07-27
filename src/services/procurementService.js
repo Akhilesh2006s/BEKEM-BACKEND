@@ -66,6 +66,7 @@ async function buildLineItemsFromIndent(mr, budgetAmount) {
       itemCode: mat.code,
       hsnCode: mat.hsnCode || '',
       quantity: qty,
+      unit: item.unit || mat.unit || 'Nos',
       rate,
       gstPercent: mat.gstRate ?? 18,
       amount,
@@ -256,6 +257,9 @@ function normalizeWizardLineItems(rawItems, mr, fallbackAmount, { requireExplici
       itemCode: (mat && typeof mat === 'object' ? mat.code : row.itemCode) || '',
       hsnCode: row.hsnCode || (mat && typeof mat === 'object' ? mat.hsnCode : '') || '',
       quantity: Number(row.quantity),
+      unit:
+        String(row.unit || indentLine?.unit || (mat && typeof mat === 'object' ? mat.unit : '') || 'Nos').trim() ||
+        'Nos',
       rate: Number(row.rate),
       gstPercent,
       amount: computed.amount,

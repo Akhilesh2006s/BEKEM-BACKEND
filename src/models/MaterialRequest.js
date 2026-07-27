@@ -49,6 +49,8 @@ const materialRequestSchema = new mongoose.Schema(
     quantityRequested: { type: Number },
     quantityAllocated: { type: Number, default: 0 },
     purpose: { type: String, default: '' },
+    /** Free-text delivery / use location entered at indent creation. */
+    location: { type: String, default: '' },
     /** Free-text name entered at indent creation (site manager flow). */
     requestedByName: { type: String, default: '' },
     requiredByDate: { type: Date },
@@ -80,7 +82,7 @@ const materialRequestSchema = new mongoose.Schema(
     coordinatorProcurementDecidedAt: { type: Date },
     /** SITE = site-raised indent; EXECUTIVE = HO-only indent (Coordinator-generated; hidden from site/store/PM). */
     origin: { type: String, enum: ['SITE', 'EXECUTIVE'], default: 'SITE' },
-    /** BELOW_5000 = capped petty indent with visible pricing; ABOVE_5000 = standard indent. */
+    /** BELOW_5000 = capped petty indent; ABOVE_5000 = standard indent (pricing hidden on site/store UI). */
     indentRequestType: { type: String, enum: ['BELOW_5000', 'ABOVE_5000'], default: 'ABOVE_5000' },
     /** Whole-indent category — routes executive notifications and visibility. */
     indentCategoryId: { type: mongoose.Schema.Types.ObjectId, ref: 'IndentCategory' },

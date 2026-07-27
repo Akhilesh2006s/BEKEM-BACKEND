@@ -38,10 +38,10 @@ function computeIndentRunningTotal(lines) {
     const sum = lines.reduce((acc, line) => acc + computeIndentLineTotal(line.quantity, resolveMaterialUnitPrice(line.material)), 0);
     return Math.round((sum + Number.EPSILON) * 100) / 100;
 }
-/** Site / store must not see pricing on above-cap indents. */
+/** Site / store must not see pricing on indents (Below or Above ₹5,000). */
 function hideIndentPricingForRole(role, indentRequestType) {
-    if (indentRequestType !== 'ABOVE_5000')
+    if (role !== 'SITE_INCHARGE' && role !== 'STORE_INCHARGE')
         return false;
-    return role === 'SITE_INCHARGE' || role === 'STORE_INCHARGE';
+    return indentRequestType === 'BELOW_5000' || indentRequestType === 'ABOVE_5000' || !indentRequestType;
 }
 exports.INDENT_CAP_REACHED_MESSAGE = 'The ₹5,000 limit for this indent has been reached. Please create an Above ₹5,000 indent request if additional materials are required.';

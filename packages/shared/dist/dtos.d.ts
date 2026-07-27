@@ -391,10 +391,25 @@ export interface CreateIndentDto {
     purpose: string;
     requestedByName: string;
     indentCategoryId: string;
+    location?: string;
+    requiredByDate?: string;
     items: Array<{
         materialId?: string;
         /** @deprecated Use materialId after POST /materials/site-request */
         customName?: string;
+        unit?: string;
+        quantityRequested: number;
+    }>;
+}
+export interface UpdateIndentDto {
+    purpose?: string;
+    requestedByName?: string;
+    location?: string;
+    requiredByDate?: string | null;
+    indentCategoryId?: string;
+    indentRequestType?: 'BELOW_5000' | 'ABOVE_5000';
+    items?: Array<{
+        materialId?: string;
         unit?: string;
         quantityRequested: number;
     }>;
@@ -419,6 +434,9 @@ export interface MaterialRequestDto {
     quantityAllocated?: number;
     purpose?: string;
     requestedByName?: string;
+    location?: string;
+    /** True when viewer may edit under one-level-ahead policy. */
+    canEdit?: boolean;
     indentCategoryId?: string;
     indentCategory?: IndentCategoryDto;
     requiredByDate?: string | null;
@@ -756,6 +774,8 @@ export interface PoLineItemDto {
     itemCode?: string;
     hsnCode?: string;
     quantity: number;
+    /** Unit from indent (may differ from catalog default). */
+    unit?: string;
     rate: number;
     gstPercent?: number;
     amount: number;

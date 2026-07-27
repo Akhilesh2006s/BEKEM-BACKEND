@@ -19,6 +19,8 @@ const poLineSchema = new mongoose.Schema(
     itemCode: { type: String, default: '' },
     hsnCode: { type: String, default: '' },
     quantity: { type: Number, required: true },
+    /** Unit from indent / wizard — do not substitute Material Master default. */
+    unit: { type: String, default: '' },
     rate: { type: Number, required: true },
     gstPercent: { type: Number, default: 18 },
     amount: { type: Number, required: true },
