@@ -591,6 +591,11 @@ async function submitRfqWizard(
   }
 
   if (Array.isArray(quotations) && quotations.length) {
+    if (quotations.length > 100) {
+      const err = new Error('Maximum 100 vendors allowed on an RFQ');
+      err.statusCode = 400;
+      throw err;
+    }
     await saveRfqQuotations(rfqId, user, { quotations });
   }
 

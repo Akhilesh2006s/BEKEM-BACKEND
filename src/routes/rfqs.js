@@ -32,7 +32,7 @@ router.post(
   requireCapability('CREATE_RFQ'),
   [
     body('rfqId').isMongoId(),
-    body('quotations').optional().isArray({ min: 1 }),
+    body('quotations').optional().isArray({ min: 1, max: 100 }),
     body('quotations.*.vendorId').optional().isMongoId(),
     body('quotations.*.rate').optional().isFloat({ min: 0 }),
     body('quotations.*.gstPercent').optional().isFloat({ min: 0 }),
@@ -109,7 +109,7 @@ router.put(
   '/:id/quotations',
   param('id').isMongoId(),
   [
-    body('quotations').isArray({ min: 1 }),
+    body('quotations').isArray({ min: 1, max: 100 }),
     body('quotations.*.vendorId').isMongoId(),
     body('quotations.*.rate').isFloat({ min: 0 }),
     body('quotations.*.gstPercent').optional().isFloat({ min: 0 }),
