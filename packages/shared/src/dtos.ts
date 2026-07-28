@@ -139,6 +139,8 @@ export interface ProcurementDecisionItemDto {
   requestedQty: number;
   availableQty: number;
   requiredQty: number;
+  unitPrice?: number;
+  lineTotal?: number;
   enterpriseStock: EnterpriseStockRowDto[];
 }
 

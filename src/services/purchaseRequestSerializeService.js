@@ -155,7 +155,7 @@ async function enrichPurchaseRequestDetail(pr) {
     linkedPoRef,
     pmName,
     pmRemarks: mr.pmForwardRemark || '',
-    requestedBy: mr.requestedByUserId?.name || null,
+    requestedBy: mr.requestedByName || mr.requestedByUserId?.name || null,
     indentDate: mr.createdAt?.toISOString?.() || null,
     requestDate: pr.createdAt?.toISOString?.() || null,
     priority: derivePriority(pr.amountEstimate, mr.escalatedToHo),

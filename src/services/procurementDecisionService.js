@@ -78,17 +78,21 @@ async function loadDecisionIndent(id) {
 
 async function buildProcurementDecisionDto(mr) {
   const { enrichIndentWithStock } = require('./indentStockService');
+  const { computeIndentPricing } = require('./indentPricingService');
   const stockContext = await enrichIndentWithStock(mr);
+  const pricingContext = await computeIndentPricing(mr);
   const lineItems = getIndentLineItems(mr);
   const materialIds = lineItems.map((item) =>
     (item.materialId?._id || item.materialId).toString()
   );
   const enterpriseByMaterial = await getEnterpriseStockByMaterial(materialIds);
+  const pricingByItemId = pricingContext?.byItemId || new Map();
 
   const items = lineItems.map((item) => {
     const itemId = item._id.toString();
     const mid = (item.materialId?._id || item.materialId).toString();
     const stock = stockContext.stockByLine.find((s) => s.itemId === itemId) || {};
+    const pricing = pricingByItemId.get(itemId) || {};
     const mat = item.materialId;
     return {
       id: itemId,
@@ -101,6 +105,8 @@ async function buildProcurementDecisionDto(mr) {
         stock.requestedQty ?? item.quantityRequested,
         stock.availableQty ?? 0
       ),
+      unitPrice: pricing.unitPrice ?? 0,
+      lineTotal: pricing.lineTotal ?? 0,
       enterpriseStock: enterpriseByMaterial.get(mid) || [],
     };
   });
@@ -120,7 +126,7 @@ async function buildProcurementDecisionDto(mr) {
     projectId: mr.projectId?._id?.toString() || mr.projectId?.toString(),
     projectCode: mr.projectId?.code,
     projectName: mr.projectId?.name,
-    requestedBy: mr.requestedByUserId?.name,
+    requestedBy: mr.requestedByName || mr.requestedByUserId?.name,
     purpose: mr.purpose || '',
     priority: derivePriority(mr.estimatedValue, mr.escalatedToHo),
     pmRemarks: mr.pmForwardRemark || lastForward || '',

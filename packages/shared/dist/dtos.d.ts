@@ -126,6 +126,8 @@ export interface ProcurementDecisionItemDto {
     requestedQty: number;
     availableQty: number;
     requiredQty: number;
+    unitPrice?: number;
+    lineTotal?: number;
     enterpriseStock: EnterpriseStockRowDto[];
 }
 export interface ProcurementDecisionDto {
@@ -365,6 +367,10 @@ export interface IndentLineItemDto {
     quantityIssued?: number;
     /** Unit on this indent line (may differ from catalog default). */
     unit?: string;
+    /** Per-line delivery / use location. */
+    location?: string;
+    /** Per-line required-by date (ISO). */
+    requiredByDate?: string | null;
     material?: MaterialDto;
     /** Stock comparison fields (server-computed). */
     requestedQty?: number;
@@ -398,6 +404,8 @@ export interface CreateIndentDto {
         /** @deprecated Use materialId after POST /materials/site-request */
         customName?: string;
         unit?: string;
+        location?: string;
+        requiredByDate?: string;
         quantityRequested: number;
     }>;
 }
@@ -443,6 +451,13 @@ export interface MaterialRequestDto {
     requestedByUserId: string;
     status: string;
     pendingWith?: string;
+    approverNames?: {
+        store?: string;
+        pm?: string;
+        executive?: string;
+        coordinator?: string;
+        chairman?: string;
+    };
     createdAt: string;
     updatedAt: string;
     material?: MaterialDto;
@@ -1077,6 +1092,8 @@ export interface RfqListItemDto {
     dueDate?: string | null;
     indentNumber?: string;
     purchaseRequestId?: string;
+    poId?: string | null;
+    poNumber?: string | null;
     createdAt: string;
     raisedByUserId?: string | null;
     raisedByName?: string | null;
