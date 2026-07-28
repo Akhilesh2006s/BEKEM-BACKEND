@@ -217,7 +217,11 @@ router.post(
         }
 
         const line = mr.items.find((li) => li.materialId._id?.toString() === item.materialId.toString() || li.materialId.toString() === item.materialId.toString());
-        if (line) line.quantityIssued = (line.quantityIssued || 0) + item.quantity;
+        if (line) {
+          const nextIssued = (line.quantityIssued || 0) + item.quantity;
+          line.quantityIssued = nextIssued;
+          line.quantityAllocated = Math.max(line.quantityAllocated || 0, nextIssued);
+        }
       }
 
       const fromStatus = mr.status;

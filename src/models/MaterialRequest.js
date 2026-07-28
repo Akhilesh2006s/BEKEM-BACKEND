@@ -32,6 +32,10 @@ const lineItemSchema = new mongoose.Schema(
     quantityRequested: { type: Number, required: true },
     /** Unit requested on indent (may differ from catalog default). */
     unit: { type: String, default: '' },
+    /** Per-line delivery / use location. */
+    location: { type: String, default: '' },
+    /** Per-line required-by date. */
+    requiredByDate: { type: Date },
     quantityAllocated: { type: Number, default: 0 },
     quantityIssued: { type: Number, default: 0 },
   },

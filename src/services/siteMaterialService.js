@@ -97,6 +97,8 @@ async function resolveIndentLineItems(rawItems, { createdByUserId } = {}) {
         materialId: item.materialId,
         quantityRequested: qty,
         unit: unit || catalog.unit || 'Nos',
+        location: String(item.location || '').trim(),
+        requiredByDate: item.requiredByDate ? new Date(item.requiredByDate) : undefined,
       });
       continue;
     }
@@ -112,7 +114,13 @@ async function resolveIndentLineItems(rawItems, { createdByUserId } = {}) {
       createdByUserId,
     });
 
-    resolved.push({ materialId: material._id, quantityRequested: qty, unit });
+    resolved.push({
+      materialId: material._id,
+      quantityRequested: qty,
+      unit,
+      location: String(item.location || '').trim(),
+      requiredByDate: item.requiredByDate ? new Date(item.requiredByDate) : undefined,
+    });
   }
 
   return resolved;

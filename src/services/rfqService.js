@@ -252,16 +252,38 @@ async function listRfqs(user) {
     .populate('createdByUserId', 'name role')
     .lean();
 
+  const purchaseRequestIds = [...new Set(rfqs.map((r) => r.purchaseRequestId?._id?.toString()).filter(Boolean))];
+  const poByPurchaseRequestId = new Map();
+  if (purchaseRequestIds.length) {
+    const { PurchaseOrder } = require('../models');
+    const purchaseOrders = await PurchaseOrder.find({
+      purchaseRequestId: { $in: purchaseRequestIds },
+    })
+      .sort({ createdAt: -1 })
+      .select('_id purchaseRequestId poNumber draftRef')
+      .lean();
+    for (const po of purchaseOrders) {
+      const prId = po.purchaseRequestId?.toString?.();
+      if (prId && !poByPurchaseRequestId.has(prId)) {
+        poByPurchaseRequestId.set(prId, po);
+      }
+    }
+  }
+
   return Promise.all(
     rfqs.map(async (r) => {
       const raiser = await resolveRfqRaiser(r);
+      const prId = r.purchaseRequestId?._id?.toString();
+      const linkedPo = prId ? poByPurchaseRequestId.get(prId) : null;
       return {
         id: r._id.toString(),
         rfqNumber: r.rfqNumber,
         status: r.status,
         dueDate: r.dueDate?.toISOString?.() || r.dueDate,
         indentNumber: r.purchaseRequestId?.materialRequestId?.indentNumber,
-        purchaseRequestId: r.purchaseRequestId?._id?.toString(),
+        purchaseRequestId: prId,
+        poId: linkedPo?._id?.toString?.() || null,
+        poNumber: linkedPo?.poNumber || linkedPo?.draftRef || null,
         createdAt: r.createdAt?.toISOString?.() || r.createdAt,
         ...raiser,
       };

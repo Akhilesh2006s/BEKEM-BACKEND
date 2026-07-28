@@ -269,6 +269,9 @@ router.post(
       const pr = await PurchaseRequest.findById(req.body.purchaseRequestId).populate('projectId');
       if (!pr) return res.status(404).json({ statusCode: 404, message: 'PR not found' });
       const { quotations, rfq } = await requireFinalizedRfqForPo(pr._id);
+      const includedMaterialIds = new Set(
+        (rfq?.procurementMaterialIds || []).map((id) => id?.toString?.() || String(id))
+      );
 
       const { buildComparisonTable, applyL1QuoteRatesToLineItems } = require('../services/quotationComparisonService');
       const { buildPurchaseHistoryRows } = require('../services/materialPricingService');
@@ -282,7 +285,11 @@ router.post(
           'items.materialId'
         );
         if (mr) {
-          indentLines = getIndentLineItems(mr);
+          indentLines = getIndentLineItems(mr).filter((line) => {
+            if (!includedMaterialIds.size) return true;
+            const materialId = (line.materialId?._id || line.materialId)?.toString?.() || '';
+            return includedMaterialIds.has(materialId);
+          });
           quantity = indentLines.reduce((s, l) => s + (l.quantityRequested || 0), 0) || 1;
           purchaseHistory = await buildPurchaseHistoryRows(indentLines);
         }
@@ -300,7 +307,12 @@ router.post(
         if (mr) {
           deliveryAddress = await buildConsigneeAddress(mr);
           const built = await buildLineItemsFromIndent(mr, pr.amountEstimate);
-          lineItems = applyL1QuoteRatesToLineItems(built.lineItems, quotations);
+          const filteredLineItems = built.lineItems.filter((line) => {
+            if (!includedMaterialIds.size) return true;
+            const materialId = line.materialId?.toString?.() || String(line.materialId || '');
+            return includedMaterialIds.has(materialId);
+          });
+          lineItems = applyL1QuoteRatesToLineItems(filteredLineItems, quotations);
           subtotal = lineItems.reduce((s, row) => s + (row.amount || 0), 0) || built.subtotal;
         }
       }

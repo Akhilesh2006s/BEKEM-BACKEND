@@ -490,9 +490,11 @@ router.patch(
     body('requiredByDate').optional({ nullable: true }).isISO8601(),
     body('indentCategoryId').optional().isMongoId(),
     body('indentRequestType').optional().isIn(['BELOW_5000', 'ABOVE_5000']),
-    body('items').optional().isArray({ min: 1, max: 1 }),
+    body('items').optional().isArray({ min: 1, max: 50 }),
     body('items.*.materialId').optional().isMongoId(),
     body('items.*.unit').optional().trim(),
+    body('items.*.location').optional().trim(),
+    body('items.*.requiredByDate').optional().isISO8601(),
     body('items.*.quantityRequested').optional().isFloat({ min: 0.01 }),
   ],
   validate,
@@ -553,7 +555,6 @@ router.patch(
 
       if (req.body.items?.length) {
         let items = req.body.items;
-        if (items.length > 1) items = items.slice(0, 1);
         const resolvedItems = await resolveIndentLineItems(items, req.user._id);
         if (!resolvedItems.length) {
           return res.status(400).json({
@@ -624,6 +625,8 @@ router.post(
     body('items.*.materialId').optional().isMongoId(),
     body('items.*.customName').optional().trim().isLength({ min: 1, max: 200 }),
     body('items.*.unit').optional().trim(),
+    body('items.*.location').optional().trim().isLength({ max: 200 }),
+    body('items.*.requiredByDate').optional().isISO8601(),
     body('items.*.quantityRequested').optional().isFloat({ min: 0.01 }),
     body('materialId').optional().isMongoId(),
     body('quantityRequested').optional().isFloat({ min: 0.01 }),
@@ -653,11 +656,7 @@ router.post(
         items = [{ materialId: req.body.materialId, quantityRequested: req.body.quantityRequested }];
       }
 
-      // Site/store indents are single-product only.
-      if (items.length > 1) {
-        items = items.slice(0, 1);
-      }
-
+      // Multi-product indents — each line carries its own location / date / qty.
       const resolvedItems = await resolveIndentLineItems(items, req.user._id);
       if (!resolvedItems.length) {
         return res.status(400).json({
@@ -673,6 +672,14 @@ router.post(
       const project = site.projectId;
       const indentNumber = await generateIndentNumber(project.code);
 
+      const headerLocation =
+        String(req.body.location || '').trim() ||
+        String(resolvedItems[0]?.location || '').trim();
+      const headerRequiredBy =
+        req.body.requiredByDate
+          ? new Date(req.body.requiredByDate)
+          : resolvedItems[0]?.requiredByDate || undefined;
+
       const mr = await MaterialRequest.create({
         indentNumber,
         projectId: project._id,
@@ -681,10 +688,10 @@ router.post(
         requestedByUserId: req.user._id,
         purpose: req.body.purpose.trim(),
         requestedByName: req.body.requestedByName.trim(),
-        location: String(req.body.location || '').trim(),
+        location: headerLocation,
         indentCategoryId: req.body.indentCategoryId,
         indentRequestType: req.body.indentRequestType,
-        requiredByDate: req.body.requiredByDate ? new Date(req.body.requiredByDate) : undefined,
+        requiredByDate: headerRequiredBy,
         status: 'PENDING_STORE',
         pendingWithRole: 'STORE_INCHARGE',
       });

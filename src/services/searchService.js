@@ -14,13 +14,7 @@ async function searchMaterials(q, user) {
   const regex = new RegExp(escapeRegex(term), 'i');
   const materials = await Material.find({
     isActive: { $ne: false },
-    $or: [
-      { name: regex },
-      { code: regex },
-      { description: regex },
-      { hsnCode: regex },
-      { category: regex },
-    ],
+    $or: [{ name: regex }, { code: regex }, { grade: regex }],
   })
     .sort({ code: 1 })
     .limit(SEARCH_LIMIT)

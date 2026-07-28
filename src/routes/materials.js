@@ -14,14 +14,17 @@ router.use(authenticate);
 function buildMaterialFilter(search) {
   const filter = { isActive: { $ne: false } };
   if (search) {
-    const term = search.trim();
-    filter.$or = [
-      { name: { $regex: term, $options: 'i' } },
-      { code: { $regex: term, $options: 'i' } },
-      { description: { $regex: term, $options: 'i' } },
-      { grade: { $regex: term, $options: 'i' } },
-      { category: { $regex: term, $options: 'i' } },
-    ];
+    const term = String(search).trim();
+    if (term) {
+      const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      // Name / code / grade only — avoid description/category substring noise
+      // (e.g. "earth" matching "earthing" buried in notes).
+      filter.$or = [
+        { name: { $regex: escaped, $options: 'i' } },
+        { code: { $regex: escaped, $options: 'i' } },
+        { grade: { $regex: escaped, $options: 'i' } },
+      ];
+    }
   }
   return filter;
 }
@@ -187,7 +190,29 @@ router.get('/', async (req, res, next) => {
     const filter = buildMaterialFilter(search);
     const materials = await Material.find(filter).sort({ name: 1, code: 1 }).limit(200);
     const { attachResolvedUnitPrices } = require('../services/materialPricingService');
-    const priced = await attachResolvedUnitPrices(materials.map(serializeMaterial));
+    let priced = await attachResolvedUnitPrices(materials.map(serializeMaterial));
+    // Prefer exact / prefix name+code matches so "steel" surfaces Steel first (case-insensitive).
+    const term = String(search || '').trim().toLowerCase();
+    if (term) {
+      priced = priced
+        .filter((m) => {
+          const name = String(m.name || '').toLowerCase();
+          const code = String(m.code || '').toLowerCase();
+          const grade = String(m.grade || '').toLowerCase();
+          return name.includes(term) || code.includes(term) || grade.includes(term);
+        })
+        .sort((a, b) => {
+          const score = (m) => {
+            const name = String(m.name || '').toLowerCase();
+            const code = String(m.code || '').toLowerCase();
+            if (name === term || code === term) return 0;
+            if (name.startsWith(term) || code.startsWith(term)) return 1;
+            if (name.includes(term) || code.includes(term)) return 2;
+            return 3;
+          };
+          return score(a) - score(b) || String(a.name || '').localeCompare(String(b.name || ''));
+        });
+    }
     res.json({
       data: dedupeMaterialListResults(priced, { collapseDuplicateNames: true }),
     });

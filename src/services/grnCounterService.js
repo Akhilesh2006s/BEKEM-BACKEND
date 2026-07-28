@@ -16,6 +16,7 @@ function parseGrnSequence(grnNumber) {
  * Atomically allocate the next PO-scoped GRN number (resets per purchase order).
  */
 async function allocatePoGrnNumber(purchaseOrderId) {
+  await syncPoGrnCounterFromExisting(purchaseOrderId);
   const counter = await PurchaseOrderGrnCounter.findOneAndUpdate(
     { purchaseOrderId },
     { $inc: { lastGrnNumber: 1 } },
@@ -25,6 +26,7 @@ async function allocatePoGrnNumber(purchaseOrderId) {
 }
 
 async function peekNextPoGrnNumber(purchaseOrderId) {
+  await syncPoGrnCounterFromExisting(purchaseOrderId);
   const counter = await PurchaseOrderGrnCounter.findOne({ purchaseOrderId }).lean();
   const next = (counter?.lastGrnNumber || 0) + 1;
   return { nextNumber: next, grnNumber: formatGrnNumber(next) };

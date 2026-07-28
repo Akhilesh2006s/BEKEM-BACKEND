@@ -92,9 +92,11 @@ function serializeLineItem(item, stockFields, pricingFields) {
     id: item._id.toString(),
     materialId: resolveId(mat),
     quantityRequested: item.quantityRequested,
-    quantityAllocated: item.quantityAllocated || 0,
+    quantityAllocated: Math.max(item.quantityAllocated || 0, item.quantityIssued || 0),
     quantityIssued: item.quantityIssued || 0,
     unit,
+    location: item.location || '',
+    requiredByDate: item.requiredByDate?.toISOString?.() || item.requiredByDate || null,
     material,
   };
   if (stockFields) {
@@ -107,6 +109,58 @@ function serializeLineItem(item, stockFields, pricingFields) {
     base.lineTotal = pricingFields.lineTotal;
   }
   return base;
+}
+
+const STORE_APPROVAL_STATUSES = new Set([
+  'ALLOCATED',
+  'FORWARDED_TO_PM',
+  'BRANCH_TRANSFER_REQUESTED',
+]);
+
+const PM_APPROVAL_STATUSES = new Set([
+  'PM_APPROVED',
+  'PENDING_HO',
+  'PENDING_EXECUTIVE_DECISION',
+]);
+
+const EXECUTIVE_APPROVAL_STATUSES = new Set([
+  'PURCHASE_REQUESTED',
+  'RFQ_OPEN',
+  'QUOTED',
+  'VENDOR_SELECTED',
+  'PO_CREATED',
+  'EXECUTIVE_DECISION_PO',
+  'EXECUTIVE_DECISION_BRANCH_TRANSFER',
+]);
+
+const COORDINATOR_APPROVAL_STATUSES = new Set([
+  'COORDINATOR_PENDING',
+  'PENDING_REVIEW',
+  'COORDINATOR_VERIFIED',
+  'CHAIRMAN_PENDING',
+]);
+
+const CHAIRMAN_APPROVAL_STATUSES = new Set(['CHAIRMAN_APPROVED']);
+
+function deriveApproverNamesFromHistory(history) {
+  const approverNames = {};
+  for (const entry of history || []) {
+    const name = entry?.actorUserId?.name?.trim();
+    if (!name) continue;
+    const toStatus = entry?.toStatus;
+    if (STORE_APPROVAL_STATUSES.has(toStatus)) {
+      approverNames.store = name;
+    } else if (PM_APPROVAL_STATUSES.has(toStatus)) {
+      approverNames.pm = name;
+    } else if (EXECUTIVE_APPROVAL_STATUSES.has(toStatus)) {
+      approverNames.executive = name;
+    } else if (COORDINATOR_APPROVAL_STATUSES.has(toStatus)) {
+      approverNames.coordinator = name;
+    } else if (CHAIRMAN_APPROVAL_STATUSES.has(toStatus)) {
+      approverNames.chairman = name;
+    }
+  }
+  return approverNames;
 }
 
 function serializeMaterialRequest(mr, stockContext, pricingContext) {
@@ -210,11 +264,16 @@ function stripIndentPricingFromResponse(data) {
 async function serializeMaterialRequestEnriched(mr, viewerRole) {
   const { enrichIndentWithStock } = require('../services/indentStockService');
   const { computeIndentPricing } = require('../services/indentPricingService');
+  const { StatusHistory } = require('../models');
   const [stockContext, pricingContext] = await Promise.all([
     enrichIndentWithStock(mr),
     computeIndentPricing(mr),
   ]);
   const data = serializeMaterialRequest(mr, stockContext, pricingContext);
+  const history = await StatusHistory.find({ entityType: 'MaterialRequest', entityId: mr._id })
+    .sort({ timestamp: 1 })
+    .populate('actorUserId', 'name');
+  data.approverNames = deriveApproverNamesFromHistory(history);
 
   // Align "who holds it" with the live PO desk when indent is already at PO_CREATED.
   if (data.status === 'PO_CREATED') {
