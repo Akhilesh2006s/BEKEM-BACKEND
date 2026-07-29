@@ -23,6 +23,7 @@ const grnAttachmentSchema = new mongoose.Schema(
     name: { type: String, required: true },
     fileType: { type: String, default: 'application/octet-stream' },
     category: { type: String, enum: ['INVOICE', 'CHALLAN', 'PHOTO'], default: 'PHOTO' },
+    url: { type: String, default: '' },
   },
   { _id: true }
 );

@@ -376,6 +376,17 @@ export interface IndentLineItemDto {
     requestedQty?: number;
     availableQty?: number;
     requiredQty?: number;
+    /** Quantity received through GRNs for this indent line. */
+    quantityReceived?: number;
+    /** Received quantity still available to issue for this indent line. */
+    availableToIssueQty?: number;
+    /** Requested quantity not yet received through GRN. */
+    pendingReceiptQty?: number;
+    /** Individual GRN receipt quantities and dates for this indent line. */
+    receipts?: Array<{
+        quantity: number;
+        receivedAt: string;
+    }>;
     /** Server-computed pricing (read-only). */
     unitPrice?: number | null;
     lineTotal?: number | null;
@@ -471,10 +482,33 @@ export interface MaterialRequestDto {
     escalatedToHo?: boolean;
     storeStockVerified?: boolean;
     origin?: 'SITE' | 'EXECUTIVE';
+    purchaseRequestId?: string;
+    prNumber?: string;
     rfqId?: string;
     rfqNumber?: string;
+    rfqStatus?: string;
+    poId?: string;
+    poNumber?: string;
+    poStatus?: string;
     canFullyIssue?: boolean;
     hasShortfall?: boolean;
+    /** GRN and invoice traceability included on the indent detail response. */
+    grns?: Array<{
+        id: string;
+        grnNumber: string;
+        poNumber?: string;
+        vendorName?: string;
+        status: string;
+        receivedAt: string;
+        invoiceNumber?: string;
+        invoiceDate?: string | null;
+        items: Array<{
+            materialId: string;
+            materialName: string;
+            quantityReceived: number;
+            unit?: string;
+        }>;
+    }>;
     crossProjectStock?: Array<{
         materialId: string;
         materialName?: string;
@@ -821,6 +855,13 @@ export interface PurchaseOrderDto {
     lineItems?: PoLineItemDto[];
     status: string;
     fulfillmentStatus?: 'open_partial' | 'closed_complete';
+    /** Aggregate receipt qty for GRN pending list. */
+    receiptSummary?: {
+        orderedQty: number;
+        receivedQty: number;
+        remainingQty: number;
+        lineCount: number;
+    };
     expectedDeliveryDate?: string | null;
     approvalRoutingNote?: string;
     emailSentAt?: string | null;
@@ -1129,6 +1170,9 @@ export interface RfqDetailDto {
         email: string;
     }>;
     purchaseRequestId?: string;
+    /** Linked PO when already created from this RFQ's purchase request. */
+    poId?: string | null;
+    poNumber?: string | null;
     createdAt?: string;
     raisedByUserId?: string | null;
     raisedByName?: string | null;

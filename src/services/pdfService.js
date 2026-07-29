@@ -66,6 +66,8 @@ function buildPurchaseOrderPdfContent(doc, po) {
   const rightColW = 165;
 
   const poNo = po.poNumber || po.draftRef || '—';
+  const isDraft =
+    po.status !== 'APPROVED' || /DRAFT/i.test(String(poNo));
   const poDate = po.createdAt
     ? new Date(po.createdAt).toLocaleDateString('en-IN')
     : new Date().toLocaleDateString('en-IN');
@@ -77,7 +79,7 @@ function buildPurchaseOrderPdfContent(doc, po) {
     align: 'center',
   });
   y += 22;
-  doc.fontSize(14).fillColor('#0F172A').text('PURCHASE ORDER', margin, y, {
+  doc.fontSize(14).fillColor('#0F172A').text(isDraft ? 'DRAFT PURCHASE ORDER' : 'PURCHASE ORDER', margin, y, {
     width: contentWidth,
     align: 'center',
   });

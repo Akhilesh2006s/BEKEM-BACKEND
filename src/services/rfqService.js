@@ -295,6 +295,18 @@ async function getRfqDetail(rfqId, user) {
   const comparison = await getRfqComparison(rfqId, user);
   const { rfq } = await loadRfqContext(rfqId);
   const raiser = await resolveRfqRaiser(rfq);
+  const purchaseRequestId = comparison.purchaseRequestId;
+  let linkedPo = null;
+  if (purchaseRequestId) {
+    const { PurchaseOrder } = require('../models');
+    linkedPo = await PurchaseOrder.findOne({
+      purchaseRequestId,
+      status: { $nin: ['REJECTED', 'CANCELLED'] },
+    })
+      .sort({ createdAt: -1 })
+      .select('_id poNumber draftRef')
+      .lean();
+  }
   return {
     id: comparison.rfqId,
     rfqNumber: comparison.rfqNumber,
@@ -312,7 +324,9 @@ async function getRfqDetail(rfqId, user) {
     vendorSelectionReason: comparison.vendorSelectionReason,
     whyWeChoseThisVendor: comparison.whyWeChoseThisVendor,
     quotesObtainedAt: rfq.quotesObtainedAt?.toISOString?.() || null,
-    purchaseRequestId: comparison.purchaseRequestId,
+    purchaseRequestId,
+    poId: linkedPo?._id?.toString?.() || null,
+    poNumber: linkedPo?.poNumber || linkedPo?.draftRef || null,
     createdAt: rfq.createdAt?.toISOString?.(),
     ...raiser,
   };

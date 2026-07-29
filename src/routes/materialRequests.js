@@ -15,6 +15,7 @@ const {
   StockMovement,
   PurchaseRequest,
   RFQ,
+  PurchaseOrder,
 } = require('../models');
 const { authenticate } = require('../middleware/auth');
 const { requireCapability } = require('../middleware/rbac');
@@ -37,6 +38,70 @@ const {
 } = require('../utils/serialize');
 const { enrichIndentWithStock } = require('../services/indentStockService');
 const { allocateIndentStock } = require('../services/indentAllocationService');
+
+/** Attach PR → RFQ → PO ids/numbers onto serialized material-request rows (Executive Indents). */
+async function attachProcurementTrace(rows) {
+  if (!rows?.length) return rows;
+  const materialRequestIds = rows.map((row) => row.id).filter(Boolean);
+  if (!materialRequestIds.length) return rows;
+
+  const purchaseRequests = await PurchaseRequest.find({
+    materialRequestId: { $in: materialRequestIds },
+  })
+    .select('_id materialRequestId prNumber')
+    .lean();
+  const purchaseRequestIds = purchaseRequests.map((pr) => pr._id);
+  const [rfqs, purchaseOrders] = purchaseRequestIds.length
+    ? await Promise.all([
+        RFQ.find({ purchaseRequestId: { $in: purchaseRequestIds } })
+          .sort({ createdAt: -1 })
+          .select('_id purchaseRequestId rfqNumber status')
+          .lean(),
+        PurchaseOrder.find({
+          purchaseRequestId: { $in: purchaseRequestIds },
+          status: { $nin: ['REJECTED', 'CANCELLED'] },
+        })
+          .sort({ createdAt: -1 })
+          .select('_id purchaseRequestId poNumber draftRef status')
+          .lean(),
+      ])
+    : [[], []];
+
+  const prByMaterialRequest = new Map(
+    purchaseRequests.map((pr) => [pr.materialRequestId.toString(), pr])
+  );
+  const rfqByPurchaseRequest = new Map();
+  for (const rfq of rfqs) {
+    const key = rfq.purchaseRequestId.toString();
+    if (!rfqByPurchaseRequest.has(key)) rfqByPurchaseRequest.set(key, rfq);
+  }
+  const poByPurchaseRequest = new Map();
+  for (const po of purchaseOrders) {
+    const key = po.purchaseRequestId.toString();
+    if (!poByPurchaseRequest.has(key)) poByPurchaseRequest.set(key, po);
+  }
+
+  for (const row of rows) {
+    const pr = prByMaterialRequest.get(row.id);
+    if (!pr) continue;
+    const prId = pr._id.toString();
+    const rfq = rfqByPurchaseRequest.get(prId);
+    const po = poByPurchaseRequest.get(prId);
+    row.purchaseRequestId = prId;
+    row.prNumber = pr.prNumber;
+    if (rfq) {
+      row.rfqId = rfq._id.toString();
+      row.rfqNumber = rfq.rfqNumber;
+      row.rfqStatus = rfq.status;
+    }
+    if (po) {
+      row.poId = po._id.toString();
+      row.poNumber = po.poNumber || po.draftRef || '';
+      row.poStatus = po.status;
+    }
+  }
+  return rows;
+}
 const { estimateIndentAmount } = require('../services/purchaseRequestService');
 const { queueForExecutiveDecision } = require('../services/procurementDecisionService');
 const { resolveIndentCategory } = require('../services/indentCategoryService');
@@ -243,6 +308,9 @@ router.get('/', async (req, res, next) => {
     const data = await Promise.all(
       requests.map((mr) => serializeMaterialRequestEnriched(mr, req.user.role))
     );
+    if (req.user.role === UserRole.EXECUTIVE && requests.length) {
+      await attachProcurementTrace(data);
+    }
     res.json({ data });
   } catch (err) {
     next(err);
@@ -458,7 +526,9 @@ router.get('/:id', param('id').isMongoId(), validate, async (req, res, next) => 
       }
     }
 
-    const data = await serializeMaterialRequestEnriched(mr, req.user.role);
+    const data = await serializeMaterialRequestEnriched(mr, req.user.role, {
+      includeGrns: true,
+    });
     if (req.user.role === UserRole.SITE_INCHARGE) {
       const requesterId = resolveId(mr.requestedByUserId);
       data.canEdit = !!data.canEdit && requesterId === req.user._id.toString();
@@ -471,6 +541,10 @@ router.get('/:id', param('id').isMongoId(), validate, async (req, res, next) => 
         const item = lineItems.find((l) => l.materialId === row.materialId);
         return { ...row, materialName: item?.material?.name || row.materialName };
       });
+    }
+
+    if ([UserRole.EXECUTIVE, UserRole.COORDINATOR].includes(req.user.role)) {
+      await attachProcurementTrace([data]);
     }
 
     res.json({ data });
@@ -640,18 +714,23 @@ router.post(
   validate,
   async (req, res, next) => {
     try {
+      const { withIdempotency, sendIdempotent } = require('../services/idempotencyService');
+      const outcome = await withIdempotency(req, 'material-request-create', async () => {
       const site = await Site.findById(req.user.assignedSiteId).populate('projectId');
       if (!site) {
-        return res.status(400).json({ statusCode: 400, message: 'No site assigned to user' });
+        return {
+          statusCode: 400,
+          body: { statusCode: 400, message: 'No site assigned to user' },
+        };
       }
 
       let items = req.body.items;
       if (!items?.length) {
         if (!req.body.materialId || !req.body.quantityRequested) {
-          return res.status(400).json({
+          return {
             statusCode: 400,
-            message: 'At least one material item is required',
-          });
+            body: { statusCode: 400, message: 'At least one material item is required' },
+          };
         }
         items = [{ materialId: req.body.materialId, quantityRequested: req.body.quantityRequested }];
       }
@@ -659,10 +738,13 @@ router.post(
       // Multi-product indents — each line carries its own location / date / qty.
       const resolvedItems = await resolveIndentLineItems(items, req.user._id);
       if (!resolvedItems.length) {
-        return res.status(400).json({
+        return {
           statusCode: 400,
-          message: 'At least one material item is required (catalog or custom name)',
-        });
+          body: {
+            statusCode: 400,
+            message: 'At least one material item is required (catalog or custom name)',
+          },
+        };
       }
 
       const { validateIndentRequestTypeForCreate } = require('../services/indentRequestTypeService');
@@ -727,9 +809,12 @@ router.post(
       req.auditEntityId = mr._id;
 
       const populated = await MaterialRequest.findById(mr._id).populate(populateFields);
-      res.status(201).json({
-        data: await serializeMaterialRequestEnriched(populated, req.user.role),
+      return {
+        statusCode: 201,
+        body: { data: await serializeMaterialRequestEnriched(populated, req.user.role) },
+      };
       });
+      return sendIdempotent(res, outcome);
     } catch (err) {
       if (err.statusCode) {
         return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
@@ -1369,6 +1454,24 @@ router.post(
       }
       if (mr.requestedByUserId.toString() !== req.user._id.toString()) {
         return res.status(403).json({ statusCode: 403, message: 'Only the requester can confirm receipt' });
+      }
+
+      const incompleteLines = getIndentLineItems(mr).filter(
+        (line) => Number(line.quantityIssued || 0) < Number(line.quantityRequested || 0)
+      );
+      if (incompleteLines.length) {
+        const issued = incompleteLines.reduce(
+          (sum, line) => sum + Number(line.quantityIssued || 0),
+          0
+        );
+        const requested = incompleteLines.reduce(
+          (sum, line) => sum + Number(line.quantityRequested || 0),
+          0
+        );
+        return res.status(400).json({
+          statusCode: 400,
+          message: `Only ${issued} of ${requested} has been issued. The indent remains open until all requested material is issued.`,
+        });
       }
 
       const fromStatus = mr.status;

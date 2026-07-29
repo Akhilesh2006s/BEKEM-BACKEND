@@ -16,6 +16,8 @@ const {
   computeLineVariances,
   getCumulativeReceivedByLine,
   canViewGrnVariance,
+  summarizePurchaseOrdersReceipts,
+  summarizePoReceiptQuantities,
 } = require('../services/grnFulfillmentService');
 const {
   assessGrnHold,
@@ -54,7 +56,19 @@ router.get('/pending-purchase-orders', async (req, res, next) => {
         },
       ]);
     const { serializePurchaseOrder } = require('../utils/serializeProcurement');
-    res.json({ data: orders.map(serializePurchaseOrder) });
+    const receiptByPo = await summarizePurchaseOrdersReceipts(orders);
+    res.json({
+      data: orders.map((po) => {
+        const row = serializePurchaseOrder(po);
+        row.receiptSummary = receiptByPo.get(po._id.toString()) || {
+          orderedQty: 0,
+          receivedQty: 0,
+          remainingQty: 0,
+          lineCount: (po.lineItems || []).length,
+        };
+        return row;
+      }),
+    });
   } catch (err) {
     next(err);
   }
@@ -93,8 +107,43 @@ router.get('/hold-queue', async (req, res, next) => {
   }
 });
 
-function serializeGrnListItem(g) {
+function serializeGrnListItem(g, receiptSummary = null) {
   const po = g.purchaseOrderId;
+  const poLines = Array.isArray(po?.lineItems) ? po.lineItems : [];
+  const items = (g.items || []).map((item) => {
+    const mat = item.materialId;
+    const materialId = mat?._id?.toString?.() || mat?.toString?.() || '';
+    const poLine = poLines.find(
+      (line) => (line.materialId?._id || line.materialId)?.toString?.() === materialId
+    );
+    const quantity = Number(item.quantityReceived) || 0;
+    const ordered = Number(item.quantityOrdered || poLine?.quantity || 0);
+    const rate = Number(item.invoiceUnitPrice || item.orderedUnitPrice || poLine?.rate || 0);
+    const gstPercent = Number(poLine?.gstPercent ?? mat?.gstRate ?? 18);
+    const taxable = Math.round((quantity * rate + Number.EPSILON) * 100) / 100;
+    const gstAmount = Math.round((taxable * (gstPercent / 100) + Number.EPSILON) * 100) / 100;
+    const grossAmount = Math.round((taxable + gstAmount + Number.EPSILON) * 100) / 100;
+    return {
+      materialId,
+      materialName: mat?.name || 'Material',
+      unit: mat?.unit || poLine?.unit || '',
+      quantity,
+      quantityOrdered: ordered,
+      rate,
+      gstPercent,
+      gstAmount,
+      taxableAmount: taxable,
+      grossAmount,
+    };
+  });
+
+  const thisGrnReceivedQty = items.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0);
+  const summary =
+    receiptSummary ||
+    (po?.lineItems
+      ? summarizePoReceiptQuantities(po, {})
+      : { orderedQty: 0, receivedQty: 0, remainingQty: 0, lineCount: items.length });
+
   return {
     id: g._id.toString(),
     grnNumber: g.grnNumber,
@@ -104,8 +153,31 @@ function serializeGrnListItem(g) {
     vendorId: g.vendorId?._id?.toString?.() || g.vendorId?.toString?.() || null,
     vendorName: g.vendorName || '',
     status: g.status,
+    invoiceNo: g.invoiceNo || '',
+    invoiceDate: g.invoiceDate?.toISOString?.() || null,
+    invoiceValue: g.invoiceValue || 0,
+    challanNo: g.challanNo || '',
+    ewayBillNumber: g.ewayBillNumber || '',
+    vehicleNo: g.vehicleNo || '',
+    driverName: g.driverName || '',
+    deliveryDate: g.deliveryDate?.toISOString?.() || null,
+    note: g.note || '',
+    remarks: g.note || '',
+    receiveType: g.receiveType || 'FULL',
     receivedAt: g.receivedAt?.toISOString?.() || g.createdAt?.toISOString?.() || null,
-    itemCount: g.items?.length || 0,
+    itemCount: items.length,
+    items,
+    attachments: (g.attachments || []).map((a) => ({
+      id: a._id?.toString?.(),
+      name: a.name,
+      fileType: a.fileType || 'application/octet-stream',
+      category: a.category || 'PHOTO',
+      url: a.url || '',
+    })),
+    quantityOrdered: summary.orderedQty,
+    quantityReceivedThisGrn: thisGrnReceivedQty,
+    quantityReceived: summary.receivedQty,
+    quantityRemaining: summary.remainingQty,
   };
 }
 
@@ -116,9 +188,50 @@ router.get('/', async (req, res, next) => {
       .populate('purchaseOrderId')
       .populate('items.materialId')
       .limit(100);
+    const pos = receipts
+      .map((g) => g.purchaseOrderId)
+      .filter((po) => po && typeof po === 'object' && po.lineItems);
+    const uniquePos = [];
+    const seen = new Set();
+    for (const po of pos) {
+      const id = po._id.toString();
+      if (seen.has(id)) continue;
+      seen.add(id);
+      uniquePos.push(po);
+    }
+    const receiptByPo = await summarizePurchaseOrdersReceipts(uniquePos);
     res.json({
-      data: receipts.map(serializeGrnListItem),
+      data: receipts.map((g) => {
+        const poId = g.purchaseOrderId?._id?.toString?.() || g.purchaseOrderId?.toString?.();
+        return serializeGrnListItem(g, poId ? receiptByPo.get(poId) : null);
+      }),
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/:id', param('id').isMongoId(), validate, async (req, res, next) => {
+  try {
+    const grn = await GoodsReceiptNote.findById(req.params.id)
+      .populate('purchaseOrderId')
+      .populate('items.materialId')
+      .populate('receivedByUserId', 'name role');
+    if (!grn) {
+      return res.status(404).json({ statusCode: 404, message: 'GRN not found' });
+    }
+    const po = grn.purchaseOrderId;
+    let receiptSummary = null;
+    if (po && typeof po === 'object' && po.lineItems) {
+      const map = await summarizePurchaseOrdersReceipts([po]);
+      receiptSummary = map.get(po._id.toString()) || null;
+    }
+    const data = serializeGrnListItem(grn, receiptSummary);
+    data.receivedByName = grn.receivedByUserId?.name || '';
+    data.holdReasons = grn.holdReasons || [];
+    data.approvalStage = grn.approvalStage || 'NONE';
+    data.varianceDetails = canViewGrnVariance(req.user.role) ? grn.varianceDetails : null;
+    res.json({ data });
   } catch (err) {
     next(err);
   }
@@ -153,6 +266,8 @@ router.post(
     body('attachments.*.name').optional().isString(),
     body('attachments.*.fileType').optional().isString(),
     body('attachments.*.category').optional().isIn(['INVOICE', 'CHALLAN', 'PHOTO']),
+    body('attachments.*.dataBase64').optional().isString(),
+    body('attachments.*.contentBase64').optional().isString(),
   ],
   validate,
   async (req, res, next) => {
@@ -187,11 +302,11 @@ router.post(
 
       const totalReceived = items.reduce((s, i) => s + i.quantityReceived, 0);
       const saveDraft = req.body.saveDraft === true;
-      const attachments = Array.isArray(req.body.attachments)
+      const rawAttachments = Array.isArray(req.body.attachments)
         ? req.body.attachments.filter((a) => a?.name)
         : [];
 
-      const attachmentErr = validateMandatoryAttachments(attachments, { saveDraft });
+      const attachmentErr = validateMandatoryAttachments(rawAttachments, { saveDraft });
       if (attachmentErr) {
         return {
           statusCode: attachmentErr.statusCode,
@@ -253,6 +368,16 @@ router.post(
             : null;
       const poNumber = po.poNumber || po.displayPoNumber || po.draftRef || '';
       const vendorName = vendor?.name || '';
+      const { persistGrnAttachments } = require('../services/grnFileService');
+      let attachments;
+      try {
+        attachments = persistGrnAttachments(rawAttachments);
+      } catch (fileErr) {
+        return {
+          statusCode: fileErr.statusCode || 400,
+          body: { statusCode: fileErr.statusCode || 400, message: fileErr.message },
+        };
+      }
 
       const grn = await GoodsReceiptNote.create({
         grnNumber,

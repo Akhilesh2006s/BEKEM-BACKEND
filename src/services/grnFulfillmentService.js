@@ -33,6 +33,59 @@ async function getCumulativeReceivedByLine(poId, { excludeStatuses = ['DRAFT', '
   return cumulative;
 }
 
+/** Ordered / received / remaining totals across PO lines (for GRN list UIs). */
+function summarizePoReceiptQuantities(po, cumulativeByLine = {}) {
+  let orderedQty = 0;
+  let receivedQty = 0;
+  for (let index = 0; index < (po.lineItems || []).length; index += 1) {
+    const line = po.lineItems[index];
+    const key = buildLineKey(line, index);
+    const ordered = Number(line.quantity) || 0;
+    const received =
+      Number(cumulativeByLine[key] || cumulativeByLine[line.materialId?.toString()] || 0) || 0;
+    orderedQty += ordered;
+    receivedQty += received;
+  }
+  const remainingQty = Math.max(0, orderedQty - receivedQty);
+  return {
+    orderedQty,
+    receivedQty,
+    remainingQty,
+    lineCount: (po.lineItems || []).length,
+  };
+}
+
+async function summarizePurchaseOrdersReceipts(orders) {
+  if (!orders?.length) return new Map();
+  const poIds = orders.map((po) => po._id || po.id).filter(Boolean);
+  const grns = await GoodsReceiptNote.find({
+    purchaseOrderId: { $in: poIds },
+    status: { $nin: ['DRAFT', 'ON_HOLD', 'REJECTED'] },
+  })
+    .select('purchaseOrderId items')
+    .lean();
+
+  const byPo = new Map();
+  for (const grn of grns) {
+    const poId = grn.purchaseOrderId?.toString();
+    if (!poId) continue;
+    if (!byPo.has(poId)) byPo.set(poId, {});
+    const cumulative = byPo.get(poId);
+    for (const item of grn.items || []) {
+      const key = item.poLineId?.toString() || item.materialId?.toString();
+      if (!key) continue;
+      cumulative[key] = (cumulative[key] || 0) + (Number(item.quantityReceived) || 0);
+    }
+  }
+
+  const summaries = new Map();
+  for (const po of orders) {
+    const poId = (po._id || po.id)?.toString();
+    summaries.set(poId, summarizePoReceiptQuantities(po, byPo.get(poId) || {}));
+  }
+  return summaries;
+}
+
 function computeLineVariances(po, linePayloads, cumulativeBefore = {}) {
   const varianceLines = [];
   let isPartial = false;
@@ -236,7 +289,10 @@ async function getPoGrnReceiptLines(po) {
 
 module.exports = {
   canViewGrnVariance,
+  buildLineKey,
   getCumulativeReceivedByLine,
+  summarizePoReceiptQuantities,
+  summarizePurchaseOrdersReceipts,
   computeLineVariances,
   syncPoFulfillment,
   listPoGrns,
