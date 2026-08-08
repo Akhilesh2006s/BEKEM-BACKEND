@@ -61,11 +61,8 @@ async function getMaterialAvailability(user, materialId) {
       .reduce((sum, r) => sum + r.availableQty, 0);
   }
 
-  const pmProjects =
-    user.role === UserRole.PROJECT_MANAGER && user.assignedProjectIds?.length
-      ? projectWise.filter((p) => user.assignedProjectIds.some((id) => id.toString() === p.projectId))
-      : projectWise;
-
+  // Always return company-wide project breakdown so PMs can request branch
+  // transfers from projects that hold stock (even if not assigned to them).
   return {
     materialId: material._id.toString(),
     materialName: material.name,
@@ -74,7 +71,7 @@ async function getMaterialAvailability(user, materialId) {
     storeAvailableQty: pmStoreAvailableQty,
     companyAvailableQty,
     stores: storeRows,
-    projectWise: pmProjects,
+    projectWise,
   };
 }
 

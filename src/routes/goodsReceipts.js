@@ -43,10 +43,27 @@ router.use(authenticate);
 router.get('/pending-purchase-orders', async (req, res, next) => {
   try {
     // Req 43/44 — Material Received opens directly from approved POs (no Verify Delivery gate).
-    const orders = await PurchaseOrder.find({
+    const filter = {
       status: 'APPROVED',
       fulfillmentStatus: { $ne: 'closed_complete' },
-    })
+    };
+    // Store only sees approved POs for projects they are assigned to.
+    if (req.user.role === UserRole.STORE_INCHARGE) {
+      const projectIds = (req.user.assignedProjectIds || []).map((id) => id.toString?.() || id);
+      if (!projectIds.length) {
+        return res.json({ data: [] });
+      }
+      const prs = await PurchaseRequest.find({ projectId: { $in: projectIds } })
+        .select('_id')
+        .lean();
+      const prIds = prs.map((p) => p._id);
+      if (!prIds.length) {
+        return res.json({ data: [] });
+      }
+      filter.purchaseRequestId = { $in: prIds };
+    }
+
+    const orders = await PurchaseOrder.find(filter)
       .sort({ createdAt: -1 })
       .populate([
         { path: 'vendorId' },
@@ -107,9 +124,33 @@ router.get('/hold-queue', async (req, res, next) => {
   }
 });
 
+const { BEKEM_BUYER_GST } = require('../constants/bekemAddresses');
+
+function roundMoney(n) {
+  return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+}
+
+function splitGstAmounts(taxable, gstPercent, vendorGstNumber) {
+  const gstAmount = roundMoney(taxable * ((Number(gstPercent) || 0) / 100));
+  const buyerState = String(BEKEM_BUYER_GST || '').slice(0, 2);
+  const vendorState = String(vendorGstNumber || '').trim().slice(0, 2).toUpperCase();
+  const interstate = Boolean(buyerState && vendorState && vendorState !== buyerState);
+  if (interstate) {
+    return { igst: gstAmount, cgst: 0, sgst: 0, gstAmount };
+  }
+  const half = roundMoney(gstAmount / 2);
+  // Keep total GST exact when odd paise
+  return { igst: 0, cgst: half, sgst: roundMoney(gstAmount - half), gstAmount };
+}
+
 function serializeGrnListItem(g, receiptSummary = null) {
   const po = g.purchaseOrderId;
   const poLines = Array.isArray(po?.lineItems) ? po.lineItems : [];
+  const vendor =
+    (g.vendorId && typeof g.vendorId === 'object' ? g.vendorId : null) ||
+    (po?.vendorId && typeof po.vendorId === 'object' ? po.vendorId : null);
+  const vendorGstNumber = vendor?.gstNumber || '';
+  const vendorName = g.vendorName || vendor?.name || '';
   const items = (g.items || []).map((item) => {
     const mat = item.materialId;
     const materialId = mat?._id?.toString?.() || mat?.toString?.() || '';
@@ -120,19 +161,28 @@ function serializeGrnListItem(g, receiptSummary = null) {
     const ordered = Number(item.quantityOrdered || poLine?.quantity || 0);
     const rate = Number(item.invoiceUnitPrice || item.orderedUnitPrice || poLine?.rate || 0);
     const gstPercent = Number(poLine?.gstPercent ?? mat?.gstRate ?? 18);
-    const taxable = Math.round((quantity * rate + Number.EPSILON) * 100) / 100;
-    const gstAmount = Math.round((taxable * (gstPercent / 100) + Number.EPSILON) * 100) / 100;
-    const grossAmount = Math.round((taxable + gstAmount + Number.EPSILON) * 100) / 100;
+    const basicAmount = roundMoney(quantity * rate);
+    const others = 0;
+    const totalBasic = roundMoney(basicAmount + others);
+    const { igst, cgst, sgst, gstAmount } = splitGstAmounts(totalBasic, gstPercent, vendorGstNumber);
+    const grossAmount = roundMoney(totalBasic + gstAmount);
     return {
       materialId,
-      materialName: mat?.name || 'Material',
-      unit: mat?.unit || poLine?.unit || '',
+      materialName: mat?.name || poLine?.description || 'Material',
+      hsnCode: poLine?.hsnCode || mat?.hsnCode || '',
+      unit: item.unit || mat?.unit || poLine?.unit || '',
       quantity,
       quantityOrdered: ordered,
       rate,
+      basicAmount,
+      others,
+      totalBasic,
       gstPercent,
+      igst,
+      cgst,
+      sgst,
       gstAmount,
-      taxableAmount: taxable,
+      taxableAmount: totalBasic,
       grossAmount,
     };
   });
@@ -150,8 +200,13 @@ function serializeGrnListItem(g, receiptSummary = null) {
     purchaseOrderId: po?._id?.toString() || po?.toString?.() || null,
     poNumber: g.poNumber || po?.poNumber || po?.displayPoNumber || po?.draftRef || '',
     indentNumber: g.indentNumber || '',
-    vendorId: g.vendorId?._id?.toString?.() || g.vendorId?.toString?.() || null,
-    vendorName: g.vendorName || '',
+    vendorId:
+      g.vendorId?._id?.toString?.() ||
+      g.vendorId?.toString?.() ||
+      vendor?._id?.toString?.() ||
+      null,
+    vendorName,
+    vendorGstNumber,
     status: g.status,
     invoiceNo: g.invoiceNo || '',
     invoiceDate: g.invoiceDate?.toISOString?.() || null,
@@ -185,7 +240,11 @@ router.get('/', async (req, res, next) => {
   try {
     const receipts = await GoodsReceiptNote.find()
       .sort({ createdAt: -1 })
-      .populate('purchaseOrderId')
+      .populate({
+        path: 'purchaseOrderId',
+        populate: { path: 'vendorId', select: 'name gstNumber' },
+      })
+      .populate('vendorId', 'name gstNumber')
       .populate('items.materialId')
       .limit(100);
     const pos = receipts
@@ -214,7 +273,11 @@ router.get('/', async (req, res, next) => {
 router.get('/:id', param('id').isMongoId(), validate, async (req, res, next) => {
   try {
     const grn = await GoodsReceiptNote.findById(req.params.id)
-      .populate('purchaseOrderId')
+      .populate({
+        path: 'purchaseOrderId',
+        populate: { path: 'vendorId', select: 'name gstNumber' },
+      })
+      .populate('vendorId', 'name gstNumber')
       .populate('items.materialId')
       .populate('receivedByUserId', 'name role');
     if (!grn) {

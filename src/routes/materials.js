@@ -274,6 +274,7 @@ router.post(
     body('categoryRemarks').optional().trim().isLength({ max: 500 }),
     body('hsnCode').trim().notEmpty().withMessage('HSN code is required').isLength({ min: 4, max: 8 }),
     body('gstRate').optional().isFloat({ min: 0, max: 28 }),
+    body('referenceUnitPrice').optional({ nullable: true }).isFloat({ min: 0 }),
     body('siteId').optional().isMongoId(),
     body('initialQuantity').optional().isFloat({ min: 0 }),
     body('lowStockThreshold').optional().isFloat({ min: 0 }),
@@ -294,16 +295,23 @@ router.post(
       if (existing) {
         return res.status(400).json({ statusCode: 400, message: 'Material already exists.' });
       }
-      const { siteId, initialQuantity, lowStockThreshold, categoryId, category, ...materialData } =
+      const { siteId, initialQuantity, lowStockThreshold, categoryId, category, referenceUnitPrice: rawPrice, ...materialData } =
         req.body;
       const cat = await resolveMaterialCategory({ categoryId, category });
       assertCategoryRemarks(cat.name, req.body.categoryRemarks);
+      const referenceUnitPrice =
+        rawPrice === null || rawPrice === ''
+          ? null
+          : rawPrice !== undefined
+            ? Number(rawPrice)
+            : undefined;
       const material = await Material.create({
         ...materialData,
         code: String(materialData.code || '').toUpperCase(),
         categoryId: cat._id,
         category: cat.name,
         categoryRemarks: cat.name === 'Others' ? String(req.body.categoryRemarks || '').trim() : '',
+        ...(referenceUnitPrice !== undefined ? { referenceUnitPrice } : {}),
       });
 
       const resolvedSiteId = siteId || req.user.assignedSiteId;
@@ -322,7 +330,9 @@ router.post(
         );
       }
 
-      res.status(201).json({ data: serializeMaterial(material) });
+      const { attachResolvedUnitPrices } = require('../services/materialPricingService');
+      const [priced] = await attachResolvedUnitPrices([serializeMaterial(material)]);
+      res.status(201).json({ data: priced || serializeMaterial(material) });
     } catch (err) {
       next(err);
     }
@@ -343,6 +353,8 @@ router.patch(
     body('category').optional().trim().isIn(PHASE_CATEGORIES),
     body('categoryRemarks').optional().trim().isLength({ max: 500 }),
     body('hsnCode').optional().trim(),
+    body('gstRate').optional().isFloat({ min: 0, max: 28 }),
+    body('referenceUnitPrice').optional({ nullable: true }).isFloat({ min: 0 }),
   ],
   validate,
   async (req, res, next) => {
@@ -398,9 +410,18 @@ router.patch(
         material.categoryRemarks = String(req.body.categoryRemarks || '').trim();
       }
       if (req.body.hsnCode !== undefined) material.hsnCode = req.body.hsnCode;
+      if (req.body.gstRate !== undefined) material.gstRate = Number(req.body.gstRate);
+      if (req.body.referenceUnitPrice !== undefined) {
+        material.referenceUnitPrice =
+          req.body.referenceUnitPrice === null || req.body.referenceUnitPrice === ''
+            ? null
+            : Number(req.body.referenceUnitPrice);
+      }
 
       await material.save();
-      res.json({ data: serializeMaterial(material) });
+      const { attachResolvedUnitPrices } = require('../services/materialPricingService');
+      const [priced] = await attachResolvedUnitPrices([serializeMaterial(material)]);
+      res.json({ data: priced || serializeMaterial(material) });
     } catch (err) {
       next(err);
     }

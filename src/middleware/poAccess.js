@@ -74,8 +74,14 @@ async function assertCanViewPurchaseOrder(user, po) {
     throw err;
   }
 
-  // Store / PM may only open POs linked to procurement they raised.
-  if (user.role === UserRole.STORE_INCHARGE || user.role === UserRole.PROJECT_MANAGER) {
+  // Store receives materials against approved POs in their project scope
+  // (HO / Executive raise most POs — Store did not create those PRs).
+  if (user.role === UserRole.STORE_INCHARGE) {
+    return true;
+  }
+
+  // PM may only open POs linked to procurement they raised.
+  if (user.role === UserRole.PROJECT_MANAGER) {
     const {
       findRaisedPurchaseRequestIds,
     } = require('../services/procurementRequestVisibilityService');
@@ -118,7 +124,22 @@ function assertCanListPurchaseOrders(user, { queue } = {}) {
 async function purchaseOrderListFilter(user, baseFilter = {}) {
   if (HO_ROLES.has(user.role)) return baseFilter;
 
-  if (user.role === UserRole.PROJECT_MANAGER || user.role === UserRole.STORE_INCHARGE) {
+  // Store: all POs for assigned projects (needed for Material Receipt / GRN).
+  if (user.role === UserRole.STORE_INCHARGE) {
+    const projectIds = (user.assignedProjectIds || []).map((id) => id.toString?.() || id);
+    if (!projectIds.length) return { _id: null };
+    const prs = await PurchaseRequest.find({ projectId: { $in: projectIds } })
+      .select('_id')
+      .lean();
+    const prIds = prs.map((p) => p._id);
+    if (!prIds.length) return { _id: null };
+    return {
+      ...baseFilter,
+      purchaseRequestId: { $in: prIds },
+    };
+  }
+
+  if (user.role === UserRole.PROJECT_MANAGER) {
     const {
       findRaisedPurchaseRequestIds,
     } = require('../services/procurementRequestVisibilityService');

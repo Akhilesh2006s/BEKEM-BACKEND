@@ -1,7 +1,7 @@
 const express = require('express');
 const { body, param } = require('express-validator');
 const { UserRole } = require('@afios/shared');
-const { BranchTransfer, Site, MaterialRequest } = require('../models');
+const { BranchTransfer, Site, MaterialRequest, Project } = require('../models');
 const { authenticate } = require('../middleware/auth');
 const { requireCapability } = require('../middleware/rbac');
 const { validate } = require('../middleware/validate');
@@ -142,11 +142,31 @@ router.post(
 
       if (req.user.role === UserRole.PROJECT_MANAGER) {
         if (!materialRequestId) {
-          if (!userManagesProject(req.user, fromProjectId) || !userManagesProject(req.user, toProjectId)) {
+          // Standalone stock move: PM pulls into a project they manage from any
+          // company project that has stock (Head Office still approves).
+          if (!toProjectId) {
+            return {
+              statusCode: 400,
+              body: { statusCode: 400, message: 'Destination project is required' },
+            };
+          }
+          if (!userManagesProject(req.user, toProjectId)) {
             return {
               statusCode: 403,
-              body: { statusCode: 403, message: 'You must manage both source and destination projects' },
+              body: {
+                statusCode: 403,
+                message: 'You must manage the destination project receiving the stock',
+              },
             };
+          }
+          if (!userManagesProject(req.user, fromProjectId)) {
+            const sourceExists = await Project.findById(fromProjectId).select('_id');
+            if (!sourceExists) {
+              return {
+                statusCode: 400,
+                body: { statusCode: 400, message: 'Source project not found' },
+              };
+            }
           }
         } else {
           const mr = await MaterialRequest.findById(materialRequestId);
@@ -191,7 +211,11 @@ router.post(
       }
 
       const { userCanAccessProject } = require('../utils/serialize');
-      if (!userCanAccessProject(req.user, toProjectId) || !userCanAccessProject(req.user, fromProjectId)) {
+      // Destination must be in PM scope; source may be another company project.
+      if (!userCanAccessProject(req.user, toProjectId)) {
+        return { statusCode: 403, body: { statusCode: 403, message: 'Forbidden — project out of scope' } };
+      }
+      if (materialRequestId && !userCanAccessProject(req.user, fromProjectId)) {
         return { statusCode: 403, body: { statusCode: 403, message: 'Forbidden — project out of scope' } };
       }
 
@@ -200,19 +224,23 @@ router.post(
         return { statusCode: 404, body: { statusCode: 404, message: 'Linked indent not found' } };
       }
 
-      const existingBt = await BranchTransfer.findOne({
-        materialRequestId,
-        status: { $nin: ['REJECTED', 'RAISE_PO_INSTEAD', 'TRANSFERRED'] },
-      });
-      if (existingBt) {
-        return {
-          statusCode: 409,
-          body: {
+      // Only dedupe against an open transfer for the same indent — without a linked
+      // indent, materialRequestId is undefined and would match any open transfer.
+      if (materialRequestId) {
+        const existingBt = await BranchTransfer.findOne({
+          materialRequestId,
+          status: { $nin: ['REJECTED', 'RAISE_PO_INSTEAD', 'TRANSFERRED'] },
+        });
+        if (existingBt) {
+          return {
             statusCode: 409,
-            message: 'A branch transfer is already in progress for this indent',
-            data: { id: existingBt._id.toString(), transferNumber: existingBt.transferNumber },
-          },
-        };
+            body: {
+              statusCode: 409,
+              message: 'A branch transfer is already in progress for this indent',
+              data: { id: existingBt._id.toString(), transferNumber: existingBt.transferNumber },
+            },
+          };
+        }
       }
 
       const transferNumber = await generateTransferNumber();
