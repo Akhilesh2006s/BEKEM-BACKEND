@@ -12,8 +12,9 @@ const { getIndentLineItems } = require('../services/materialRequestHelpers');
 const statusHistoryService = require('../services/statusHistoryService');
 const notificationService = require('../services/notificationService');
 const { ISSUE_REASONS } = require('../constants/indentPolicy');
-const { serializeMaterialRequestEnriched } = require('../utils/serialize');
+const { serializeMaterialRequestEnriched, serializeMaterial } = require('../utils/serialize');
 const { consumeFifo } = require('../services/fifoStockService');
+const { attachResolvedUnitPrices } = require('../services/materialPricingService');
 
 const router = express.Router();
 router.use(authenticate);
@@ -25,7 +26,23 @@ const issuePopulate = [
   { path: 'issuedByUserId', select: 'name' },
 ];
 
-function serializeIssue(issue) {
+function roundMoney(n) {
+  return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+}
+
+async function serializeIssue(issue) {
+  const materialPayloads = (issue.items || [])
+    .map((item) => {
+      const mat = item.materialId;
+      if (!mat || typeof mat !== 'object') return null;
+      return serializeMaterial(mat);
+    })
+    .filter(Boolean);
+  const priced = await attachResolvedUnitPrices(materialPayloads);
+  const rateByMaterial = new Map(
+    priced.map((m) => [m.id, m.unitPrice ?? m.referenceUnitPrice ?? null])
+  );
+
   return {
     id: issue._id.toString(),
     issueNumber: issue.issueNumber,
@@ -45,23 +62,35 @@ function serializeIssue(issue) {
           chainageLabel: issue.siteId.chainageLabel,
         }
       : undefined,
-    items: issue.items.map((item) => ({
-      materialId: item.materialId?._id?.toString() || item.materialId?.toString(),
-      quantity: item.quantity,
-      material: item.materialId?.name
-        ? {
-            id: item.materialId._id.toString(),
-            name: item.materialId.name,
-            unit: item.materialId.unit,
-            hsnCode: item.materialId.hsnCode,
-          }
-        : undefined,
-    })),
+    items: (issue.items || []).map((item) => {
+      const mat = item.materialId;
+      const materialId = mat?._id?.toString?.() || mat?.toString?.() || '';
+      const quantity = Number(item.quantity) || 0;
+      const rate = Number(rateByMaterial.get(materialId) ?? mat?.referenceUnitPrice ?? 0) || 0;
+      const amount = roundMoney(quantity * rate);
+      return {
+        materialId,
+        quantity,
+        rate,
+        amount,
+        unit: mat?.unit || '',
+        materialName: mat?.name || 'Material',
+        material: mat?.name
+          ? {
+              id: materialId,
+              name: mat.name,
+              unit: mat.unit,
+              hsnCode: mat.hsnCode,
+            }
+          : undefined,
+      };
+    }),
     issuedBy: issue.issuedByUserId?.name
       ? { id: issue.issuedByUserId._id.toString(), name: issue.issuedByUserId.name }
       : undefined,
     issuedToType: issue.issuedToType,
     issuedToName: issue.issuedToName || '',
+    contractorName: issue.issueType === 'CONTRACT_ISSUE' ? issue.issuedToName || '' : '',
     note: issue.note,
     issueReason: issue.issueReason,
     issueReasonOtherText: issue.issueReasonOtherText || '',
@@ -84,7 +113,7 @@ router.get('/', async (req, res, next) => {
       .sort({ issuedAt: -1, createdAt: -1 })
       .populate(issuePopulate)
       .limit(100);
-    res.json({ data: issues.map(serializeIssue) });
+    res.json({ data: await Promise.all(issues.map((issue) => serializeIssue(issue))) });
   } catch (err) {
     next(err);
   }
@@ -94,7 +123,7 @@ router.get('/:id', param('id').isMongoId(), validate, async (req, res, next) => 
   try {
     const issue = await MaterialIssue.findById(req.params.id).populate(issuePopulate);
     if (!issue) return res.status(404).json({ statusCode: 404, message: 'Not found' });
-    res.json({ data: serializeIssue(issue) });
+    res.json({ data: await serializeIssue(issue) });
   } catch (err) {
     next(err);
   }
