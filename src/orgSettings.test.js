@@ -18,7 +18,7 @@ describe('Org settings & configurable approval limits', () => {
   });
 
   after(async () => {
-    await updateOrgSettings({ poPmMaxInr: 5000, poCoordinatorMaxInr: 10000, mrPmDailyMaxInr: 5000 });
+    await updateOrgSettings({ poPmMaxInr: 5000, poCoordinatorMaxInr: 5000, mrPmDailyMaxInr: 5000 });
     await teardownTestDb();
   });
 
@@ -28,7 +28,7 @@ describe('Org settings & configurable approval limits', () => {
       .set('Authorization', `Bearer ${pmToken}`);
     assert.strictEqual(res.status, 200);
     assert.ok(res.body.data.poPmMaxInr > 0);
-    assert.ok(res.body.data.approvalRoutingNote.includes('Project Manager'));
+    assert.ok(res.body.data.approvalRoutingNote.includes('Coordinator'));
   });
 
   it('coordinator can read full org settings', async () => {

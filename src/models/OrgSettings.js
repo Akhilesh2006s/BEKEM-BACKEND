@@ -16,7 +16,7 @@ const orgSettingsSchema = new mongoose.Schema(
   {
     singleton: { type: String, default: 'global', unique: true, immutable: true },
     poPmMaxInr: { type: Number, default: 5000 },
-    poCoordinatorMaxInr: { type: Number, default: 10000 },
+    poCoordinatorMaxInr: { type: Number, default: 5000 },
     mrPmDailyMaxInr: { type: Number, default: 5000 },
     timezone: { type: String, default: 'Asia/Kolkata' },
     expenseCategories: { type: [expenseCategorySchema], default: [] },

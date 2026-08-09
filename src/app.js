@@ -108,6 +108,7 @@ function mountApiRoutes(app, prefix) {
   app.use(`${prefix}/indent-categories`, require('./routes/indentCategories'));
   app.use(`${prefix}/admin/executive-assignments`, require('./routes/executiveAssignments'));
   app.use(`${prefix}/misc-purchases`, require('./routes/miscPurchases'));
+  app.use(`${prefix}/reports`, require('./routes/reports'));
 
 }
 

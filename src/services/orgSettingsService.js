@@ -38,7 +38,7 @@ const DEFAULT_EXPENSE_CATEGORIES = [
 function envDefaults() {
   return {
     poPmMaxInr: Number(process.env.PO_PM_MAX_INR || 5000),
-    poCoordinatorMaxInr: Number(process.env.PO_COORDINATOR_MAX_INR || 10000),
+    poCoordinatorMaxInr: Number(process.env.PO_COORDINATOR_MAX_INR || 5000),
     mrPmDailyMaxInr: Number(process.env.MR_PM_DAILY_MAX_INR || 5000),
     timezone: process.env.APP_TIMEZONE || 'Asia/Kolkata',
     expenseCategories: DEFAULT_EXPENSE_CATEGORIES.map((c) => ({ ...c })),
@@ -52,9 +52,8 @@ function fmtInr(n) {
 }
 
 function buildApprovalRoutingNote(settings) {
-  const pm = settings.poPmMaxInr;
   const coord = settings.poCoordinatorMaxInr;
-  return `Under ${fmtInr(pm)} → Project Manager · ${fmtInr(pm)}–${fmtInr(coord)} → Coordinator · Above ${fmtInr(coord)} → Chairman (Coordinator may approve with written reason if Chairman not on premises).`;
+  return `Up to ${fmtInr(coord)} → Coordinator final approval · Above ${fmtInr(coord)} → Chairman final approval (Coordinator may approve with written reason if Chairman is not on premises).`;
 }
 
 function serialize(doc) {

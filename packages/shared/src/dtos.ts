@@ -1526,8 +1526,6 @@ export interface UpdateMaterialDto {
   categoryRemarks?: string;
   hsnCode?: string;
   gstRate?: number;
-  /** Material Master reference unit price (₹). */
-  referenceUnitPrice?: number | null;
 }
 
 export interface CreateMaterialDto {
@@ -1541,8 +1539,6 @@ export interface CreateMaterialDto {
   categoryRemarks?: string;
   hsnCode?: string;
   gstRate?: number;
-  /** Material Master reference unit price (₹). */
-  referenceUnitPrice?: number | null;
   siteId?: string;
   initialQuantity?: number;
   lowStockThreshold?: number;
