@@ -161,7 +161,9 @@ async function coordinatorOverrideApprove(po, actorUserId, remark) {
     throw err;
   }
   if (!requiresChairmanApproval(po.amount)) {
-    const err = new Error('Emergency override applies only to POs above ₹10,000');
+    const { PO_CHAIRMAN_APPROVAL_THRESHOLD_INR } = require('../constants/approvalPolicy');
+    const threshold = PO_CHAIRMAN_APPROVAL_THRESHOLD_INR.toLocaleString('en-IN');
+    const err = new Error(`Emergency override applies only to POs above ₹${threshold}`);
     err.statusCode = 400;
     throw err;
   }

@@ -1,6 +1,7 @@
 const { IdempotencyRecord } = require('../models');
 
 const TTL_MS = 24 * 60 * 60 * 1000;
+const inFlight = new Map();
 
 function readIdempotencyKey(req) {
   const header = req.headers['idempotency-key'] || req.headers['x-idempotency-key'];
@@ -39,14 +40,27 @@ async function withIdempotency(req, scope, handler) {
     return { replayed: true, statusCode: cached.statusCode, body: cached.body };
   }
 
-  try {
+  const flightKey = `${req.user._id}:${scope}:${key}`;
+  const existingFlight = inFlight.get(flightKey);
+  if (existingFlight) {
+    const result = await existingFlight;
+    return { replayed: true, ...result };
+  }
+
+  const execution = (async () => {
     const result = await handler();
     const statusCode = result.statusCode ?? 200;
     const body = result.body ?? result;
     await storeResponse(key, req.user._id, scope, statusCode, body);
+    return { statusCode, body };
+  })();
+  inFlight.set(flightKey, execution);
+
+  try {
+    const { statusCode, body } = await execution;
     return { replayed: false, statusCode, body };
-  } catch (err) {
-    throw err;
+  } finally {
+    inFlight.delete(flightKey);
   }
 }
 

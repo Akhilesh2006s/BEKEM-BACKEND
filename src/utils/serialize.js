@@ -103,6 +103,14 @@ function serializeLineItem(item, stockFields, pricingFields) {
     base.requestedQty = stockFields.requestedQty;
     base.availableQty = stockFields.availableQty;
     base.requiredQty = stockFields.requiredQty;
+    base.quantityReceived = stockFields.quantityReceived;
+    base.availableToIssueQty = stockFields.availableToIssueQty;
+    base.pendingReceiptQty = stockFields.pendingReceiptQty;
+    base.receipts = (stockFields.receipts || []).map((receipt) => ({
+      quantity: receipt.quantity,
+      receivedAt:
+        receipt.receivedAt?.toISOString?.() || receipt.receivedAt,
+    }));
   }
   if (pricingFields) {
     base.unitPrice = pricingFields.unitPrice;
@@ -261,7 +269,7 @@ function stripIndentPricingFromResponse(data) {
   return data;
 }
 
-async function serializeMaterialRequestEnriched(mr, viewerRole) {
+async function serializeMaterialRequestEnriched(mr, viewerRole, options = {}) {
   const { enrichIndentWithStock } = require('../services/indentStockService');
   const { computeIndentPricing } = require('../services/indentPricingService');
   const { StatusHistory } = require('../models');
@@ -274,6 +282,54 @@ async function serializeMaterialRequestEnriched(mr, viewerRole) {
     .sort({ timestamp: 1 })
     .populate('actorUserId', 'name');
   data.approverNames = deriveApproverNamesFromHistory(history);
+
+  if (options.includeGrns) {
+    const { GoodsReceiptNote, PurchaseRequest, PurchaseOrder } = require('../models');
+    const purchaseRequest = await PurchaseRequest.findOne({ materialRequestId: mr._id })
+      .select('_id')
+      .lean();
+    const purchaseOrders = purchaseRequest
+      ? await PurchaseOrder.find({ purchaseRequestId: purchaseRequest._id })
+          .select('_id')
+          .lean()
+      : [];
+    const poIds = purchaseOrders.map((po) => po._id);
+    const grnFilter = poIds.length
+      ? {
+          $or: [
+            { indentNumber: mr.indentNumber },
+            { purchaseOrderId: { $in: poIds } },
+          ],
+        }
+      : { indentNumber: mr.indentNumber };
+    const grns = await GoodsReceiptNote.find(grnFilter)
+      .sort({ receivedAt: 1 })
+      .populate('items.materialId', 'name unit')
+      .populate('purchaseOrderId', 'lineItems')
+      .lean();
+    data.grns = grns.map((grn) => ({
+      id: grn._id.toString(),
+      grnNumber: grn.grnNumber,
+      poNumber: grn.poNumber || '',
+      vendorName: grn.vendorName || '',
+      status: grn.status,
+      receivedAt: grn.receivedAt?.toISOString?.() || grn.receivedAt,
+      invoiceNumber: grn.invoiceNo || '',
+      invoiceDate: grn.invoiceDate?.toISOString?.() || grn.invoiceDate || null,
+      items: (grn.items || []).map((item) => {
+        const materialId = resolveId(item.materialId);
+        const poLine = (grn.purchaseOrderId?.lineItems || []).find(
+          (line) => resolveId(line.materialId) === materialId
+        );
+        return {
+          materialId,
+          materialName: item.materialId?.name || 'Material',
+          quantityReceived: item.quantityReceived || 0,
+          unit: poLine?.unit || item.materialId?.unit || '',
+        };
+      }),
+    }));
+  }
 
   // Align "who holds it" with the live PO desk when indent is already at PO_CREATED.
   if (data.status === 'PO_CREATED') {
