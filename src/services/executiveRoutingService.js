@@ -1,8 +1,14 @@
 const { UserRole } = require('@afios/shared');
 const { User } = require('../models');
 
+function resolveCategoryId(ref) {
+  if (!ref) return null;
+  if (ref._id) return ref._id.toString();
+  return ref.toString();
+}
+
 function normalizeCategoryIds(ids) {
-  return (ids || []).map((id) => id.toString());
+  return (ids || []).map((id) => resolveCategoryId(id)).filter(Boolean);
 }
 
 function executiveHasCategoryAssignments(user) {
@@ -26,8 +32,9 @@ function executiveCanAccessIndent(user, mr) {
   if (user.role !== UserRole.EXECUTIVE) return true;
   const assigned = normalizeCategoryIds(user.assignedIndentCategoryIds);
   if (!assigned.length) return true;
-  if (!mr.indentCategoryId) return true;
-  return assigned.includes(mr.indentCategoryId.toString());
+  const categoryId = resolveCategoryId(mr.indentCategoryId);
+  if (!categoryId) return true;
+  return assigned.includes(categoryId);
 }
 
 async function getExecutivesForIndent(indentCategoryId) {
