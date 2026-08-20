@@ -1434,6 +1434,7 @@ export interface BranchTransferDto {
 
 export interface CreateBranchTransferDto {
   fromProjectId: string;
+  fromSiteId?: string;
   toProjectId?: string;
   items: Array<{ materialId: string; quantity: number }>;
   note?: string;

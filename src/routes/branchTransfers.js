@@ -115,6 +115,7 @@ router.post(
   requireCapability('CREATE_BRANCH_TRANSFER'),
   [
     body('fromProjectId').isMongoId(),
+    body('fromSiteId').optional().isMongoId(),
     body('toProjectId').optional().isMongoId(),
     body('items').isArray({ min: 1 }),
     body('items.*.materialId').isMongoId(),
@@ -128,7 +129,7 @@ router.post(
       ? `bt-create:mr:${req.body.materialRequestId}`
       : `bt-create:${req.body.fromProjectId}:${req.body.toProjectId}`;
     return handleIdempotent(req, res, scopeKey, async () => {
-      let { fromProjectId, toProjectId, items, note, materialRequestId } = req.body;
+      let { fromProjectId, toProjectId, fromSiteId, items, note, materialRequestId } = req.body;
 
       if (req.user.role === UserRole.STORE_INCHARGE) {
         return {
@@ -224,6 +225,37 @@ router.post(
         return { statusCode: 404, body: { statusCode: 404, message: 'Linked indent not found' } };
       }
 
+      let toSiteId = mr?.siteId || undefined;
+      if (fromSiteId) {
+        const sourceSite = await Site.findById(fromSiteId).select('projectId');
+        if (!sourceSite || sourceSite.projectId.toString() !== String(fromProjectId)) {
+          return {
+            statusCode: 400,
+            body: { statusCode: 400, message: 'Source site must belong to the source project' },
+          };
+        }
+        const { StockLedger } = require('../models');
+        for (const item of items) {
+          const ledger = await StockLedger.findOne({
+            siteId: fromSiteId,
+            materialId: item.materialId,
+          }).select('quantityOnHand quantityReserved');
+          const available = Math.max(
+            0,
+            (ledger?.quantityOnHand || 0) - (ledger?.quantityReserved || 0)
+          );
+          if (available < Number(item.quantity)) {
+            return {
+              statusCode: 400,
+              body: {
+                statusCode: 400,
+                message: 'Insufficient stock at the selected source site for this transfer',
+              },
+            };
+          }
+        }
+      }
+
       // Only dedupe against an open transfer for the same indent — without a linked
       // indent, materialRequestId is undefined and would match any open transfer.
       if (materialRequestId) {
@@ -247,7 +279,9 @@ router.post(
       const transfer = await BranchTransfer.create({
         transferNumber,
         fromProjectId,
+        fromSiteId: fromSiteId || undefined,
         toProjectId,
+        toSiteId: toSiteId || undefined,
         items,
         note: note || '',
         materialRequestId: materialRequestId || undefined,
@@ -269,7 +303,7 @@ router.post(
       if (materialRequestId && mr) {
         const prev = mr.status;
         mr.status = 'BRANCH_TRANSFER_REQUESTED';
-        mr.pendingWithRole = 'PROJECT_MANAGER';
+        mr.pendingWithRole = 'EXECUTIVE';
         await mr.save();
         await statusHistoryService.record(
           'MaterialRequest',
