@@ -1463,7 +1463,7 @@ router.post(
       if (req.approvalContext.principal.role !== UserRole.PROJECT_MANAGER) {
         return {
           statusCode: 403,
-          body: { statusCode: 403, message: 'Only Project Managers can proceed with allocation' },
+          body: { statusCode: 403, message: 'Only Project Managers can complete final review' },
         };
       }
 
@@ -1493,7 +1493,7 @@ router.post(
           statusCode: 400,
           body: {
             statusCode: 400,
-            message: 'Indent is not awaiting PM allocation after Executive / Chairman approval',
+            message: 'Indent is not awaiting PM final review after Executive / Chairman approval',
           },
         };
       }

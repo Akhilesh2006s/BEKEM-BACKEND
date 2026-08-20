@@ -257,14 +257,14 @@ async function finalizePurchaseOrder(po, actorUserId, note, approvalContext, opt
     );
     await notificationService.notifyUser(mr.requestedByUserId, {
       title: 'Purchase order approved',
-      body: `PO ${po.poNumber} approved. Project Manager can proceed with allocation.`,
+      body: `PO ${po.poNumber} approved. Project Manager can complete final review.`,
       relatedEntityType: 'MaterialRequest',
       relatedEntityId: mr._id,
     });
     const { notifyProjectManagers } = require('./pmProceedAllocationService');
     await notifyProjectManagers(mr, {
-      title: 'Proceed with allocation',
-      body: `${mr.indentNumber} — PO ${po.poNumber} approved. Select Proceed with Allocation.`,
+      title: 'Final review',
+      body: `${mr.indentNumber} — PO ${po.poNumber} approved. Select Final review.`,
     });
   }
 
