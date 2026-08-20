@@ -497,6 +497,7 @@ export interface MaterialRequestDto {
   estimatedValue?: number;
   escalatedToHo?: boolean;
   escalatedToChairman?: boolean;
+  pmProceededAllocation?: boolean;
   storeStockVerified?: boolean;
   origin?: 'SITE' | 'EXECUTIVE';
   purchaseRequestId?: string;

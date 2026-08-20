@@ -69,6 +69,8 @@ const materialRequestSchema = new mongoose.Schema(
     escalatedToChairman: { type: Boolean, default: false },
     escalatedToChairmanAt: { type: Date },
     pmForwardRemark: { type: String, default: '' },
+    /** PM selected Proceed with Allocation after Executive / Chairman PO approval. */
+    pmProceededAllocation: { type: Boolean, default: false },
     /** Store confirmed stock is available before PM approval (no direct issue). */
     storeStockVerified: { type: Boolean, default: false },
     executiveProcurementMethod: {

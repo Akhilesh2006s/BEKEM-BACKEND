@@ -25,7 +25,12 @@ const {
   syncPoFulfillment,
   getCumulativeReceivedByLine,
 } = require('./services/grnFulfillmentService');
-const { EDITABLE_STATUSES, COORDINATOR_EDIT_STATUSES, CHAIRMAN_EDIT_STATUSES } = require('./services/poEditService');
+const {
+  EDITABLE_STATUSES,
+  COORDINATOR_EDIT_STATUSES,
+  CHAIRMAN_EDIT_STATUSES,
+  canEditPurchaseOrder,
+} = require('./services/poEditService');
 const { allocatePoGrnNumber } = require('./services/grnCounterService');
 
 describe('PO tracking & GRN fulfillment (spec 21–29)', () => {
@@ -193,5 +198,28 @@ describe('PO tracking & GRN fulfillment (spec 21–29)', () => {
     assert.equal(EDITABLE_STATUSES.has('APPROVED'), false);
     assert.equal(COORDINATOR_EDIT_STATUSES.has('APPROVED'), true);
     assert.equal(CHAIRMAN_EDIT_STATUSES.has('APPROVED'), true);
+  });
+
+  it('blocks coordinator from editing a PO after Chairman final approval', () => {
+    assert.equal(
+      canEditPurchaseOrder('COORDINATOR', { status: 'APPROVED', amount: 25000 }),
+      false
+    );
+    assert.equal(
+      canEditPurchaseOrder('COORDINATOR', {
+        status: 'APPROVED',
+        amount: 1000,
+        approvedAsChairmanOverride: true,
+      }),
+      false
+    );
+    assert.equal(
+      canEditPurchaseOrder('COORDINATOR', { status: 'APPROVED', amount: 1000 }),
+      true
+    );
+    assert.equal(
+      canEditPurchaseOrder('CHAIRMAN', { status: 'APPROVED', amount: 25000 }),
+      true
+    );
   });
 });

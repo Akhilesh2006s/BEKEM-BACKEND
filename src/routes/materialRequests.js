@@ -98,6 +98,15 @@ async function attachProcurementTrace(rows) {
       row.poId = po._id.toString();
       row.poNumber = po.poNumber || po.draftRef || '';
       row.poStatus = po.status;
+      if (
+        po.status === 'APPROVED' &&
+        !row.pmProceededAllocation &&
+        !['ALLOCATED', 'MATERIAL_RECEIVED', 'ISSUED', 'COMPLETED', 'CLOSED', 'REJECTED', 'CANCELLED'].includes(
+          row.status
+        )
+      ) {
+        row.pendingWith = 'PROJECT_MANAGER';
+      }
     }
   }
   return rows;
@@ -118,6 +127,10 @@ const {
   getCoordinatorDailyApprovedTotal,
   canCoordinatorLocalCloseStatus,
 } = coordinatorApprovalCapService;
+const {
+  isIndentAwaitingPmAllocation,
+  pmProceedWithAllocation,
+} = require('../services/pmProceedAllocationService');
 const { handleIdempotent } = require('../utils/idempotentHandler');
 
 const router = express.Router();
@@ -342,7 +355,7 @@ router.get('/', async (req, res, next) => {
     const data = await Promise.all(
       requests.map((mr) => serializeMaterialRequestEnriched(mr, req.user.role))
     );
-    if (req.user.role === UserRole.EXECUTIVE && requests.length) {
+    if (requests.length) {
       await attachProcurementTrace(data);
     }
     res.json({ data });
@@ -599,9 +612,7 @@ router.get('/:id', param('id').isMongoId(), validate, async (req, res, next) => 
         .filter((row) => row.projects?.length);
     }
 
-    if ([UserRole.EXECUTIVE, UserRole.COORDINATOR].includes(req.user.role)) {
-      await attachProcurementTrace([data]);
-    }
+    await attachProcurementTrace([data]);
 
     res.json({ data });
   } catch (err) {
@@ -1428,6 +1439,67 @@ router.post(
         relatedEntityType: 'MaterialRequest',
         relatedEntityId: mr._id,
       });
+
+      return { statusCode: 200, body: await mrEnrichedBody(mr._id, req.user.role) };
+    }, next);
+  }
+);
+
+router.post(
+  '/:id/pm-proceed-allocation',
+  requirePmApproval(),
+  [
+    param('id').isMongoId(),
+    body('remark').trim().notEmpty().withMessage('Remark is required'),
+  ],
+  validate,
+  async (req, res, next) => {
+    return handleIdempotent(req, res, `mr-pm-alloc:${req.params.id}`, async () => {
+      const mr = req._materialRequest || (await MaterialRequest.findById(req.params.id));
+      if (!mr) {
+        return { statusCode: 404, body: { statusCode: 404, message: 'Request not found' } };
+      }
+
+      if (req.approvalContext.principal.role !== UserRole.PROJECT_MANAGER) {
+        return {
+          statusCode: 403,
+          body: { statusCode: 403, message: 'Only Project Managers can proceed with allocation' },
+        };
+      }
+
+      if (!userCanAccessProject(req.user, mr.projectId) && !userCanAccessSite(req.user, mr.siteId)) {
+        return { statusCode: 403, body: { statusCode: 403, message: 'Forbidden: not your project' } };
+      }
+
+      if (mr.pmProceededAllocation || mr.status === 'ALLOCATED') {
+        return { statusCode: 200, body: await mrEnrichedBody(mr._id, req.user.role) };
+      }
+
+      let poStatus = null;
+      const pr = await PurchaseRequest.findOne({ materialRequestId: mr._id }).select('_id').lean();
+      if (pr) {
+        const po = await PurchaseOrder.findOne({
+          purchaseRequestId: pr._id,
+          status: { $nin: ['REJECTED', 'CANCELLED'] },
+        })
+          .sort({ createdAt: -1 })
+          .select('status')
+          .lean();
+        poStatus = po?.status || null;
+      }
+
+      if (!isIndentAwaitingPmAllocation(mr, poStatus)) {
+        return {
+          statusCode: 400,
+          body: {
+            statusCode: 400,
+            message: 'Indent is not awaiting PM allocation after Executive / Chairman approval',
+          },
+        };
+      }
+
+      const remark = requireRemark(req.body.remark);
+      await pmProceedWithAllocation(mr, req.user._id, remark);
 
       return { statusCode: 200, body: await mrEnrichedBody(mr._id, req.user.role) };
     }, next);

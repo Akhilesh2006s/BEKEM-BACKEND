@@ -273,4 +273,42 @@ describe('Indent workflow v2', () => {
       closeRes.body.data.status
     );
   });
+
+  it('PM proceeds with allocation after Chairman / Executive PO approval', async () => {
+    const createRes = await request(app)
+      .post('/api/material-requests')
+      .set('Authorization', `Bearer ${siteToken}`)
+      .send({
+        indentRequestType: 'ABOVE_5000',
+        requestedByName: 'Test Requester',
+        indentCategoryId: indentCategoryId,
+        purpose: 'PM proceed allocation after chairman',
+        items: [{ materialId: material._id.toString(), quantityRequested: 1 }],
+      });
+    assert.strictEqual(createRes.status, 201);
+    const mrId = createRes.body.data.id;
+
+    await MaterialRequest.findByIdAndUpdate(mrId, {
+      status: 'CHAIRMAN_APPROVED',
+      pendingWithRole: 'PROJECT_MANAGER',
+    });
+
+    const siteView = await request(app)
+      .get(`/api/material-requests/${mrId}`)
+      .set('Authorization', `Bearer ${siteToken}`);
+    assert.strictEqual(siteView.status, 200);
+    assert.strictEqual(siteView.body.data.status, 'CHAIRMAN_APPROVED');
+    assert.strictEqual(siteView.body.data.pendingWith, 'PROJECT_MANAGER');
+
+    const proceed = await request(app)
+      .post(`/api/material-requests/${mrId}/pm-proceed-allocation`)
+      .set('Authorization', `Bearer ${pmToken}`)
+      .send({ remark: 'Proceed with allocation after chairman approval' });
+    assert.strictEqual(proceed.status, 200, JSON.stringify(proceed.body));
+    assert.strictEqual(proceed.body.data.pmProceededAllocation, true);
+    assert.ok(
+      ['ALLOCATED', 'CHAIRMAN_APPROVED'].includes(proceed.body.data.status),
+      proceed.body.data.status
+    );
+  });
 });

@@ -264,4 +264,34 @@ describe('GRN hold & approval workflow', () => {
     assert.equal(chairRes.body.data.approvalStage, 'APPROVED');
     assert.notEqual(chairRes.body.data.status, 'ON_HOLD');
   });
+
+  it('matching-rate GRN still waits on Coordinator Approve work orders', async () => {
+    await GoodsReceiptNote.deleteMany({ purchaseOrderId: po._id });
+    await PurchaseOrder.findByIdAndUpdate(po._id, { fulfillmentStatus: 'open_partial' });
+
+    const res = await request(app)
+      .post('/api/goods-receipts')
+      .set('Authorization', `Bearer ${storeToken}`)
+      .set('Idempotency-Key', `grn-review-${po._id}`)
+      .send({
+        ...grnPayload(po, line, {
+          qty: 1,
+          rate: 100,
+          attachments: mandatoryAttachments,
+        }),
+        invoiceValue: 100,
+        ewayBillNumber: 'EWB123456789',
+      });
+
+    assert.equal(res.status, 201);
+    assert.equal(res.body.data.status, 'ON_HOLD');
+    assert.equal(res.body.data.approvalStage, 'COORDINATOR_PENDING');
+    assert.ok(res.body.data.holdReasons.includes('REVIEW'));
+
+    const queue = await request(app)
+      .get('/api/goods-receipts/hold-queue')
+      .set('Authorization', `Bearer ${coordToken}`);
+    assert.equal(queue.status, 200);
+    assert.ok((queue.body.data || []).some((g) => g.id === res.body.data.id));
+  });
 });

@@ -323,12 +323,17 @@ async function getTodayActions(user) {
   }
 
   if (role === UserRole.PROJECT_MANAGER) {
-    const pending = await MaterialRequest.countDocuments({ status: 'FORWARDED_TO_PM' });
+    const pending = await MaterialRequest.countDocuments({
+      $or: [
+        { status: 'FORWARDED_TO_PM' },
+        { status: 'CHAIRMAN_APPROVED', pmProceededAllocation: { $ne: true } },
+      ],
+    });
     if (pending > 0) {
       actions.push({
         id: 'pm-approve',
         title: `Approve ${pending} material request${pending > 1 ? 's' : ''}`,
-        subtitle: 'Forwarded from store — review and approve',
+        subtitle: 'Review, allocate, or approve indents waiting on you',
         href: '/pm/approvals',
         priority: 'high',
         count: pending,
@@ -434,14 +439,20 @@ async function getTodayActions(user) {
     const woPending = await WorkOrder.countDocuments({
       status: { $in: ['COORDINATOR_PENDING', 'CHAIRMAN_PENDING'] },
     });
-    if (woPending > 0) {
+    const { GoodsReceiptNote } = require('../models');
+    const grnPending = await GoodsReceiptNote.countDocuments({
+      status: 'ON_HOLD',
+      approvalStage: 'COORDINATOR_PENDING',
+    });
+    const woQueue = woPending + grnPending;
+    if (woQueue > 0) {
       actions.push({
         id: 'coord-wo-verify',
-        title: `Approve ${woPending} work order${woPending > 1 ? 's' : ''}`,
-        subtitle: 'Final work order approval',
-        href: await firstWoDetailHref('COORDINATOR_PENDING', '/coordinator'),
+        title: `Approve ${woQueue} work order${woQueue > 1 ? 's' : ''} / GRN`,
+        subtitle: 'Work orders and material receipts awaiting Coordinator',
+        href: '/coordinator/verify-wos',
         priority: 'high',
-        count: woPending,
+        count: woQueue,
       });
     }
   }
@@ -462,22 +473,25 @@ async function getTodayActions(user) {
         pending > 0
           ? `POs above ₹${poCoordinatorMaxInr.toLocaleString('en-IN')} awaiting Chairman`
           : 'Approval queue clear',
-      href:
-        pending > 0
-          ? await firstPoDetailHref(['PENDING_APPROVAL', 'CHAIRMAN_PENDING'], '/chairman')
-          : '/chairman/approve-pos',
+      href: '/chairman/procurement-requests',
       priority: pending > 0 ? 'high' : 'low',
       count: pending,
     });
     const woPending = await WorkOrder.countDocuments({ status: 'CHAIRMAN_PENDING' });
-    if (woPending > 0) {
+    const { GoodsReceiptNote } = require('../models');
+    const grnPending = await GoodsReceiptNote.countDocuments({
+      status: 'ON_HOLD',
+      approvalStage: 'CHAIRMAN_PENDING',
+    });
+    const woQueue = woPending + grnPending;
+    if (woQueue > 0) {
       actions.push({
         id: 'chairman-wo',
-        title: `Approve ${woPending} work order${woPending > 1 ? 's' : ''}`,
-        subtitle: 'Work orders awaiting Chairman',
+        title: `Approve ${woQueue} work order${woQueue > 1 ? 's' : ''} / GRN`,
+        subtitle: 'Work orders and material receipts awaiting Chairman',
         href: '/chairman/approve-wos',
         priority: 'high',
-        count: woPending,
+        count: woQueue,
       });
     }
     actions.push({
@@ -777,20 +791,8 @@ function withAge(item) {
   };
 }
 
-function poQueueListHref(rolePrefix) {
-  return rolePrefix === '/chairman' ? '/chairman/approve-pos' : '/coordinator/verify-pos';
-}
-
 function woQueueListHref(rolePrefix) {
   return rolePrefix === '/chairman' ? '/chairman/approve-wos' : '/coordinator/verify-wos';
-}
-
-async function firstPoDetailHref(statuses, rolePrefix) {
-  const list = Array.isArray(statuses) ? statuses : [statuses];
-  const po = await PurchaseOrder.findOne({ status: { $in: list } })
-    .sort({ createdAt: 1 })
-    .select('_id');
-  return po ? `${rolePrefix}/po/${po._id}` : poQueueListHref(rolePrefix);
 }
 
 async function firstWoDetailHref(status, rolePrefix) {

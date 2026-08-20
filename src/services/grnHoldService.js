@@ -141,8 +141,8 @@ async function notifyGrnHoldApprovers(grn, po, { requiresChairmanApproval }) {
   await notificationService.notifyUsers(
     coordinators.map((u) => u._id),
     {
-      title: 'GRN on hold — approval required',
-      body: `${grn.grnNumber} for PO ${po.displayPoNumber || po.poNumber || ''} requires approval (${(grn.holdReasons || []).join(', ') || 'variance'}).`,
+      title: 'GRN pending — Approve work orders',
+      body: `${grn.grnNumber} for PO ${po.displayPoNumber || po.poNumber || ''} is ready for Coordinator approval (${(grn.holdReasons || []).join(', ') || 'review'}).`,
       relatedEntityType: 'GoodsReceiptNote',
       relatedEntityId: grn._id,
     }

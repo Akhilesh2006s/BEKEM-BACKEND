@@ -1,6 +1,7 @@
 const { Material, GoodsReceiptNote, Vendor } = require('../models');
 const { validatePoLinePayload } = require('./poLineCalculation');
 const { getCumulativeReceivedByLine } = require('./grnFulfillmentService');
+const { requiresChairmanApproval } = require('../constants/approvalPolicy');
 
 const EDITABLE_STATUSES = new Set([
   'DRAFT',
@@ -16,9 +17,19 @@ const CHAIRMAN_EDIT_STATUSES = new Set(['CHAIRMAN_PENDING', 'PENDING_APPROVAL', 
 
 const EWAY_INVOICE_THRESHOLD_INR = 50000;
 
+function chairmanHasFinalApproved(po) {
+  return (
+    po?.status === 'APPROVED' &&
+    (requiresChairmanApproval(po.amount) || !!po.approvedAsChairmanOverride)
+  );
+}
+
 function canEditPurchaseOrder(role, po) {
   if (!po) return false;
-  if (role === 'COORDINATOR') return COORDINATOR_EDIT_STATUSES.has(po.status);
+  if (role === 'COORDINATOR') {
+    if (chairmanHasFinalApproved(po)) return false;
+    return COORDINATOR_EDIT_STATUSES.has(po.status);
+  }
   if (role === 'CHAIRMAN') return CHAIRMAN_EDIT_STATUSES.has(po.status);
   return false;
 }

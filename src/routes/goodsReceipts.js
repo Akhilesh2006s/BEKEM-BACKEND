@@ -397,13 +397,19 @@ router.post(
       });
 
       const anyRejected = items.some((i) => i.lineStatus === 'REJECTED');
+      const rejectedOnSubmit = !saveDraft && anyRejected && totalReceived === 0;
+      // Every submitted GRN waits on Coordinator (Approve work orders) before stock posts.
       let status = saveDraft
         ? 'DRAFT'
-        : hold.requiresHold
-          ? 'ON_HOLD'
-          : anyRejected && totalReceived === 0
-            ? 'REJECTED'
-            : resolveReceiptStatus(items);
+        : rejectedOnSubmit
+          ? 'REJECTED'
+          : 'ON_HOLD';
+      const needsCoordinatorReview = !saveDraft && status === 'ON_HOLD';
+      const holdReasons = hold.requiresHold
+        ? hold.holdReasons
+        : needsCoordinatorReview
+          ? ['REVIEW']
+          : [];
 
       const receiveType =
         req.body.receiveType || (isPartial || status === 'PARTIALLY_RECEIVED' ? 'PARTIAL' : 'FULL');
@@ -461,17 +467,17 @@ router.post(
         items,
         receivedQuantity: totalReceived,
         status,
-        approvalStage:
-          !saveDraft && hold.requiresHold
-            ? 'COORDINATOR_PENDING'
-            : saveDraft
-              ? 'NONE'
-              : 'APPROVED',
+        approvalStage: needsCoordinatorReview
+          ? 'COORDINATOR_PENDING'
+          : saveDraft
+            ? 'NONE'
+            : 'APPROVED',
         requiresChairmanApproval: hold.requiresChairmanApproval,
-        holdReasons: hold.holdReasons,
+        holdReasons,
         receiveType,
-        isPartialGrn: isPartial || hold.requiresHold,
-        varianceDetails: isPartial || hold.requiresHold ? { lines: varianceLines } : null,
+        isPartialGrn: isPartial || hold.requiresHold || needsCoordinatorReview,
+        varianceDetails:
+          isPartial || hold.requiresHold || needsCoordinatorReview ? { lines: varianceLines } : null,
         invoiceNo: req.body.invoiceNo || '',
         invoiceDate: new Date(req.body.invoiceDate),
         invoiceValue,

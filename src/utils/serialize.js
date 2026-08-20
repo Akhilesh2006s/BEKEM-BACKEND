@@ -206,6 +206,7 @@ function serializeMaterialRequest(mr, stockContext, pricingContext) {
     estimatedValue: (pricingContext?.totalEstimatedValue ?? mr.estimatedValue) || 0,
     escalatedToHo: !!mr.escalatedToHo,
     escalatedToChairman: !!mr.escalatedToChairman,
+    pmProceededAllocation: !!mr.pmProceededAllocation,
     storeStockVerified: !!mr.storeStockVerified,
     origin: mr.origin || 'SITE',
     indentRequestType: mr.indentRequestType || 'ABOVE_5000',
@@ -351,9 +352,13 @@ async function serializeMaterialRequestEnriched(mr, viewerRole, options = {}) {
       if (linked?.pendingWithRole) {
         data.pendingWith = linked.pendingWithRole;
       } else if (linked?.poStatus === 'APPROVED') {
-        data.pendingWith = null;
+        data.pendingWith = mr.pmProceededAllocation ? 'STORE_INCHARGE' : 'PROJECT_MANAGER';
       }
     }
+  }
+
+  if (data.status === 'CHAIRMAN_APPROVED') {
+    data.pendingWith = mr.pmProceededAllocation ? 'STORE_INCHARGE' : 'PROJECT_MANAGER';
   }
 
   if (viewerRole && hideIndentPricingForRole(viewerRole, data.indentRequestType)) {
