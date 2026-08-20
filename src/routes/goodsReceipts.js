@@ -200,6 +200,8 @@ function serializeGrnListItem(g, receiptSummary = null) {
     purchaseOrderId: po?._id?.toString() || po?.toString?.() || null,
     poNumber: g.poNumber || po?.poNumber || po?.displayPoNumber || po?.draftRef || '',
     indentNumber: g.indentNumber || '',
+    projectCode: po?.purchaseRequestId?.projectId?.code || '',
+    projectName: po?.purchaseRequestId?.projectId?.name || '',
     vendorId:
       g.vendorId?._id?.toString?.() ||
       g.vendorId?.toString?.() ||
@@ -242,7 +244,10 @@ router.get('/', async (req, res, next) => {
       .sort({ createdAt: -1 })
       .populate({
         path: 'purchaseOrderId',
-        populate: { path: 'vendorId', select: 'name gstNumber' },
+        populate: [
+          { path: 'vendorId', select: 'name gstNumber' },
+          { path: 'purchaseRequestId', populate: { path: 'projectId', select: 'code name' } },
+        ],
       })
       .populate('vendorId', 'name gstNumber')
       .populate('items.materialId')
@@ -275,7 +280,10 @@ router.get('/:id', param('id').isMongoId(), validate, async (req, res, next) => 
     const grn = await GoodsReceiptNote.findById(req.params.id)
       .populate({
         path: 'purchaseOrderId',
-        populate: { path: 'vendorId', select: 'name gstNumber' },
+        populate: [
+          { path: 'vendorId', select: 'name gstNumber' },
+          { path: 'purchaseRequestId', populate: { path: 'projectId', select: 'code name' } },
+        ],
       })
       .populate('vendorId', 'name gstNumber')
       .populate('items.materialId')

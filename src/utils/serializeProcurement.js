@@ -72,11 +72,11 @@ function serializePurchaseRequest(pr) {
     createdAt: pr.createdAt?.toISOString?.(),
     updatedAt: pr.updatedAt?.toISOString?.(),
   };
-  if (pr.projectId?.code) {
+  if (pr.projectId?.name || pr.projectId?.code) {
     base.project = {
       id: pr.projectId._id.toString(),
-      code: pr.projectId.code,
-      name: pr.projectId.name,
+      code: pr.projectId.code || '',
+      name: pr.projectId.name || '',
     };
   }
   if (pr.materialRequestId?.indentNumber) {

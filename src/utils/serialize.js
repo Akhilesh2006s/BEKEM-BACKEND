@@ -216,15 +216,15 @@ function serializeMaterialRequest(mr, stockContext, pricingContext) {
   };
 
   if (firstMat?.name) base.material = serializeMaterial(firstMat);
-  if (mr.siteId?.chainageLabel) {
+  if (mr.siteId?.name) {
     base.site = {
       id: mr.siteId._id.toString(),
       projectId: resolveId(mr.siteId.projectId),
       name: mr.siteId.name,
-      chainageLabel: mr.siteId.chainageLabel,
+      chainageLabel: mr.siteId.chainageLabel || '',
     };
   }
-  if (mr.projectId?.code) {
+  if (mr.projectId?.name || mr.projectId?.code) {
     base.project = {
       id: mr.projectId._id.toString(),
       code: mr.projectId.code,

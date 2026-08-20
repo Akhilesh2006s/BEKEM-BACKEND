@@ -17,9 +17,14 @@ function serializeSite(site) {
     projectId: site.projectId?._id?.toString() || site.projectId?.toString(),
     name: site.name,
     chainageLabel: site.chainageLabel,
-    project: site.projectId?.code
-      ? { id: site.projectId._id.toString(), code: site.projectId.code, name: site.projectId.name }
-      : undefined,
+    project:
+      site.projectId?.name || site.projectId?.code
+        ? {
+            id: site.projectId._id.toString(),
+            code: site.projectId.code || '',
+            name: site.projectId.name || '',
+          }
+        : undefined,
   };
 }
 

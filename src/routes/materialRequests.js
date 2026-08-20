@@ -537,10 +537,12 @@ router.get('/:id', param('id').isMongoId(), validate, async (req, res, next) => 
       const { enrichIndentWithCrossProjectStock } = require('../services/pmCrossProjectStockService');
       const cross = await enrichIndentWithCrossProjectStock(mr, req.user);
       const lineItems = data.items || [];
-      data.crossProjectStock = (cross || []).map((row) => {
-        const item = lineItems.find((l) => l.materialId === row.materialId);
-        return { ...row, materialName: item?.material?.name || row.materialName };
-      });
+      data.crossProjectStock = (cross || [])
+        .map((row) => {
+          const item = lineItems.find((l) => l.materialId === row.materialId);
+          return { ...row, materialName: item?.material?.name || row.materialName };
+        })
+        .filter((row) => row.projects?.length);
     }
 
     if ([UserRole.EXECUTIVE, UserRole.COORDINATOR].includes(req.user.role)) {

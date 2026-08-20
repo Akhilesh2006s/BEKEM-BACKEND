@@ -533,6 +533,11 @@ export interface MaterialRequestDto {
       projectCode: string;
       projectName: string;
       availableQty: number;
+      sites?: Array<{
+        siteId: string;
+        siteName: string;
+        availableQty: number;
+      }>;
     }>;
   }>;
 }

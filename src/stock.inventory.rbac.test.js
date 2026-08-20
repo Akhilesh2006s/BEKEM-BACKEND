@@ -136,6 +136,12 @@ describe('Stock inventory RBAC', () => {
     if (assignedNames.has('AMR POWER')) assert.strictEqual(byName['AMR POWER'], 0);
     if (assignedNames.has('CHITRAVATHI')) assert.strictEqual(byName.CHITRAVATHI, 50);
     if (assignedNames.has('KAIGA PROJECT')) assert.strictEqual(byName['KAIGA PROJECT'], 120);
+    for (const p of row.projects) {
+      assert.ok(Array.isArray(p.sites));
+      if (p.sites.length) {
+        assert.ok(p.sites.every((s) => typeof s.siteName === 'string' && s.siteName.length > 0));
+      }
+    }
   });
 
   it('Coordinator sees all project inventories', async () => {

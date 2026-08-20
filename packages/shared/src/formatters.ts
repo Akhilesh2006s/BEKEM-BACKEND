@@ -58,6 +58,17 @@ export function getFirstName(fullName: string): string {
   return fullName.split(' ')[0] || fullName;
 }
 
+/** `CODE — Name`, or whichever of code/name is present. */
+export function formatProjectLabel(
+  project?: { code?: string | null; name?: string | null } | null,
+  fallback = '—'
+): string {
+  const code = (project?.code || '').trim();
+  const name = (project?.name || '').trim();
+  if (code && name && code !== name) return `${code} — ${name}`;
+  return name || code || fallback;
+}
+
 /** Shortfall quantity for indent stock comparison (never negative). */
 export function computeRequiredQty(requestedQty: number, availableQty: number): number {
   const requested = Math.max(0, Number(requestedQty) || 0);

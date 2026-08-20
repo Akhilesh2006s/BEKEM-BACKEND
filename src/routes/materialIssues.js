@@ -21,7 +21,7 @@ router.use(authenticate);
 
 const issuePopulate = [
   { path: 'items.materialId' },
-  { path: 'siteId' },
+  { path: 'siteId', populate: { path: 'projectId', select: 'code name' } },
   { path: 'materialRequestId', select: 'indentNumber purpose' },
   { path: 'issuedByUserId', select: 'name' },
 ];
@@ -60,6 +60,13 @@ async function serializeIssue(issue) {
           id: issue.siteId._id.toString(),
           name: issue.siteId.name,
           chainageLabel: issue.siteId.chainageLabel,
+          project: issue.siteId.projectId?.name || issue.siteId.projectId?.code
+            ? {
+                id: issue.siteId.projectId._id?.toString?.() || issue.siteId.projectId.toString(),
+                code: issue.siteId.projectId.code || '',
+                name: issue.siteId.projectId.name || '',
+              }
+            : undefined,
         }
       : undefined,
     items: (issue.items || []).map((item) => {

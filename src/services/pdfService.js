@@ -369,6 +369,11 @@ function generateMaterialIssuePdf(issue) {
       header(doc, 'Material Issue Slip', issue.issueNumber);
 
       row(doc, 'Indent', issue.materialRequest?.indentNumber || '—');
+      if (issue.site?.project?.name || issue.site?.project?.code) {
+        const code = issue.site.project.code || '';
+        const name = issue.site.project.name || '';
+        row(doc, 'Project', code && name && code !== name ? `${code} — ${name}` : name || code);
+      }
       row(doc, 'Site', issue.site?.name || '—');
       if (issue.site?.chainageLabel) row(doc, 'Chainage', issue.site.chainageLabel);
       row(doc, 'Issued by', issue.issuedBy?.name || '—');
