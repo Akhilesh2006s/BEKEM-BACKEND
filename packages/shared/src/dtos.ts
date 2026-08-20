@@ -496,6 +496,7 @@ export interface MaterialRequestDto {
   requester?: { id: string; name: string };
   estimatedValue?: number;
   escalatedToHo?: boolean;
+  escalatedToChairman?: boolean;
   storeStockVerified?: boolean;
   origin?: 'SITE' | 'EXECUTIVE';
   purchaseRequestId?: string;
@@ -549,6 +550,8 @@ export interface PmDailyCapDto {
   dailyCap: number;
   remaining: number;
 }
+
+export type DailyCapDto = PmDailyCapDto;
 
 export interface PmDashboardDto {
   pendingRequests: MaterialRequestDto[];
@@ -1583,6 +1586,7 @@ export interface OrgSettingsDto {
   poPmMaxInr: number;
   poCoordinatorMaxInr: number;
   mrPmDailyMaxInr: number;
+  mrCoordinatorDailyMaxInr: number;
   timezone: string;
   expenseCategories: ExpenseCategoryApprovalDto[];
   approvalRoutingNote: string;
@@ -1593,6 +1597,7 @@ export interface UpdateOrgSettingsDto {
   poPmMaxInr?: number;
   poCoordinatorMaxInr?: number;
   mrPmDailyMaxInr?: number;
+  mrCoordinatorDailyMaxInr?: number;
   timezone?: string;
   expenseCategories?: ExpenseCategoryApprovalDto[];
 }
@@ -1601,5 +1606,6 @@ export interface ApprovalLimitsDto {
   poPmMaxInr: number;
   poCoordinatorMaxInr: number;
   mrPmDailyMaxInr: number;
+  mrCoordinatorDailyMaxInr: number;
   approvalRoutingNote: string;
 }

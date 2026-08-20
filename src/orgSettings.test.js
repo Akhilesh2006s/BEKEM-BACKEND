@@ -18,7 +18,12 @@ describe('Org settings & configurable approval limits', () => {
   });
 
   after(async () => {
-    await updateOrgSettings({ poPmMaxInr: 5000, poCoordinatorMaxInr: 5000, mrPmDailyMaxInr: 5000 });
+    await updateOrgSettings({
+      poPmMaxInr: 5000,
+      poCoordinatorMaxInr: 5000,
+      mrPmDailyMaxInr: 5000,
+      mrCoordinatorDailyMaxInr: 10000,
+    });
     await teardownTestDb();
   });
 
@@ -59,6 +64,19 @@ describe('Org settings & configurable approval limits', () => {
     const { requiresPmApproval } = require('./constants/approvalPolicy');
     assert.strictEqual(requiresPmApproval(5999), true);
     assert.strictEqual(requiresPmApproval(6000), false);
+  });
+
+  it('coordinator can update Coordinator daily indent cap', async () => {
+    const res = await request(app)
+      .patch('/api/admin/org-settings')
+      .set('Authorization', `Bearer ${coordToken}`)
+      .send({ mrCoordinatorDailyMaxInr: 12000 });
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.data.mrCoordinatorDailyMaxInr, 12000);
+    const limits = await request(app)
+      .get('/api/admin/org-settings/approval-limits')
+      .set('Authorization', `Bearer ${coordToken}`);
+    assert.strictEqual(limits.body.data.mrCoordinatorDailyMaxInr, 12000);
   });
 
   it('rejects coordinator max below PM max', async () => {

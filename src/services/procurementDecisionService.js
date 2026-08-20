@@ -270,14 +270,20 @@ async function executiveDecide(mr, user, { method, remark }) {
   );
 
   const coordinators = await User.find({ role: UserRole.COORDINATOR });
-  await notificationService.notifyUsers(
-    coordinators.map((u) => u._id),
-    {
-      title: 'Procurement Decision Waiting for Approval',
-      body: `${mr.indentNumber} — executive recommended branch transfer.`,
-      relatedEntityType: 'ProcurementDecision',
-      relatedEntityId: mr._id,
-    }
+  const { checkCoordinatorCanApprove } = require('./coordinatorApprovalCapService');
+  await Promise.all(
+    coordinators.map(async (coord) => {
+      const capCheck = await checkCoordinatorCanApprove(coord._id, mr);
+      const hint = capCheck.wouldExceed
+        ? ''
+        : '\nCan locally approve and close. No need to reach out to MD/Coordinator level.';
+      return notificationService.notifyUser(coord._id, {
+        title: 'Procurement Decision Waiting for Approval',
+        body: `${mr.indentNumber} — executive recommended branch transfer.${hint}`,
+        relatedEntityType: 'ProcurementDecision',
+        relatedEntityId: mr._id,
+      });
+    })
   );
 
   return buildProcurementDecisionDto(mr);
@@ -324,6 +330,45 @@ async function coordinatorReview(mr, user, { action, method, remark, fromProject
   if (!['PURCHASE_ORDER', 'BRANCH_TRANSFER'].includes(finalMethod)) {
     const err = new Error('Procurement method is required');
     err.statusCode = 400;
+    throw err;
+  }
+
+  const { checkCoordinatorCanApprove, MR_COORDINATOR_DAILY_MAX_INR } = require('./coordinatorApprovalCapService');
+  if (!mr.estimatedValue) {
+    const { estimateIndentAmount } = require('./purchaseRequestService');
+    mr.estimatedValue = await estimateIndentAmount(mr);
+  }
+  const capCheck = await checkCoordinatorCanApprove(user._id, mr);
+  if (capCheck.wouldExceed) {
+    const fromStatusOverflow = mr.status;
+    mr.escalatedToChairman = true;
+    mr.escalatedToChairmanAt = new Date();
+    mr.pendingWithRole = 'CHAIRMAN';
+    mr.coordinatorProcurementRemark = remark;
+    mr.coordinatorProcurementDecidedByUserId = user._id;
+    mr.coordinatorProcurementDecidedAt = new Date();
+    await mr.save();
+    const capLabel = `₹${MR_COORDINATOR_DAILY_MAX_INR.toLocaleString('en-IN')}`;
+    await statusHistoryService.record(
+      'MaterialRequest',
+      mr._id,
+      fromStatusOverflow,
+      mr.status,
+      user._id,
+      `Escalated to Chairman / MD: exceeds ${capLabel} Coordinator daily limit`
+    );
+    const chairmen = await User.find({ role: UserRole.CHAIRMAN });
+    await notificationService.notifyUsers(
+      chairmen.map((u) => u._id),
+      {
+        title: 'Indent exceeds Coordinator daily cap',
+        body: `${mr.indentNumber} exceeds the Coordinator ${capLabel}/day limit and needs MD / Chairman review.`,
+        relatedEntityType: 'MaterialRequest',
+        relatedEntityId: mr._id,
+      }
+    );
+    const err = new Error(`Escalated: exceeds ${capLabel} daily limit`);
+    err.statusCode = 409;
     throw err;
   }
 

@@ -40,6 +40,7 @@ function envDefaults() {
     poPmMaxInr: Number(process.env.PO_PM_MAX_INR || 5000),
     poCoordinatorMaxInr: Number(process.env.PO_COORDINATOR_MAX_INR || 5000),
     mrPmDailyMaxInr: Number(process.env.MR_PM_DAILY_MAX_INR || 5000),
+    mrCoordinatorDailyMaxInr: Number(process.env.MR_COORDINATOR_DAILY_MAX_INR || 10000),
     timezone: process.env.APP_TIMEZONE || 'Asia/Kolkata',
     expenseCategories: DEFAULT_EXPENSE_CATEGORIES.map((c) => ({ ...c })),
   };
@@ -62,6 +63,8 @@ function serialize(doc) {
     poPmMaxInr: base.poPmMaxInr ?? envDefaults().poPmMaxInr,
     poCoordinatorMaxInr: base.poCoordinatorMaxInr ?? envDefaults().poCoordinatorMaxInr,
     mrPmDailyMaxInr: base.mrPmDailyMaxInr ?? envDefaults().mrPmDailyMaxInr,
+    mrCoordinatorDailyMaxInr:
+      base.mrCoordinatorDailyMaxInr ?? envDefaults().mrCoordinatorDailyMaxInr,
     timezone: base.timezone || envDefaults().timezone,
     expenseCategories:
       base.expenseCategories?.length > 0
@@ -101,6 +104,9 @@ async function updateOrgSettings(patch, actorUserId) {
   if (patch.poPmMaxInr != null) doc.poPmMaxInr = Number(patch.poPmMaxInr);
   if (patch.poCoordinatorMaxInr != null) doc.poCoordinatorMaxInr = Number(patch.poCoordinatorMaxInr);
   if (patch.mrPmDailyMaxInr != null) doc.mrPmDailyMaxInr = Number(patch.mrPmDailyMaxInr);
+  if (patch.mrCoordinatorDailyMaxInr != null) {
+    doc.mrCoordinatorDailyMaxInr = Number(patch.mrCoordinatorDailyMaxInr);
+  }
   if (patch.timezone) doc.timezone = String(patch.timezone).trim();
   if (Array.isArray(patch.expenseCategories)) {
     doc.expenseCategories = patch.expenseCategories.map((row) => ({
@@ -124,6 +130,7 @@ function getApprovalLimits() {
     poPmMaxInr: s.poPmMaxInr,
     poCoordinatorMaxInr: s.poCoordinatorMaxInr,
     mrPmDailyMaxInr: s.mrPmDailyMaxInr,
+    mrCoordinatorDailyMaxInr: s.mrCoordinatorDailyMaxInr,
     approvalRoutingNote: s.approvalRoutingNote,
   };
 }

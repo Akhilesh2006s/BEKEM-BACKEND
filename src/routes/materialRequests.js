@@ -112,6 +112,12 @@ const {
 } = require('../services/executiveRoutingService');
 const pmApprovalCapService = require('../services/pmApprovalCapService');
 const { checkPmCanApprove, getPmDailyApprovedTotal } = pmApprovalCapService;
+const coordinatorApprovalCapService = require('../services/coordinatorApprovalCapService');
+const {
+  checkCoordinatorCanApprove,
+  getCoordinatorDailyApprovedTotal,
+  canCoordinatorLocalCloseStatus,
+} = coordinatorApprovalCapService;
 const { handleIdempotent } = require('../utils/idempotentHandler');
 
 const router = express.Router();
@@ -188,7 +194,7 @@ const IN_PROGRESS_STATUSES = [
 /** True closed loop only after Indent Raiser confirms receipt → COMPLETED */
 const COMPLETED_STATUSES = ['COMPLETED', 'CLOSED'];
 
-async function buildPmIndentNotification(mr) {
+async function buildPmIndentNotification(mr, pmUserId) {
   const populated = await MaterialRequest.findById(mr._id)
     .populate('projectId', 'name code')
     .populate('requestedByUserId', 'name')
@@ -202,12 +208,37 @@ async function buildPmIndentNotification(mr) {
     .join(', ');
   const project = populated?.projectId?.code || populated?.projectId?.name || '';
   const requester = populated?.requestedByUserId?.name || 'Site';
+  let body = `${mr.indentNumber} · ${project} · ${materialSummary} · by ${requester}`;
+  if (pmUserId) {
+    const capCheck = await checkPmCanApprove(pmUserId, populated || mr);
+    if (!capCheck.wouldExceed) {
+      body += '\nCan locally approve and close. No need to reach out to HO level.';
+    }
+  }
   return {
     title: 'Indent awaiting PM approval',
-    body: `${mr.indentNumber} · ${project} · ${materialSummary} · by ${requester}`,
+    body,
     relatedEntityType: 'MaterialRequest',
     relatedEntityId: mr._id,
   };
+}
+
+async function notifyCoordinatorsForIndent(mr, { title, body }) {
+  const coordinators = await User.find({ role: UserRole.COORDINATOR });
+  await Promise.all(
+    coordinators.map(async (coord) => {
+      const capCheck = await checkCoordinatorCanApprove(coord._id, mr);
+      const hint = capCheck.wouldExceed
+        ? ''
+        : '\nCan locally approve and close. No need to reach out to MD/Coordinator level.';
+      return notificationService.notifyUser(coord._id, {
+        title,
+        body: `${body}${hint}`,
+        relatedEntityType: 'MaterialRequest',
+        relatedEntityId: mr._id,
+      });
+    })
+  );
 }
 
 async function forwardIndentToPm(mr, actorUserId, remark, { storeStockVerified = false } = {}) {
@@ -231,8 +262,11 @@ async function forwardIndentToPm(mr, actorUserId, remark, { storeStockVerified =
     role: UserRole.PROJECT_MANAGER,
     assignedProjectIds: mr.projectId,
   });
-  const notification = await buildPmIndentNotification(mr);
-  await notificationService.notifyUsers(pmUsers.map((u) => u._id), notification);
+  await Promise.all(
+    pmUsers.map(async (pm) =>
+      notificationService.notifyUser(pm._id, await buildPmIndentNotification(mr, pm._id))
+    )
+  );
 
   return mr;
 }
@@ -331,6 +365,26 @@ router.get('/pm/daily-cap', async (req, res, next) => {
         dailyApprovedTotal,
         dailyCap: limits.mrPmDailyMaxInr,
         remaining: Math.max(0, limits.mrPmDailyMaxInr - dailyApprovedTotal),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/coordinator/daily-cap', async (req, res, next) => {
+  try {
+    if (req.user.role !== UserRole.COORDINATOR) {
+      return res.status(403).json({ statusCode: 403, message: 'Forbidden' });
+    }
+    const { getApprovalLimits } = require('../services/orgSettingsService');
+    const limits = getApprovalLimits();
+    const dailyApprovedTotal = await getCoordinatorDailyApprovedTotal(req.user._id);
+    res.json({
+      data: {
+        dailyApprovedTotal,
+        dailyCap: limits.mrCoordinatorDailyMaxInr,
+        remaining: Math.max(0, limits.mrCoordinatorDailyMaxInr - dailyApprovedTotal),
       },
     });
   } catch (err) {
@@ -951,9 +1005,10 @@ router.post(
           role: UserRole.PROJECT_MANAGER,
           assignedProjectIds: mr.projectId,
         });
-        await notificationService.notifyUsers(
-          pmUsers.map((u) => u._id),
-          await buildPmIndentNotification(mr)
+        await Promise.all(
+          pmUsers.map(async (pm) =>
+            notificationService.notifyUser(pm._id, await buildPmIndentNotification(mr, pm._id))
+          )
         );
       } catch (notifyErr) {
         console.error('Forward notification failed:', notifyErr.message);
@@ -1073,6 +1128,10 @@ router.post(
             body: `${mr.indentNumber} exceeds PM daily approval cap.`,
             relatedEntityType: 'ProcurementDecision',
             relatedEntityId: mr._id,
+          });
+          await notifyCoordinatorsForIndent(mr, {
+            title: 'Indent at Head Office',
+            body: `${mr.indentNumber} exceeds PM daily approval cap.`,
           });
 
           const enriched = await mrEnrichedBody(mr._id, req.user.role);
@@ -1371,6 +1430,176 @@ router.post(
       });
 
       return { statusCode: 200, body: await mrEnrichedBody(mr._id, req.user.role) };
+    }, next);
+  }
+);
+
+router.post(
+  '/:id/coordinator-local-close',
+  [
+    param('id').isMongoId(),
+    body('remark').trim().notEmpty().withMessage('Remark is required'),
+  ],
+  validate,
+  async (req, res, next) => {
+    return handleIdempotent(req, res, `mr-coord-close:${req.params.id}`, async () => {
+      if (req.user.role !== UserRole.COORDINATOR) {
+        return {
+          statusCode: 403,
+          body: { statusCode: 403, message: 'Only Coordinators can locally approve at this level' },
+        };
+      }
+
+      const mr = await MaterialRequest.findById(req.params.id);
+      if (!mr) {
+        return { statusCode: 404, body: { statusCode: 404, message: 'Request not found' } };
+      }
+
+      if (mr.escalatedToChairman) {
+        return {
+          statusCode: 400,
+          body: {
+            statusCode: 400,
+            message: 'This indent has already been escalated to Chairman / MD',
+          },
+        };
+      }
+
+      if (!canCoordinatorLocalCloseStatus(mr.status)) {
+        return {
+          statusCode: 400,
+          body: { statusCode: 400, message: 'Indent is not awaiting Coordinator review' },
+        };
+      }
+
+      if (!mr.estimatedValue) mr.estimatedValue = await estimateIndentAmount(mr);
+      const capCheck = await checkCoordinatorCanApprove(req.user._id, mr);
+      const capLabel = `₹${coordinatorApprovalCapService.MR_COORDINATOR_DAILY_MAX_INR.toLocaleString('en-IN')}`;
+
+      if (capCheck.wouldExceed) {
+        const fromStatus = mr.status;
+        mr.escalatedToChairman = true;
+        mr.escalatedToChairmanAt = new Date();
+        mr.pendingWithRole = 'CHAIRMAN';
+        await mr.save();
+
+        await statusHistoryService.record(
+          'MaterialRequest',
+          mr._id,
+          fromStatus,
+          mr.status,
+          req.user._id,
+          `Escalated to Chairman / MD: exceeds ${capLabel} Coordinator daily limit`
+        );
+
+        const chairmen = await User.find({ role: UserRole.CHAIRMAN });
+        await notificationService.notifyUsers(
+          chairmen.map((u) => u._id),
+          {
+            title: 'Indent exceeds Coordinator daily cap',
+            body: `${mr.indentNumber} exceeds the Coordinator ${capLabel}/day limit and needs MD / Chairman review.`,
+            relatedEntityType: 'MaterialRequest',
+            relatedEntityId: mr._id,
+          }
+        );
+
+        const enriched = await mrEnrichedBody(mr._id, req.user.role);
+        return {
+          statusCode: 409,
+          body: {
+            statusCode: 409,
+            message: `Escalated: exceeds ${capLabel} daily limit`,
+            escalated: true,
+            dailyApprovedTotal: capCheck.dailyApprovedTotal,
+            dailyCap: capCheck.dailyCap,
+            ...enriched,
+          },
+        };
+      }
+
+      const remark = requireRemark(req.body.remark);
+      const stockContext = await enrichIndentWithStock(mr);
+      const fromStatus = mr.status;
+      let closedLocally = false;
+
+      if (stockContext.canFullyIssue) {
+        try {
+          await allocateIndentStock(mr, req.user._id);
+          mr.status = 'ALLOCATED';
+          mr.pendingWithRole = 'STORE_INCHARGE';
+          closedLocally = true;
+        } catch (allocErr) {
+          if (allocErr.statusCode) {
+            return {
+              statusCode: allocErr.statusCode,
+              body: { statusCode: allocErr.statusCode, message: allocErr.message },
+            };
+          }
+          throw allocErr;
+        }
+        mr.coordinatorProcurementRemark = remark;
+        mr.coordinatorProcurementDecidedByUserId = req.user._id;
+        mr.coordinatorProcurementDecidedAt = new Date();
+        await mr.save();
+
+        await statusHistoryService.record(
+          'MaterialRequest',
+          mr._id,
+          fromStatus,
+          'ALLOCATED',
+          req.user._id,
+          `Coordinator closed locally (stock reserved): ${remark}`
+        );
+      } else {
+        mr.coordinatorProcurementRemark = remark;
+        mr.coordinatorProcurementDecidedByUserId = req.user._id;
+        mr.coordinatorProcurementDecidedAt = new Date();
+        await mr.save();
+        const populated = await MaterialRequest.findById(mr._id)
+          .populate('projectId')
+          .populate('items.materialId');
+        await createPurchaseRequestForIndent(
+          populated,
+          req.user._id,
+          undefined,
+          `Coordinator locally approved without MD: ${remark}`
+        );
+      }
+
+      const storeUsers = await User.find({
+        role: UserRole.STORE_INCHARGE,
+        assignedSiteId: mr.siteId,
+      });
+      if (closedLocally && storeUsers.length) {
+        await notificationService.notifyUsers(
+          storeUsers.map((u) => u._id),
+          {
+            title: 'Indent closed by Coordinator — issue stock',
+            body: `${mr.indentNumber} — stock reserved; issue material.`,
+            relatedEntityType: 'MaterialRequest',
+            relatedEntityId: mr._id,
+          }
+        );
+      }
+
+      await notificationService.notifyUser(mr.requestedByUserId, {
+        title: closedLocally ? 'Indent closed by Coordinator' : 'Indent approved by Coordinator',
+        body: closedLocally
+          ? `Your request ${mr.indentNumber} was closed by the Coordinator — stock reserved for issue.`
+          : `Your request ${mr.indentNumber} was approved by the Coordinator — procurement can proceed without MD.`,
+        relatedEntityType: 'MaterialRequest',
+        relatedEntityId: mr._id,
+      });
+
+      return {
+        statusCode: 200,
+        body: {
+          ...(await mrEnrichedBody(mr._id, req.user.role)),
+          escalated: false,
+          dailyApprovedTotal: await getCoordinatorDailyApprovedTotal(req.user._id),
+          dailyCap: coordinatorApprovalCapService.MR_COORDINATOR_DAILY_MAX_INR,
+        },
+      };
     }, next);
   }
 );

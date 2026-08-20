@@ -205,6 +205,7 @@ function serializeMaterialRequest(mr, stockContext, pricingContext) {
     pendingWith: mr.pendingWithRole || pendingWithLabel(mr.status),
     estimatedValue: (pricingContext?.totalEstimatedValue ?? mr.estimatedValue) || 0,
     escalatedToHo: !!mr.escalatedToHo,
+    escalatedToChairman: !!mr.escalatedToChairman,
     storeStockVerified: !!mr.storeStockVerified,
     origin: mr.origin || 'SITE',
     indentRequestType: mr.indentRequestType || 'ABOVE_5000',

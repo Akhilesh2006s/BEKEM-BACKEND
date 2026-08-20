@@ -65,6 +65,9 @@ const materialRequestSchema = new mongoose.Schema(
     estimatedValue: { type: Number, default: 0 },
     escalatedToHo: { type: Boolean, default: false },
     escalatedAt: { type: Date },
+    /** Coordinator daily cap overflow — sent to Chairman / MD instead of local close. */
+    escalatedToChairman: { type: Boolean, default: false },
+    escalatedToChairmanAt: { type: Date },
     pmForwardRemark: { type: String, default: '' },
     /** Store confirmed stock is available before PM approval (no direct issue). */
     storeStockVerified: { type: Boolean, default: false },

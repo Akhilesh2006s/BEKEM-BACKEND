@@ -223,4 +223,54 @@ describe('Indent workflow v2', () => {
     assert.strictEqual(closeRes.status, 200, JSON.stringify(closeRes.body));
     assert.strictEqual(closeRes.body.data.status, 'ALLOCATED');
   });
+
+  it('Coordinator daily cap endpoint and local close within limit', async () => {
+    const coordToken = await loginAs('coordinator@bekem.com');
+    const { updateOrgSettings, loadOrgSettings } = require('./services/orgSettingsService');
+    await updateOrgSettings({ mrCoordinatorDailyMaxInr: 10000 });
+    await loadOrgSettings();
+
+    const capRes = await request(app)
+      .get('/api/material-requests/coordinator/daily-cap')
+      .set('Authorization', `Bearer ${coordToken}`);
+    assert.strictEqual(capRes.status, 200);
+    assert.strictEqual(capRes.body.data.dailyCap, 10000);
+    assert.ok(capRes.body.data.remaining <= 10000);
+
+    const createRes = await request(app)
+      .post('/api/material-requests')
+      .set('Authorization', `Bearer ${siteToken}`)
+      .send({
+        indentRequestType: 'ABOVE_5000',
+        requestedByName: 'Test Requester',
+        indentCategoryId: indentCategoryId,
+        purpose: 'Coordinator daily cap local close',
+        items: [{ materialId: material._id.toString(), quantityRequested: 1 }],
+      });
+    const mrId = createRes.body.data.id;
+
+    const fwd = await request(app)
+      .post(`/api/material-requests/${mrId}/allocate`)
+      .set('Authorization', `Bearer ${storeToken}`)
+      .send({ decision: 'forward', remark: 'Forward to PM' });
+    assert.strictEqual(fwd.status, 200);
+
+    const ho = await request(app)
+      .post(`/api/material-requests/${mrId}/forward-to-ho`)
+      .set('Authorization', `Bearer ${pmToken}`)
+      .send({ remark: 'Need Head Office' });
+    assert.strictEqual(ho.status, 200, JSON.stringify(ho.body));
+
+    await MaterialRequest.findByIdAndUpdate(mrId, { estimatedValue: 2500 });
+
+    const closeRes = await request(app)
+      .post(`/api/material-requests/${mrId}/coordinator-local-close`)
+      .set('Authorization', `Bearer ${coordToken}`)
+      .send({ remark: 'Within daily cap' });
+    assert.strictEqual(closeRes.status, 200, JSON.stringify(closeRes.body));
+    assert.ok(
+      ['ALLOCATED', 'PURCHASE_REQUESTED'].includes(closeRes.body.data.status),
+      closeRes.body.data.status
+    );
+  });
 });

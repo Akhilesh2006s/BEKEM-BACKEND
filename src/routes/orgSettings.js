@@ -47,6 +47,7 @@ router.patch(
     body('poPmMaxInr').optional().isFloat({ min: 0 }),
     body('poCoordinatorMaxInr').optional().isFloat({ min: 0 }),
     body('mrPmDailyMaxInr').optional().isFloat({ min: 0 }),
+    body('mrCoordinatorDailyMaxInr').optional().isFloat({ min: 0 }),
     body('timezone').optional().isString(),
     body('expenseCategories').optional().isArray(),
     body('expenseCategories.*.key').optional().isString(),

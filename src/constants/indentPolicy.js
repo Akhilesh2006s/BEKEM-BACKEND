@@ -10,6 +10,9 @@ module.exports = {
   get MR_PM_DAILY_MAX_INR() {
     return limits().mrPmDailyMaxInr;
   },
+  get MR_COORDINATOR_DAILY_MAX_INR() {
+    return limits().mrCoordinatorDailyMaxInr;
+  },
   get APP_TIMEZONE() {
     return limits().timezone;
   },
