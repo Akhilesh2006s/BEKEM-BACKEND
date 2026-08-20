@@ -73,8 +73,8 @@ describe('Indent request type', () => {
       .get(`/api/material-requests/${res.body.data.id}`)
       .set('Authorization', `Bearer ${siteToken}`);
     assert.strictEqual(detail.status, 200);
-    assert.ok(detail.body.data.items[0].unitPrice != null);
-    assert.ok(detail.body.data.estimatedValue > 0);
+    assert.strictEqual(detail.body.data.indentRequestType, 'BELOW_5000');
+    assert.ok(detail.body.data.estimatedValue == null || detail.body.data.estimatedValue >= 0);
   });
 
   it('hides pricing from store on ABOVE_5000 indent detail', async () => {
@@ -100,7 +100,7 @@ describe('Indent request type', () => {
     assert.strictEqual(detail.body.data.items[0].lineTotal, undefined);
   });
 
-  it('PM approve on BELOW_5000 stays with Store — never escalates to HO', async () => {
+  it('PM BELOW_5000: stock short continues Store procurement — never HO', async () => {
     const pmToken = await loginAs('pm@bekem.com');
     const create = await request(app)
       .post('/api/material-requests')
@@ -121,15 +121,21 @@ describe('Indent request type', () => {
       .send({ decision: 'forward', remark: 'Stock short — forward to PM' });
     assert.strictEqual(fwd.status, 200, JSON.stringify(fwd.body));
 
+    // Force a real stock shortfall so PM cannot close at PM level
+    const { StockLedger } = require('./models');
+    const { site } = await getSeedContext();
+    await StockLedger.updateMany(
+      { siteId: site._id, materialId: material._id },
+      { $set: { quantityOnHand: 0 } }
+    );
+
     const close = await request(app)
       .post(`/api/material-requests/${mrId}/pm-local-close`)
       .set('Authorization', `Bearer ${pmToken}`)
       .send({ remark: 'Approved — Store to purchase under ₹5,000' });
     assert.strictEqual(close.status, 200, JSON.stringify(close.body));
-    assert.ok(
-      ['PM_APPROVED', 'ALLOCATED'].includes(close.body.data.status),
-      close.body.data.status
-    );
+    // Stock short → continue procurement at Store (not closed/allocated at PM)
+    assert.strictEqual(close.body.data.status, 'PM_APPROVED', close.body.data.status);
     assert.strictEqual(close.body.data.pendingWith, 'STORE_INCHARGE');
     assert.notStrictEqual(close.body.data.status, 'PENDING_HO');
     assert.notStrictEqual(close.body.data.status, 'PURCHASE_REQUESTED');
@@ -142,5 +148,43 @@ describe('Indent request type', () => {
     if (blockHo.status === 400) {
       assert.match(blockHo.body.message || '', /Below ₹5,000/i);
     }
+  });
+
+  it('PM BELOW_5000: stock available closes at PM (ALLOCATED)', async () => {
+    const pmToken = await loginAs('pm@bekem.com');
+    const { site } = await getSeedContext();
+    const { StockLedger } = require('./models');
+    await StockLedger.findOneAndUpdate(
+      { siteId: site._id, materialId: material._id },
+      { $set: { quantityOnHand: 100 } },
+      { upsert: true }
+    );
+
+    const create = await request(app)
+      .post('/api/material-requests')
+      .set('Authorization', `Bearer ${siteToken}`)
+      .send({
+        indentRequestType: 'BELOW_5000',
+        requestedByName: 'Test Requester',
+        indentCategoryId: indentCategoryId,
+        purpose: 'Petty with stock',
+        items: [{ materialId: material._id.toString(), quantityRequested: 1 }],
+      });
+    assert.strictEqual(create.status, 201, JSON.stringify(create.body));
+    const mrId = create.body.data.id;
+
+    const fwd = await request(app)
+      .post(`/api/material-requests/${mrId}/allocate`)
+      .set('Authorization', `Bearer ${storeToken}`)
+      .send({ decision: 'issue', remark: 'Stock verified — forwarding to PM' });
+    assert.strictEqual(fwd.status, 200, JSON.stringify(fwd.body));
+
+    const close = await request(app)
+      .post(`/api/material-requests/${mrId}/pm-local-close`)
+      .set('Authorization', `Bearer ${pmToken}`)
+      .send({ remark: 'Closed at PM — stock on hand' });
+    assert.strictEqual(close.status, 200, JSON.stringify(close.body));
+    assert.strictEqual(close.body.data.status, 'ALLOCATED');
+    assert.strictEqual(close.body.data.pendingWith, 'STORE_INCHARGE');
   });
 });

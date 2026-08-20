@@ -1106,7 +1106,10 @@ router.post(
       mr.status = toStatus;
       if (!mr.estimatedValue) mr.estimatedValue = await estimateIndentAmount(mr);
 
-      // Below ₹5,000: PM approval is final — Store purchases with approved funds (no HO PR).
+      // Below ₹5,000:
+      // - stock available → close at PM (allocate); Store only issues
+      // - stock short → PM approval continues procurement at Store (purchase & allocate; no HO)
+      let belowClosedAtPm = false;
       if (toStatus === 'PM_APPROVED' && isBelowCap) {
         const stockContext = await enrichIndentWithStock(mr);
         if (stockContext.canFullyIssue) {
@@ -1114,6 +1117,7 @@ router.post(
             await allocateIndentStock(mr, req.user._id);
             mr.status = 'ALLOCATED';
             mr.pendingWithRole = 'STORE_INCHARGE';
+            belowClosedAtPm = true;
           } catch (allocErr) {
             if (allocErr.statusCode) {
               return {
@@ -1140,7 +1144,9 @@ router.post(
         mr.status,
         req.user._id,
         isBelowCap && toStatus === 'PM_APPROVED'
-          ? `${note} (Below ₹5,000 — Store to purchase / allocate)`
+          ? belowClosedAtPm
+            ? `${note} (Below ₹5,000 — closed at PM; stock reserved for Store issue)`
+            : `${note} (Below ₹5,000 — stock short; Store to purchase & allocate)`
           : note
       );
 
@@ -1167,8 +1173,12 @@ router.post(
         await notificationService.notifyUsers(
           storeUsers.map((u) => u._id),
           {
-            title: 'Below ₹5,000 indent approved by PM',
-            body: `${mr.indentNumber} — purchase with approved funds and allocate / issue.`,
+            title: belowClosedAtPm
+              ? 'Below ₹5,000 indent closed by PM — issue stock'
+              : 'Below ₹5,000 indent approved by PM — purchase required',
+            body: belowClosedAtPm
+              ? `${mr.indentNumber} — stock reserved; issue to site.`
+              : `${mr.indentNumber} — stock short; purchase with approved funds and allocate / issue.`,
             relatedEntityType: 'MaterialRequest',
             relatedEntityId: mr._id,
           }
@@ -1274,34 +1284,33 @@ router.post(
       }
 
       if (!mr.estimatedValue) mr.estimatedValue = await estimateIndentAmount(mr);
-      const pmId = req.approvalContext.principal._id;
       const stockContext = await enrichIndentWithStock(mr);
       const canIssueFromStock = stockContext.canFullyIssue;
       const isBelowCap = mr.indentRequestType === 'BELOW_5000';
 
-      // Above ₹5,000 stock-short: daily cap may block local close. Below ₹5,000 never escalates.
+      // Close at PM only when stock is available. Above ₹5,000 + short → HO.
+      // Below ₹5,000 + short → continue Store purchase procurement (not a stock close).
       if (!canIssueFromStock && !isBelowCap) {
-        const capCheck = await checkPmCanApprove(pmId, mr);
-        if (capCheck.wouldExceed) {
-          return {
-            statusCode: 409,
-            body: {
-              statusCode: 409,
-              message: `Cannot close locally — exceeds ₹${pmApprovalCapService.MR_PM_DAILY_MAX_INR.toLocaleString('en-IN')} daily limit. Forward to Head Office instead.`,
-              escalated: true,
-            },
-          };
-        }
+        return {
+          statusCode: 400,
+          body: {
+            statusCode: 400,
+            message:
+              'Cannot close at PM — stock is short. Forward to Head Office for stock requisition.',
+          },
+        };
       }
 
       const remark = requireRemark(req.body.remark);
       const fromStatus = mr.status;
+      let closedAtPm = false;
 
       if (canIssueFromStock) {
         try {
           await allocateIndentStock(mr, req.user._id);
           mr.status = 'ALLOCATED';
           mr.pendingWithRole = 'STORE_INCHARGE';
+          closedAtPm = true;
         } catch (allocErr) {
           if (allocErr.statusCode) {
             return {
@@ -1312,6 +1321,7 @@ router.post(
           throw allocErr;
         }
       } else {
+        // Below ₹5,000 only: stock short → Store procurement after PM approval
         mr.status = 'PM_APPROVED';
         mr.pendingWithRole = 'STORE_INCHARGE';
       }
@@ -1325,7 +1335,9 @@ router.post(
         fromStatus,
         mr.status,
         req.user._id,
-        `PM approved & closed locally (no HO escalation${isBelowCap ? ' · Below ₹5,000' : ''}): ${remark}`
+        closedAtPm
+          ? `PM closed at PM level (stock reserved${isBelowCap ? ' · Below ₹5,000' : ''}): ${remark}`
+          : `PM approved Below ₹5,000 — stock short; Store to purchase & allocate: ${remark}`
       );
 
       const storeUsers = await User.find({
@@ -1335,24 +1347,24 @@ router.post(
       await notificationService.notifyUsers(
         storeUsers.map((u) => u._id),
         {
-          title: isBelowCap
-            ? 'Below ₹5,000 indent approved by PM — purchase & allocate'
-            : 'Indent approved by PM — ready to issue',
-          body: `${mr.indentNumber} approved — ${
-            mr.status === 'ALLOCATED'
-              ? 'stock reserved, issue material'
-              : isBelowCap
-                ? 'purchase with approved funds and allocate'
-                : 'proceed with fulfillment'
-          }.`,
+          title: closedAtPm
+            ? isBelowCap
+              ? 'Below ₹5,000 indent closed by PM — issue stock'
+              : 'Indent closed by PM — ready to issue'
+            : 'Below ₹5,000 indent approved by PM — purchase required',
+          body: closedAtPm
+            ? `${mr.indentNumber} — stock reserved; issue material.`
+            : `${mr.indentNumber} — stock short; purchase with approved funds and allocate.`,
           relatedEntityType: 'MaterialRequest',
           relatedEntityId: mr._id,
         }
       );
 
       await notificationService.notifyUser(mr.requestedByUserId, {
-        title: 'Indent approved',
-        body: `Your request ${mr.indentNumber} was approved by the Project Manager.`,
+        title: closedAtPm ? 'Indent closed by PM' : 'Indent approved',
+        body: closedAtPm
+          ? `Your request ${mr.indentNumber} was closed by the Project Manager — stock reserved for issue.`
+          : `Your request ${mr.indentNumber} was approved by the Project Manager — Store will purchase.`,
         relatedEntityType: 'MaterialRequest',
         relatedEntityId: mr._id,
       });
@@ -1387,7 +1399,7 @@ router.post(
           body: {
             statusCode: 400,
             message:
-              'Below ₹5,000 indents do not go to Head Office. Approve locally so Store can purchase and allocate.',
+              'Below ₹5,000 indents do not go to Head Office. If stock is available, close at PM; if stock is short, approve so Store can purchase and allocate.',
           },
         };
       }

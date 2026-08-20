@@ -24,8 +24,8 @@ function pendingWithLabel(status) {
     PENDING_EXECUTIVE_DECISION: 'EXECUTIVE',
     EXECUTIVE_DECISION_PO: 'COORDINATOR',
     EXECUTIVE_DECISION_BRANCH_TRANSFER: 'COORDINATOR',
-    // PM local close / Below ₹5,000 approve → Store purchases & allocates
-    PM_APPROVED: 'STORE_INCHARGE',
+  // PM local close (stock available) / Below ₹5,000 stock-short → Store purchases & allocates
+  PM_APPROVED: 'STORE_INCHARGE',
     PURCHASE_REQUESTED: 'EXECUTIVE',
     PO_CREATED: 'COORDINATOR',
     COORDINATOR_VERIFIED: 'CHAIRMAN',
