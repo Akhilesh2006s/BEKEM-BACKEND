@@ -498,6 +498,8 @@ export interface MaterialRequestDto {
   escalatedToHo?: boolean;
   escalatedToChairman?: boolean;
   pmProceededAllocation?: boolean;
+  /** Sequential allocation review after PO approval: Executive → PM → Store → Indent Raiser. */
+  allocationReviewStage?: 'EXECUTIVE' | 'PROJECT_MANAGER' | 'STORE_INCHARGE' | 'SITE_INCHARGE' | null;
   storeStockVerified?: boolean;
   origin?: 'SITE' | 'EXECUTIVE';
   purchaseRequestId?: string;

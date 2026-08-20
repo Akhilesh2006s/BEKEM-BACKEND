@@ -207,6 +207,7 @@ function serializeMaterialRequest(mr, stockContext, pricingContext) {
     escalatedToHo: !!mr.escalatedToHo,
     escalatedToChairman: !!mr.escalatedToChairman,
     pmProceededAllocation: !!mr.pmProceededAllocation,
+    allocationReviewStage: mr.allocationReviewStage || null,
     storeStockVerified: !!mr.storeStockVerified,
     origin: mr.origin || 'SITE',
     indentRequestType: mr.indentRequestType || 'ABOVE_5000',
@@ -342,8 +343,12 @@ async function serializeMaterialRequestEnriched(mr, viewerRole, options = {}) {
     }));
   }
 
-  // Align "who holds it" with the live PO desk when indent is already at PO_CREATED.
-  if (data.status === 'PO_CREATED') {
+  const { resolveAllocationReviewStage } = require('../services/pmProceedAllocationService');
+  const allocationStage = resolveAllocationReviewStage(mr, data.poStatus);
+  if (allocationStage) {
+    data.allocationReviewStage = allocationStage;
+    data.pendingWith = allocationStage;
+  } else if (data.status === 'PO_CREATED') {
     const { PurchaseRequest } = require('../models');
     const { resolveLinkedPoApprovalState } = require('../services/linkedPoApprovalState');
     const pr = await PurchaseRequest.findOne({ materialRequestId: mr._id }).select('_id').lean();
@@ -352,13 +357,11 @@ async function serializeMaterialRequestEnriched(mr, viewerRole, options = {}) {
       if (linked?.pendingWithRole) {
         data.pendingWith = linked.pendingWithRole;
       } else if (linked?.poStatus === 'APPROVED') {
-        data.pendingWith = mr.pmProceededAllocation ? 'STORE_INCHARGE' : 'PROJECT_MANAGER';
+        const stage = resolveAllocationReviewStage(mr, 'APPROVED');
+        data.allocationReviewStage = stage;
+        data.pendingWith = stage || null;
       }
     }
-  }
-
-  if (data.status === 'CHAIRMAN_APPROVED') {
-    data.pendingWith = mr.pmProceededAllocation ? 'STORE_INCHARGE' : 'PROJECT_MANAGER';
   }
 
   if (viewerRole && hideIndentPricingForRole(viewerRole, data.indentRequestType)) {

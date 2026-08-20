@@ -69,6 +69,12 @@ const materialRequestSchema = new mongoose.Schema(
     escalatedToChairman: { type: Boolean, default: false },
     escalatedToChairmanAt: { type: Date },
     pmForwardRemark: { type: String, default: '' },
+    /** Sequential allocation review: Executive → PM → Store → Indent Raiser. */
+    allocationReviewStage: {
+      type: String,
+      enum: ['EXECUTIVE', 'PROJECT_MANAGER', 'STORE_INCHARGE', 'SITE_INCHARGE', null],
+      default: null,
+    },
     /** PM selected Proceed with Allocation after Executive / Chairman PO approval. */
     pmProceededAllocation: { type: Boolean, default: false },
     /** Store confirmed stock is available before PM approval (no direct issue). */

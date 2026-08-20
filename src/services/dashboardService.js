@@ -308,6 +308,21 @@ async function getTodayActions(user) {
         count: waiting,
       });
     }
+    const allocationReview = await MaterialRequest.countDocuments({
+      siteId: user.assignedSiteId,
+      allocationReviewStage: 'STORE_INCHARGE',
+      status: { $nin: ['COMPLETED', 'CLOSED', 'REJECTED', 'CANCELLED', 'ISSUED'] },
+    });
+    if (allocationReview > 0) {
+      actions.push({
+        id: 'store-final-review',
+        title: `Final review on ${allocationReview} indent${allocationReview > 1 ? 's' : ''}`,
+        subtitle: 'Open Final review, then Proceed with Allocation to issue to site',
+        href: '/incidents?tab=pending',
+        priority: 'high',
+        count: allocationReview,
+      });
+    }
     const ledgers = await StockLedger.find({ siteId: user.assignedSiteId });
     const low = ledgers.filter((l) => l.quantityOnHand <= l.lowStockThreshold).length;
     if (low > 0) {
@@ -326,7 +341,7 @@ async function getTodayActions(user) {
     const pending = await MaterialRequest.countDocuments({
       $or: [
         { status: 'FORWARDED_TO_PM' },
-        { status: 'CHAIRMAN_APPROVED', pmProceededAllocation: { $ne: true } },
+        { allocationReviewStage: 'PROJECT_MANAGER' },
       ],
     });
     if (pending > 0) {
@@ -384,7 +399,26 @@ async function getTodayActions(user) {
         count: pendingPrs,
       });
     }
-    const pmApproved = await MaterialRequest.countDocuments({ status: 'PM_APPROVED' });
+    const execAllocationReview = await MaterialRequest.countDocuments({
+      $or: [
+        { allocationReviewStage: 'EXECUTIVE' },
+        {
+          status: 'CHAIRMAN_APPROVED',
+          allocationReviewStage: { $in: [null, 'EXECUTIVE'] },
+          pmProceededAllocation: { $ne: true },
+        },
+      ],
+    });
+    if (execAllocationReview > 0) {
+      actions.push({
+        id: 'exec-final-review',
+        title: `Final review on ${execAllocationReview} indent${execAllocationReview > 1 ? 's' : ''}`,
+        subtitle: 'Open Final review, then Proceed with Allocation to send to PM',
+        href: '/incidents?tab=pending&queue=executive',
+        priority: 'high',
+        count: execAllocationReview,
+      });
+    }
     const pendingAccept = await WorkOrder.countDocuments({ status: 'PENDING_ACCEPTANCE' });
     if (pendingAccept > 0) {
       actions.push({

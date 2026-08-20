@@ -274,7 +274,8 @@ describe('Indent workflow v2', () => {
     );
   });
 
-  it('PM proceeds with allocation after Chairman / Executive PO approval', async () => {
+  it('allocation review is Executive → PM → Store → indent raiser', async () => {
+    const execToken = await loginAs('executive@bekem.com');
     const createRes = await request(app)
       .post('/api/material-requests')
       .set('Authorization', `Bearer ${siteToken}`)
@@ -282,7 +283,7 @@ describe('Indent workflow v2', () => {
         indentRequestType: 'ABOVE_5000',
         requestedByName: 'Test Requester',
         indentCategoryId: indentCategoryId,
-        purpose: 'PM proceed allocation after chairman',
+        purpose: 'Allocation review chain after chairman',
         items: [{ materialId: material._id.toString(), quantityRequested: 1 }],
       });
     assert.strictEqual(createRes.status, 201);
@@ -290,7 +291,9 @@ describe('Indent workflow v2', () => {
 
     await MaterialRequest.findByIdAndUpdate(mrId, {
       status: 'CHAIRMAN_APPROVED',
-      pendingWithRole: 'PROJECT_MANAGER',
+      pendingWithRole: 'EXECUTIVE',
+      allocationReviewStage: 'EXECUTIVE',
+      pmProceededAllocation: false,
     });
 
     const siteView = await request(app)
@@ -298,17 +301,39 @@ describe('Indent workflow v2', () => {
       .set('Authorization', `Bearer ${siteToken}`);
     assert.strictEqual(siteView.status, 200);
     assert.strictEqual(siteView.body.data.status, 'CHAIRMAN_APPROVED');
-    assert.strictEqual(siteView.body.data.pendingWith, 'PROJECT_MANAGER');
+    assert.strictEqual(siteView.body.data.pendingWith, 'EXECUTIVE');
+    assert.strictEqual(siteView.body.data.allocationReviewStage, 'EXECUTIVE');
 
-    const proceed = await request(app)
-      .post(`/api/material-requests/${mrId}/pm-proceed-allocation`)
+    const pmTooSoon = await request(app)
+      .post(`/api/material-requests/${mrId}/proceed-allocation`)
       .set('Authorization', `Bearer ${pmToken}`)
-      .send({ remark: 'Proceed with allocation after chairman approval' });
-    assert.strictEqual(proceed.status, 200, JSON.stringify(proceed.body));
-    assert.strictEqual(proceed.body.data.pmProceededAllocation, true);
-    assert.ok(
-      ['ALLOCATED', 'CHAIRMAN_APPROVED'].includes(proceed.body.data.status),
-      proceed.body.data.status
-    );
+      .send({ remark: 'PM cannot skip Executive' });
+    assert.strictEqual(pmTooSoon.status, 400);
+
+    const execProceed = await request(app)
+      .post(`/api/material-requests/${mrId}/proceed-allocation`)
+      .set('Authorization', `Bearer ${execToken}`)
+      .send({ remark: 'Executive proceed with allocation' });
+    assert.strictEqual(execProceed.status, 200, JSON.stringify(execProceed.body));
+    assert.strictEqual(execProceed.body.data.pendingWith, 'PROJECT_MANAGER');
+    assert.strictEqual(execProceed.body.data.allocationReviewStage, 'PROJECT_MANAGER');
+
+    const pmProceed = await request(app)
+      .post(`/api/material-requests/${mrId}/proceed-allocation`)
+      .set('Authorization', `Bearer ${pmToken}`)
+      .send({ remark: 'PM proceed with allocation' });
+    assert.strictEqual(pmProceed.status, 200, JSON.stringify(pmProceed.body));
+    assert.strictEqual(pmProceed.body.data.pmProceededAllocation, true);
+    assert.strictEqual(pmProceed.body.data.pendingWith, 'STORE_INCHARGE');
+    assert.strictEqual(pmProceed.body.data.allocationReviewStage, 'STORE_INCHARGE');
+
+    const storeProceed = await request(app)
+      .post(`/api/material-requests/${mrId}/proceed-allocation`)
+      .set('Authorization', `Bearer ${storeToken}`)
+      .send({ remark: 'Store proceed with allocation' });
+    assert.strictEqual(storeProceed.status, 200, JSON.stringify(storeProceed.body));
+    assert.strictEqual(storeProceed.body.data.status, 'ISSUED');
+    assert.strictEqual(storeProceed.body.data.pendingWith, 'SITE_INCHARGE');
+    assert.strictEqual(storeProceed.body.data.allocationReviewStage, 'SITE_INCHARGE');
   });
 });

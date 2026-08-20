@@ -5,20 +5,45 @@ const { enrichIndentWithStock } = require('./indentStockService');
 const { allocateIndentStock } = require('./indentAllocationService');
 const statusHistoryService = require('./statusHistoryService');
 const notificationService = require('./notificationService');
+const { notifyExecutivesForIndent } = require('./executiveRoutingService');
 
-const CLOSED = new Set([
-  'ALLOCATED',
-  'ISSUED',
-  'COMPLETED',
-  'CLOSED',
-  'REJECTED',
-  'CANCELLED',
+const STAGES = {
+  EXECUTIVE: 'EXECUTIVE',
+  PROJECT_MANAGER: 'PROJECT_MANAGER',
+  STORE_INCHARGE: 'STORE_INCHARGE',
+  SITE_INCHARGE: 'SITE_INCHARGE',
+};
+
+const CLOSED = new Set(['COMPLETED', 'CLOSED', 'REJECTED', 'CANCELLED']);
+const ACTIVE_STAGES = new Set([
+  STAGES.EXECUTIVE,
+  STAGES.PROJECT_MANAGER,
+  STAGES.STORE_INCHARGE,
 ]);
 
-function isIndentAwaitingPmAllocation(mr, poStatus) {
-  if (!mr || mr.pmProceededAllocation || CLOSED.has(mr.status)) return false;
-  if (mr.status === 'CHAIRMAN_APPROVED') return true;
-  return poStatus === 'APPROVED';
+function startAllocationReview(mr) {
+  mr.allocationReviewStage = STAGES.EXECUTIVE;
+  mr.pendingWithRole = UserRole.EXECUTIVE;
+  mr.pmProceededAllocation = false;
+  return mr;
+}
+
+function resolveAllocationReviewStage(mr, poStatus) {
+  if (!mr || CLOSED.has(mr.status)) return null;
+  if (mr.status === 'ISSUED' || mr.allocationReviewStage === STAGES.SITE_INCHARGE) {
+    return STAGES.SITE_INCHARGE;
+  }
+  if (mr.allocationReviewStage && ACTIVE_STAGES.has(mr.allocationReviewStage)) {
+    return mr.allocationReviewStage;
+  }
+  const poApproved = mr.status === 'CHAIRMAN_APPROVED' || poStatus === 'APPROVED';
+  if (!poApproved) return null;
+  if (mr.pmProceededAllocation) return STAGES.STORE_INCHARGE;
+  return STAGES.EXECUTIVE;
+}
+
+function isInAllocationReview(mr, poStatus) {
+  return ACTIVE_STAGES.has(resolveAllocationReviewStage(mr, poStatus));
 }
 
 async function notifyProjectManagers(mr, { title, body }) {
@@ -37,39 +62,7 @@ async function notifyProjectManagers(mr, { title, body }) {
   );
 }
 
-async function pmProceedWithAllocation(mr, actorUserId, remark) {
-  const fromStatus = mr.status;
-  const stockContext = await enrichIndentWithStock(mr);
-  let allocatedFromStock = false;
-
-  if (stockContext.canFullyIssue) {
-    await allocateIndentStock(mr, actorUserId);
-    allocatedFromStock = true;
-  } else {
-    for (const item of getIndentLineItems(mr)) {
-      item.quantityAllocated = item.quantityRequested;
-    }
-  }
-
-  mr.pmProceededAllocation = true;
-  mr.pmForwardRemark = remark;
-  mr.pendingWithRole = 'STORE_INCHARGE';
-  if (allocatedFromStock) {
-    mr.status = 'ALLOCATED';
-  }
-  await mr.save();
-
-  await statusHistoryService.record(
-    'MaterialRequest',
-    mr._id,
-    fromStatus,
-    mr.status,
-    actorUserId,
-    allocatedFromStock
-      ? `PM proceeded with allocation (stock reserved): ${remark}`
-      : `PM proceeded with allocation after Executive / Chairman approval: ${remark}`
-  );
-
+async function notifyStore(mr, { title, body }) {
   const storeUsers = await User.find({
     role: UserRole.STORE_INCHARGE,
     assignedSiteId: mr.siteId,
@@ -77,31 +70,149 @@ async function pmProceedWithAllocation(mr, actorUserId, remark) {
   await notificationService.notifyUsers(
     storeUsers.map((u) => u._id),
     {
-      title: allocatedFromStock
-        ? 'Indent allocated by PM — ready to issue'
-        : 'PM proceeded with allocation — awaiting receipt',
-      body: allocatedFromStock
-        ? `${mr.indentNumber} — stock reserved; issue material.`
-        : `${mr.indentNumber} — PO approved; issue after GRN / stock receipt.`,
+      title,
+      body,
       relatedEntityType: 'MaterialRequest',
       relatedEntityId: mr._id,
     }
   );
+}
 
-  await notificationService.notifyUser(mr.requestedByUserId, {
-    title: 'PM proceeded with allocation',
-    body: allocatedFromStock
-      ? `Your request ${mr.indentNumber} was allocated by the Project Manager — stock reserved for issue.`
-      : `Your request ${mr.indentNumber} was approved for allocation by the Project Manager.`,
+async function notifyExecutives(mr, { title, body }) {
+  await notifyExecutivesForIndent(mr.indentCategoryId, notificationService, {
+    title,
+    body,
     relatedEntityType: 'MaterialRequest',
     relatedEntityId: mr._id,
   });
+}
 
-  return mr;
+async function proceedWithAllocation(mr, actor, remark, poStatus) {
+  const role = actor.role;
+  const stage = resolveAllocationReviewStage(mr, poStatus);
+  if (!ACTIVE_STAGES.has(stage)) {
+    const err = new Error('Indent is not in the allocation review chain');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (role !== stage) {
+    const err = new Error(`Awaiting ${stage.replace(/_/g, ' ').toLowerCase()} to proceed with allocation`);
+    err.statusCode = 400;
+    throw err;
+  }
+
+  mr.allocationReviewStage = stage;
+  const fromStatus = mr.status;
+
+  if (role === UserRole.EXECUTIVE) {
+    mr.allocationReviewStage = STAGES.PROJECT_MANAGER;
+    mr.pendingWithRole = UserRole.PROJECT_MANAGER;
+    await mr.save();
+    await statusHistoryService.record(
+      'MaterialRequest',
+      mr._id,
+      fromStatus,
+      mr.status,
+      actor._id,
+      `Executive proceeded with allocation: ${remark}`
+    );
+    await notifyProjectManagers(mr, {
+      title: 'Final review',
+      body: `${mr.indentNumber} — Executive proceeded with allocation. Open Final review, then Proceed with Allocation.`,
+    });
+    return mr;
+  }
+
+  if (role === UserRole.PROJECT_MANAGER) {
+    const stockContext = await enrichIndentWithStock(mr);
+    if (stockContext.canFullyIssue) {
+      await allocateIndentStock(mr, actor._id);
+      mr.status = 'ALLOCATED';
+    } else {
+      for (const item of getIndentLineItems(mr)) {
+        item.quantityAllocated = item.quantityRequested;
+      }
+    }
+    mr.pmProceededAllocation = true;
+    mr.pmForwardRemark = remark;
+    mr.allocationReviewStage = STAGES.STORE_INCHARGE;
+    mr.pendingWithRole = UserRole.STORE_INCHARGE;
+    await mr.save();
+    await statusHistoryService.record(
+      'MaterialRequest',
+      mr._id,
+      fromStatus,
+      mr.status,
+      actor._id,
+      `PM proceeded with allocation: ${remark}`
+    );
+    await notifyStore(mr, {
+      title: 'Final review',
+      body: `${mr.indentNumber} — PM proceeded with allocation. Open Final review, then Proceed with Allocation.`,
+    });
+    return mr;
+  }
+
+  if (role === UserRole.STORE_INCHARGE) {
+    for (const item of getIndentLineItems(mr)) {
+      const qty = item.quantityAllocated || item.quantityRequested;
+      item.quantityAllocated = qty;
+      item.quantityIssued = qty;
+    }
+    if (mr.quantityRequested) {
+      mr.quantityAllocated = mr.quantityAllocated || mr.quantityRequested;
+      mr.quantityIssued = mr.quantityRequested;
+    }
+    mr.status = 'ISSUED';
+    mr.allocationReviewStage = STAGES.SITE_INCHARGE;
+    mr.pendingWithRole = UserRole.SITE_INCHARGE;
+    mr.pmForwardRemark = remark;
+    await mr.save();
+    await statusHistoryService.record(
+      'MaterialRequest',
+      mr._id,
+      fromStatus,
+      'ISSUED',
+      actor._id,
+      `Store proceeded with allocation — issued to site: ${remark}`
+    );
+    await notificationService.notifyUser(mr.requestedByUserId, {
+      title: 'Collect & verify materials',
+      body: `${mr.indentNumber} has been issued. Collect and verify the materials.`,
+      relatedEntityType: 'MaterialRequest',
+      relatedEntityId: mr._id,
+    });
+    return mr;
+  }
+
+  const err = new Error('This role cannot proceed with allocation');
+  err.statusCode = 403;
+  throw err;
+}
+
+/** @deprecated Use proceedWithAllocation */
+async function pmProceedWithAllocation(mr, actorUserId, remark, poStatus = 'APPROVED') {
+  return proceedWithAllocation(
+    mr,
+    { _id: actorUserId, role: UserRole.PROJECT_MANAGER },
+    remark,
+    poStatus
+  );
+}
+
+function isIndentAwaitingPmAllocation(mr, poStatus) {
+  return resolveAllocationReviewStage(mr, poStatus) === STAGES.PROJECT_MANAGER;
 }
 
 module.exports = {
+  STAGES,
+  startAllocationReview,
+  resolveAllocationReviewStage,
+  isInAllocationReview,
   isIndentAwaitingPmAllocation,
   notifyProjectManagers,
+  notifyExecutives,
+  notifyStore,
+  proceedWithAllocation,
   pmProceedWithAllocation,
 };

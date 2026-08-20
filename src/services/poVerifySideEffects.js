@@ -243,9 +243,10 @@ async function finalizePurchaseOrder(po, actorUserId, note, approvalContext, opt
       : null);
 
   if (mr && typeof mr === 'object' && mr._id) {
+    const { startAllocationReview, notifyExecutives } = require('./pmProceedAllocationService');
     const mrFrom = mr.status;
     mr.status = 'CHAIRMAN_APPROVED';
-    mr.pendingWithRole = 'PROJECT_MANAGER';
+    startAllocationReview(mr);
     await mr.save();
     await statusHistoryService.record(
       'MaterialRequest',
@@ -257,14 +258,13 @@ async function finalizePurchaseOrder(po, actorUserId, note, approvalContext, opt
     );
     await notificationService.notifyUser(mr.requestedByUserId, {
       title: 'Purchase order approved',
-      body: `PO ${po.poNumber} approved. Project Manager can complete final review.`,
+      body: `PO ${po.poNumber} approved. Executive will proceed with allocation.`,
       relatedEntityType: 'MaterialRequest',
       relatedEntityId: mr._id,
     });
-    const { notifyProjectManagers } = require('./pmProceedAllocationService');
-    await notifyProjectManagers(mr, {
+    await notifyExecutives(mr, {
       title: 'Final review',
-      body: `${mr.indentNumber} — PO ${po.poNumber} approved. Select Final review.`,
+      body: `${mr.indentNumber} — PO ${po.poNumber} approved. Open Final review, then Proceed with Allocation.`,
     });
   }
 

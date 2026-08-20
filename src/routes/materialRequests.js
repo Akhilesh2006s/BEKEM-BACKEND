@@ -98,14 +98,22 @@ async function attachProcurementTrace(rows) {
       row.poId = po._id.toString();
       row.poNumber = po.poNumber || po.draftRef || '';
       row.poStatus = po.status;
-      if (
-        po.status === 'APPROVED' &&
-        !row.pmProceededAllocation &&
-        !['ALLOCATED', 'MATERIAL_RECEIVED', 'ISSUED', 'COMPLETED', 'CLOSED', 'REJECTED', 'CANCELLED'].includes(
-          row.status
-        )
-      ) {
-        row.pendingWith = 'PROJECT_MANAGER';
+      if (po.status === 'APPROVED') {
+        const {
+          resolveAllocationReviewStage,
+        } = require('../services/pmProceedAllocationService');
+        const stage = resolveAllocationReviewStage(
+          {
+            status: row.status,
+            pmProceededAllocation: row.pmProceededAllocation,
+            allocationReviewStage: row.allocationReviewStage,
+          },
+          'APPROVED'
+        );
+        if (stage) {
+          row.allocationReviewStage = stage;
+          row.pendingWith = stage;
+        }
       }
     }
   }
@@ -128,8 +136,8 @@ const {
   canCoordinatorLocalCloseStatus,
 } = coordinatorApprovalCapService;
 const {
-  isIndentAwaitingPmAllocation,
-  pmProceedWithAllocation,
+  isInAllocationReview,
+  proceedWithAllocation,
 } = require('../services/pmProceedAllocationService');
 const { handleIdempotent } = require('../utils/idempotentHandler');
 
@@ -1445,6 +1453,81 @@ router.post(
   }
 );
 
+async function loadPoStatusForMaterialRequest(mrId) {
+  const pr = await PurchaseRequest.findOne({ materialRequestId: mrId }).select('_id').lean();
+  if (!pr) return null;
+  const po = await PurchaseOrder.findOne({
+    purchaseRequestId: pr._id,
+    status: { $nin: ['REJECTED', 'CANCELLED'] },
+  })
+    .sort({ createdAt: -1 })
+    .select('status')
+    .lean();
+  return po?.status || null;
+}
+
+function canAccessProceedAllocation(user, mr) {
+  if (user.role === UserRole.EXECUTIVE) return executiveCanAccessIndent(user, mr);
+  if (user.role === UserRole.PROJECT_MANAGER) {
+    return userCanAccessProject(user, mr.projectId) || userCanAccessSite(user, mr.siteId);
+  }
+  if (user.role === UserRole.STORE_INCHARGE) {
+    return userCanAccessSite(user, mr.siteId);
+  }
+  return false;
+}
+
+async function handleProceedAllocation(req) {
+  const allowedRoles = [UserRole.EXECUTIVE, UserRole.PROJECT_MANAGER, UserRole.STORE_INCHARGE];
+  if (!allowedRoles.includes(req.user.role)) {
+    return {
+      statusCode: 403,
+      body: {
+        statusCode: 403,
+        message: 'Only Executive, PM, or Store In-Charge can proceed with allocation',
+      },
+    };
+  }
+
+  const mr = req._materialRequest || (await MaterialRequest.findById(req.params.id));
+  if (!mr) {
+    return { statusCode: 404, body: { statusCode: 404, message: 'Request not found' } };
+  }
+
+  if (!canAccessProceedAllocation(req.user, mr)) {
+    return { statusCode: 403, body: { statusCode: 403, message: 'Forbidden: not your indent' } };
+  }
+
+  const poStatus = await loadPoStatusForMaterialRequest(mr._id);
+  if (!isInAllocationReview(mr, poStatus)) {
+    return {
+      statusCode: 400,
+      body: {
+        statusCode: 400,
+        message: 'Indent is not in the allocation review chain',
+      },
+    };
+  }
+
+  const remark = requireRemark(req.body.remark);
+  await proceedWithAllocation(mr, req.user, remark, poStatus);
+  return { statusCode: 200, body: await mrEnrichedBody(mr._id, req.user.role) };
+}
+
+router.post(
+  '/:id/proceed-allocation',
+  [
+    param('id').isMongoId(),
+    body('remark').trim().notEmpty().withMessage('Remark is required'),
+  ],
+  validate,
+  async (req, res, next) => {
+    return handleIdempotent(req, res, `mr-alloc-review:${req.params.id}`, async () => {
+      return handleProceedAllocation(req);
+    }, next);
+  }
+);
+
 router.post(
   '/:id/pm-proceed-allocation',
   requirePmApproval(),
@@ -1455,53 +1538,13 @@ router.post(
   validate,
   async (req, res, next) => {
     return handleIdempotent(req, res, `mr-pm-alloc:${req.params.id}`, async () => {
-      const mr = req._materialRequest || (await MaterialRequest.findById(req.params.id));
-      if (!mr) {
-        return { statusCode: 404, body: { statusCode: 404, message: 'Request not found' } };
-      }
-
       if (req.approvalContext.principal.role !== UserRole.PROJECT_MANAGER) {
         return {
           statusCode: 403,
-          body: { statusCode: 403, message: 'Only Project Managers can complete final review' },
+          body: { statusCode: 403, message: 'Only Project Managers can complete this step' },
         };
       }
-
-      if (!userCanAccessProject(req.user, mr.projectId) && !userCanAccessSite(req.user, mr.siteId)) {
-        return { statusCode: 403, body: { statusCode: 403, message: 'Forbidden: not your project' } };
-      }
-
-      if (mr.pmProceededAllocation || mr.status === 'ALLOCATED') {
-        return { statusCode: 200, body: await mrEnrichedBody(mr._id, req.user.role) };
-      }
-
-      let poStatus = null;
-      const pr = await PurchaseRequest.findOne({ materialRequestId: mr._id }).select('_id').lean();
-      if (pr) {
-        const po = await PurchaseOrder.findOne({
-          purchaseRequestId: pr._id,
-          status: { $nin: ['REJECTED', 'CANCELLED'] },
-        })
-          .sort({ createdAt: -1 })
-          .select('status')
-          .lean();
-        poStatus = po?.status || null;
-      }
-
-      if (!isIndentAwaitingPmAllocation(mr, poStatus)) {
-        return {
-          statusCode: 400,
-          body: {
-            statusCode: 400,
-            message: 'Indent is not awaiting PM final review after Executive / Chairman approval',
-          },
-        };
-      }
-
-      const remark = requireRemark(req.body.remark);
-      await pmProceedWithAllocation(mr, req.user._id, remark);
-
-      return { statusCode: 200, body: await mrEnrichedBody(mr._id, req.user.role) };
+      return handleProceedAllocation(req);
     }, next);
   }
 );
