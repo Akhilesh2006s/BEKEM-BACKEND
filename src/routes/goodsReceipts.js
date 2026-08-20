@@ -101,7 +101,19 @@ router.get('/hold-queue', async (req, res, next) => {
       return res.status(403).json({ statusCode: 403, message: 'Forbidden' });
     }
 
-    const grns = await GoodsReceiptNote.find({ status: 'ON_HOLD', approvalStage })
+    const grns = await GoodsReceiptNote.find(
+      role === UserRole.COORDINATOR
+        ? {
+            $or: [
+              { status: 'ON_HOLD', approvalStage: 'COORDINATOR_PENDING' },
+              {
+                status: { $in: ['RECEIVED', 'PARTIALLY_RECEIVED'] },
+                $or: [{ coordinatorApprovedAt: { $exists: false } }, { coordinatorApprovedAt: null }],
+              },
+            ],
+          }
+        : { status: 'ON_HOLD', approvalStage }
+    )
       .sort({ createdAt: -1 })
       .populate({
         path: 'purchaseOrderId',
@@ -541,12 +553,34 @@ router.post(
     try {
       const grn = await GoodsReceiptNote.findById(req.params.id);
       if (!grn) return res.status(404).json({ statusCode: 404, message: 'GRN not found' });
-      if (grn.status !== 'ON_HOLD') {
+
+      const awaitingCoordinatorStamp =
+        req.user.role === UserRole.COORDINATOR &&
+        !grn.coordinatorApprovedAt &&
+        ['RECEIVED', 'PARTIALLY_RECEIVED'].includes(grn.status);
+
+      if (grn.status !== 'ON_HOLD' && !awaitingCoordinatorStamp) {
         return res.status(400).json({ statusCode: 400, message: 'GRN is not on hold' });
       }
 
       const po = await PurchaseOrder.findById(grn.purchaseOrderId).populate('vendorId');
       if (!po) return res.status(404).json({ statusCode: 404, message: 'PO not found' });
+
+      if (awaitingCoordinatorStamp) {
+        grn.coordinatorApprovedAt = new Date();
+        grn.coordinatorApprovedByUserId = req.user._id;
+        grn.approvalStage = 'APPROVED';
+        if (req.body.remark) grn.note = [grn.note, req.body.remark].filter(Boolean).join('\n');
+        await grn.save();
+        return res.json({
+          data: {
+            id: grn._id.toString(),
+            status: grn.status,
+            approvalStage: grn.approvalStage,
+            message: 'GRN approved',
+          },
+        });
+      }
 
       if (grn.approvalStage === 'COORDINATOR_PENDING') {
         if (req.user.role !== UserRole.COORDINATOR) {

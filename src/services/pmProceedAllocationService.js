@@ -8,7 +8,6 @@ const notificationService = require('./notificationService');
 
 const CLOSED = new Set([
   'ALLOCATED',
-  'MATERIAL_RECEIVED',
   'ISSUED',
   'COMPLETED',
   'CLOSED',
@@ -19,10 +18,7 @@ const CLOSED = new Set([
 function isIndentAwaitingPmAllocation(mr, poStatus) {
   if (!mr || mr.pmProceededAllocation || CLOSED.has(mr.status)) return false;
   if (mr.status === 'CHAIRMAN_APPROVED') return true;
-  return (
-    poStatus === 'APPROVED' &&
-    ['PO_CREATED', 'COORDINATOR_VERIFIED', 'CHAIRMAN_PENDING'].includes(mr.status)
-  );
+  return poStatus === 'APPROVED';
 }
 
 async function notifyProjectManagers(mr, { title, body }) {
