@@ -10,20 +10,34 @@ const { serializeUser } = require('../utils/serialize');
 
 const router = express.Router();
 
-function signTokens(user) {
+function assertJwtSecrets() {
   if (!process.env.JWT_ACCESS_SECRET || !process.env.JWT_REFRESH_SECRET) {
     const err = new Error('Server auth is not configured (JWT secrets missing)');
     err.statusCode = 500;
     throw err;
   }
-  const payload = { sub: user._id.toString(), role: user.role };
-  const accessToken = jwt.sign(payload, process.env.JWT_ACCESS_SECRET, {
+}
+
+function authPayload(user) {
+  return { sub: user._id.toString(), role: user.role };
+}
+
+function signAccessToken(user) {
+  assertJwtSecrets();
+  return jwt.sign(authPayload(user), process.env.JWT_ACCESS_SECRET, {
     expiresIn: process.env.JWT_ACCESS_EXPIRES || '4h',
   });
-  const refreshToken = jwt.sign(payload, process.env.JWT_REFRESH_SECRET, {
+}
+
+function signRefreshToken(user) {
+  assertJwtSecrets();
+  return jwt.sign(authPayload(user), process.env.JWT_REFRESH_SECRET, {
     expiresIn: process.env.JWT_REFRESH_EXPIRES || '7d',
   });
-  return { accessToken, refreshToken };
+}
+
+function signTokens(user) {
+  return { accessToken: signAccessToken(user), refreshToken: signRefreshToken(user) };
 }
 
 router.post(
@@ -71,15 +85,23 @@ router.post('/refresh', async (req, res, next) => {
     if (!refreshToken) {
       return res.status(401).json({ statusCode: 401, message: 'Refresh token required' });
     }
-    const payload = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
+    if (!process.env.JWT_REFRESH_SECRET) {
+      const err = new Error('Server auth is not configured (JWT secrets missing)');
+      err.statusCode = 500;
+      throw err;
+    }
+    let payload;
+    try {
+      payload = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
+    } catch {
+      return res.status(401).json({ statusCode: 401, message: 'Invalid or expired refresh token' });
+    }
     const user = await User.findById(payload.sub);
     if (!user || user.refreshToken !== refreshToken) {
       return res.status(401).json({ statusCode: 401, message: 'Invalid refresh token' });
     }
-    const tokens = signTokens(user);
-    user.refreshToken = tokens.refreshToken;
-    await user.save();
-    res.json({ tokens });
+    // Reuse the refresh token so concurrent tabs / in-flight retries don't invalidate each other.
+    res.json({ tokens: { accessToken: signAccessToken(user), refreshToken } });
   } catch (err) {
     next(err);
   }
