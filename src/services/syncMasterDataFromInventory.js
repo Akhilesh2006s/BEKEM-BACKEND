@@ -168,11 +168,11 @@ async function syncMasterDataFromInventory({ financialYear = '25-26', clearProcu
   const projectIds = projects.map((p) => p._id);
   const firstSite = await Site.findOne({ projectId: projectIds[0] }).sort({ createdAt: 1 });
 
-  // Site Manager / Project Manager: one project. Store Manager: site project only.
+  // Site Manager / Store Manager: one project. Project Manager: keep current assignments.
   // Executive / Coordinator / Chairman: all projects.
   const firstProjectId = projectIds[0] ? [projectIds[0]] : [];
   await User.updateMany(
-    { role: { $in: ['PROJECT_MANAGER', 'SITE_INCHARGE'] } },
+    { role: 'SITE_INCHARGE' },
     { $set: { assignedProjectIds: firstProjectId } }
   );
   await User.updateMany(

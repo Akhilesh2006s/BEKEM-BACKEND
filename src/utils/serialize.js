@@ -34,7 +34,7 @@ function userCanAccessSite(user, siteId) {
   return false;
 }
 
-/** Store managers with multiple projects may access any site under those projects. */
+/** Store Manager may access the site on their one assigned project. */
 async function userCanAccessSiteAsync(user, siteId) {
   if (userCanAccessSite(user, siteId)) return true;
   if (user.role !== UserRole.STORE_INCHARGE || !user.assignedProjectIds?.length) return false;

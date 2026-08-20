@@ -1,7 +1,7 @@
 const { UserRole } = require('@afios/shared');
 const { Project, Site } = require('../models');
 
-const SINGLE_PROJECT_ROLES = new Set([UserRole.SITE_INCHARGE, UserRole.PROJECT_MANAGER]);
+const SINGLE_PROJECT_ROLES = new Set([UserRole.SITE_INCHARGE, UserRole.STORE_INCHARGE]);
 const ALL_PROJECTS_ROLES = new Set([
   UserRole.EXECUTIVE,
   UserRole.COORDINATOR,
@@ -17,7 +17,7 @@ function isAllProjectsRole(role) {
 }
 
 function isMultiProjectRole(role) {
-  return role === UserRole.STORE_INCHARGE;
+  return role === UserRole.PROJECT_MANAGER;
 }
 
 async function allProjectIds() {
@@ -27,8 +27,8 @@ async function allProjectIds() {
 
 /**
  * Normalize project assignments by role:
- * - Site Manager / Project Manager: exactly one (last selected wins)
- * - Store Manager: one or many
+ * - Site Manager / Store Manager: exactly one (last selected wins)
+ * - Project Manager: one or many
  * - Executive / Coordinator / Chairman: all projects
  */
 async function normalizeAssignedProjectIds(role, ids) {
@@ -101,7 +101,7 @@ async function assignUserToProject(user, projectId) {
     return user;
   }
 
-  // Store Manager — one or many
+  // Project Manager — one or many
   const current = (user.assignedProjectIds || []).map((id) => id.toString());
   if (!current.includes(pid)) {
     user.assignedProjectIds = [...(user.assignedProjectIds || []), projectId];
