@@ -1394,7 +1394,7 @@ router.post(
         return { statusCode: 403, body: { statusCode: 403, message: 'Only Project Managers can forward to Head Office' } };
       }
 
-      if (mr.status !== 'FORWARDED_TO_PM') {
+      if (!['FORWARDED_TO_PM', 'BRANCH_TRANSFER_REQUESTED'].includes(mr.status)) {
         if (
           [
             'PURCHASE_REQUESTED',
@@ -1416,11 +1416,16 @@ router.post(
       const remark = requireRemark(req.body.remark);
       if (!mr.estimatedValue) mr.estimatedValue = await estimateIndentAmount(mr);
 
+      const remainingNote =
+        mr.status === 'BRANCH_TRANSFER_REQUESTED'
+          ? `Forwarded remaining shortfall to Head Office: ${remark}`
+          : `Forwarded to Head Office (insufficient stock): ${remark}`;
+
       await queueForExecutiveDecision(
         mr,
         req.user._id,
         remark,
-        `Forwarded to Head Office (insufficient stock): ${remark}`
+        remainingNote
       );
 
       await notificationService.notifyUser(mr.requestedByUserId, {

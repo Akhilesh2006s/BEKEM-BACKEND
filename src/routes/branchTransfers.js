@@ -15,6 +15,8 @@ const {
   userManagesProject,
   serializeTransferRow,
   transferActionFlags,
+  CLOSED_INDENT_BT_STATUSES,
+  createIndentLinkedTransfers,
 } = require('../services/branchTransferService');
 const { handleIdempotent } = require('../utils/idempotentHandler');
 
@@ -174,7 +176,7 @@ router.post(
           if (!mr) {
             return { statusCode: 404, body: { statusCode: 404, message: 'Linked indent not found' } };
           }
-          if (mr.status !== 'FORWARDED_TO_PM') {
+          if (!['FORWARDED_TO_PM', 'BRANCH_TRANSFER_REQUESTED'].includes(mr.status)) {
             return {
               statusCode: 400,
               body: { statusCode: 400, message: 'Indent is not awaiting PM review' },
@@ -256,19 +258,22 @@ router.post(
         }
       }
 
-      // Only dedupe against an open transfer for the same indent — without a linked
-      // indent, materialRequestId is undefined and would match any open transfer.
+      // Dedupe per source site so one indent can pull from several projects.
       if (materialRequestId) {
-        const existingBt = await BranchTransfer.findOne({
+        const existingFilter = {
           materialRequestId,
-          status: { $nin: ['REJECTED', 'RAISE_PO_INSTEAD', 'TRANSFERRED'] },
-        });
+          status: { $nin: CLOSED_INDENT_BT_STATUSES },
+        };
+        if (fromSiteId) existingFilter.fromSiteId = fromSiteId;
+        const existingBt = await BranchTransfer.findOne(existingFilter);
         if (existingBt) {
           return {
             statusCode: 409,
             body: {
               statusCode: 409,
-              message: 'A branch transfer is already in progress for this indent',
+              message: fromSiteId
+                ? 'A branch transfer is already in progress from this site for this indent'
+                : 'A branch transfer is already in progress for this indent',
               data: { id: existingBt._id.toString(), transferNumber: existingBt.transferNumber },
             },
           };
@@ -351,6 +356,48 @@ router.post(
             id: transfer._id.toString(),
             transferNumber: transfer.transferNumber,
             status: transfer.status,
+          },
+        },
+      };
+    }, next);
+  }
+);
+
+router.post(
+  '/batch',
+  requireCapability('CREATE_BRANCH_TRANSFER'),
+  [
+    body('materialRequestId').isMongoId(),
+    body('note').optional().trim(),
+    body('sources').isArray({ min: 1 }),
+    body('sources.*.fromProjectId').isMongoId(),
+    body('sources.*.fromSiteId').isMongoId(),
+    body('sources.*.items').isArray({ min: 1 }),
+    body('sources.*.items.*.materialId').isMongoId(),
+    body('sources.*.items.*.quantity').isFloat({ min: 0.01 }),
+  ],
+  validate,
+  async (req, res, next) => {
+    return handleIdempotent(req, res, `bt-batch:mr:${req.body.materialRequestId}`, async () => {
+      const result = await createIndentLinkedTransfers(req.user, {
+        materialRequestId: req.body.materialRequestId,
+        note: req.body.note,
+        sources: req.body.sources,
+      });
+      if (!result.ok) {
+        return { statusCode: result.statusCode, body: result.body };
+      }
+      return {
+        statusCode: 201,
+        body: {
+          data: {
+            transfers: result.transfers.map((t) => ({
+              id: t._id.toString(),
+              transferNumber: t.transferNumber,
+              status: t.status,
+              fromSiteId: t.fromSiteId?.toString(),
+              fromProjectId: t.fromProjectId?.toString(),
+            })),
           },
         },
       };

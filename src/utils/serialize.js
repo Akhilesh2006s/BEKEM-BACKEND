@@ -284,6 +284,15 @@ async function serializeMaterialRequestEnriched(mr, viewerRole, options = {}) {
   data.approverNames = deriveApproverNamesFromHistory(history);
 
   if (options.includeGrns) {
+    const { BranchTransfer } = require('../models');
+    const { serializeTransferRow } = require('../services/branchTransferService');
+    const linkedTransfers = await BranchTransfer.find({ materialRequestId: mr._id })
+      .sort({ createdAt: 1 })
+      .populate(
+        'fromProjectId toProjectId fromSiteId toSiteId items.materialId requestedByUserId'
+      );
+    data.linkedBranchTransfers = linkedTransfers.map(serializeTransferRow);
+
     const { GoodsReceiptNote, PurchaseRequest, PurchaseOrder } = require('../models');
     const purchaseRequest = await PurchaseRequest.findOne({ materialRequestId: mr._id })
       .select('_id')

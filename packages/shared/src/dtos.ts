@@ -508,6 +508,8 @@ export interface MaterialRequestDto {
   poStatus?: string;
   canFullyIssue?: boolean;
   hasShortfall?: boolean;
+  /** Open and completed branch transfers created from this indent. */
+  linkedBranchTransfers?: BranchTransferDto[];
   /** GRN and invoice traceability included on the indent detail response. */
   grns?: Array<{
     id: string;
@@ -1405,10 +1407,14 @@ export interface BranchTransferDto {
   status: string;
   fromProjectId?: string;
   toProjectId?: string;
+  fromSiteId?: string;
+  toSiteId?: string;
   fromProject?: string;
   toProject?: string;
   fromProjectName?: string;
   toProjectName?: string;
+  fromSite?: string;
+  toSite?: string;
   materialRequestId?: string;
   coordinatorDecision?: string | null;
   itemCount: number;
@@ -1439,6 +1445,16 @@ export interface CreateBranchTransferDto {
   items: Array<{ materialId: string; quantity: number }>;
   note?: string;
   materialRequestId?: string;
+}
+
+export interface CreateIndentBranchTransfersDto {
+  materialRequestId: string;
+  note?: string;
+  sources: Array<{
+    fromProjectId: string;
+    fromSiteId: string;
+    items: Array<{ materialId: string; quantity: number }>;
+  }>;
 }
 
 export interface CoordinatorDecideBranchTransferDto {

@@ -8,18 +8,18 @@ const {
   getSeedContext,
   getApp,
 } = require('./test/helpers');
-const { BranchTransfer, StockLedger, Site, Project, MaterialRequest } = require('./models');
+const { BranchTransfer, StockLedger, Site, Project, MaterialRequest, User, Material } = require('./models');
 
 let indentCategoryId;
 
-async function createForwardedIndent(app, siteToken, storeToken, materialId) {
+async function createForwardedIndent(app, siteToken, storeToken, materialId, quantityRequested = 99999) {
   const createRes = await request(app)
     .post('/api/material-requests')
     .set('Authorization', `Bearer ${siteToken}`)
     .send({ indentRequestType: 'ABOVE_5000',
         requestedByName: 'Test Requester',
         indentCategoryId: indentCategoryId,
-        purpose: 'UAT test reason', items: [{ materialId: materialId.toString(), quantityRequested: 99999 }] });
+        purpose: 'UAT test reason', items: [{ materialId: materialId.toString(), quantityRequested }] });
   assert.strictEqual(createRes.status, 201);
   const mrId = createRes.body.data.id;
 
@@ -200,5 +200,56 @@ describe('Branch transfer workflow', () => {
     for (const row of pmRes.body.data) {
       assert.ok(['PRJ-001', 'PRJ-002', 'PRJ-003'].includes(row.code));
     }
+  });
+
+  it('PM can take from multiple sites and forward remaining to HO', async () => {
+    const panelBoard = await Material.findOne({ code: 'PANEL-BOARD' });
+    const metro = await Site.findOne({ name: 'Chitravathi Main Store' });
+    const kaiga = await Site.findOne({ name: 'Kaiga Main Store' });
+    assert.ok(panelBoard && metro && kaiga);
+
+    const pm = await User.findOne({ email: 'pm@bekem.com' });
+    pm.assignedProjectIds = (await Project.find()).map((p) => p._id);
+    await pm.save();
+    pmToken = await loginAs('pm@bekem.com');
+
+    const mr = await createForwardedIndent(app, siteToken, storeToken, panelBoard._id, 500);
+    const batchRes = await request(app)
+      .post('/api/branch-transfers/batch')
+      .set('Authorization', `Bearer ${pmToken}`)
+      .send({
+        materialRequestId: mr._id.toString(),
+        note: 'Take available stock from other sites; remaining to HO',
+        sources: [
+          {
+            fromProjectId: metro.projectId.toString(),
+            fromSiteId: metro._id.toString(),
+            items: [{ materialId: panelBoard._id.toString(), quantity: 50 }],
+          },
+          {
+            fromProjectId: kaiga.projectId.toString(),
+            fromSiteId: kaiga._id.toString(),
+            items: [{ materialId: panelBoard._id.toString(), quantity: 120 }],
+          },
+        ],
+      });
+    assert.strictEqual(batchRes.status, 201, batchRes.body.message);
+    assert.strictEqual(batchRes.body.data.transfers.length, 2);
+
+    const afterBt = await MaterialRequest.findById(mr._id);
+    assert.strictEqual(afterBt.status, 'BRANCH_TRANSFER_REQUESTED');
+
+    const detailRes = await request(app)
+      .get(`/api/material-requests/${mr._id}`)
+      .set('Authorization', `Bearer ${pmToken}`);
+    assert.strictEqual(detailRes.status, 200);
+    assert.strictEqual(detailRes.body.data.linkedBranchTransfers.length, 2);
+
+    const hoRes = await request(app)
+      .post(`/api/material-requests/${mr._id}/forward-to-ho`)
+      .set('Authorization', `Bearer ${pmToken}`)
+      .send({ remark: 'Remaining 330 still needed at site' });
+    assert.strictEqual(hoRes.status, 200, hoRes.body.message);
+    assert.strictEqual(hoRes.body.data.status, 'PENDING_EXECUTIVE_DECISION');
   });
 });

@@ -7,5 +7,10 @@ export declare function formatQuantity(qty: number, unit?: string): string;
 export declare function formatUnitCount(value: number | null | undefined): string;
 export declare function getGreeting(): string;
 export declare function getFirstName(fullName: string): string;
+/** `CODE — Name`, or whichever of code/name is present. */
+export declare function formatProjectLabel(project?: {
+    code?: string | null;
+    name?: string | null;
+} | null, fallback?: string): string;
 /** Shortfall quantity for indent stock comparison (never negative). */
 export declare function computeRequiredQty(requestedQty: number, availableQty: number): number;

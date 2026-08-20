@@ -8,6 +8,7 @@ exports.formatQuantity = formatQuantity;
 exports.formatUnitCount = formatUnitCount;
 exports.getGreeting = getGreeting;
 exports.getFirstName = getFirstName;
+exports.formatProjectLabel = formatProjectLabel;
 exports.computeRequiredQty = computeRequiredQty;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 function formatDate(date) {
@@ -67,6 +68,14 @@ function getGreeting() {
 }
 function getFirstName(fullName) {
     return fullName.split(' ')[0] || fullName;
+}
+/** `CODE — Name`, or whichever of code/name is present. */
+function formatProjectLabel(project, fallback = '—') {
+    const code = (project?.code || '').trim();
+    const name = (project?.name || '').trim();
+    if (code && name && code !== name)
+        return `${code} — ${name}`;
+    return name || code || fallback;
 }
 /** Shortfall quantity for indent stock comparison (never negative). */
 function computeRequiredQty(requestedQty, availableQty) {
