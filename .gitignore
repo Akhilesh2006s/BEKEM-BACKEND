@@ -8,3 +8,5 @@ coverage
 data/
 *.xlsx
 uploads/
+
+*.zip
