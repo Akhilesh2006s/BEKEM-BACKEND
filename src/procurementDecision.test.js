@@ -8,7 +8,7 @@ const {
   getSeedContext,
   getApp,
 } = require('./test/helpers');
-const { MaterialRequest, PurchaseRequest } = require('./models');
+const { Material, MaterialRequest, PurchaseRequest, StockLedger } = require('./models');
 
 let indentCategoryId;
 
@@ -51,7 +51,10 @@ describe('Executive procurement decision workflow', () => {
     executiveToken = await loginAs('executive@bekem.com');
     coordinatorToken = await loginAs('coordinator@bekem.com');
     const ctx = await getSeedContext();
-    material = ctx.material;
+    material =
+      (await Material.findOne({ name: 'Cement OPC 53' })) ||
+      (await Material.findOne({ referenceUnitPrice: { $lte: 500 } })) ||
+      ctx.material;
     indentCategoryId = ctx.indentCategory._id.toString();
   });
 
@@ -142,5 +145,43 @@ describe('Executive procurement decision workflow', () => {
       .set('Authorization', `Bearer ${executiveToken}`);
     assert.strictEqual(approveRes.status, 400);
     assert.match(approveRes.body.message, /Procurement Decisions/i);
+  });
+
+  it('PM can forward BELOW_5000 stock-short indent to executive decision', async () => {
+    const ctx = await getSeedContext();
+    const createRes = await request(app)
+      .post('/api/material-requests')
+      .set('Authorization', `Bearer ${siteToken}`)
+      .send({
+        indentRequestType: 'BELOW_5000',
+        requestedByName: 'Test Requester',
+        indentCategoryId: indentCategoryId,
+        purpose: 'Below cap but stock short',
+        items: [{ materialId: material._id.toString(), quantityRequested: 1 }],
+      });
+    assert.strictEqual(createRes.status, 201);
+    const mrId = createRes.body.data.id;
+
+    await StockLedger.updateMany(
+      { siteId: ctx.site._id, materialId: material._id },
+      { $set: { quantityOnHand: 0 } }
+    );
+
+    const forwardRes = await request(app)
+      .post(`/api/material-requests/${mrId}/allocate`)
+      .set('Authorization', `Bearer ${storeToken}`)
+      .send({ decision: 'forward', remark: 'Stock short — forwarded entire indent to PM' });
+    assert.strictEqual(forwardRes.status, 200);
+    assert.strictEqual(forwardRes.body.data.status, 'FORWARDED_TO_PM');
+
+    const forwardHo = await request(app)
+      .post(`/api/material-requests/${mrId}/forward-to-ho`)
+      .set('Authorization', `Bearer ${pmToken}`)
+      .send({ remark: 'Below ₹5,000 but no stock — need Head Office procurement decision' });
+    assert.strictEqual(forwardHo.status, 200);
+    assert.strictEqual(forwardHo.body.data.status, 'PENDING_EXECUTIVE_DECISION');
+
+    const pr = await PurchaseRequest.findOne({ materialRequestId: mrId });
+    assert.strictEqual(pr, null);
   });
 });

@@ -100,7 +100,7 @@ describe('Indent request type', () => {
     assert.strictEqual(detail.body.data.items[0].lineTotal, undefined);
   });
 
-  it('PM BELOW_5000: stock short continues Store procurement — never HO', async () => {
+  it('PM BELOW_5000: stock short forwards to HO procurement', async () => {
     const pmToken = await loginAs('pm@bekem.com');
     const create = await request(app)
       .post('/api/material-requests')
@@ -133,21 +133,16 @@ describe('Indent request type', () => {
       .post(`/api/material-requests/${mrId}/pm-local-close`)
       .set('Authorization', `Bearer ${pmToken}`)
       .send({ remark: 'Approved — Store to purchase under ₹5,000' });
-    assert.strictEqual(close.status, 200, JSON.stringify(close.body));
-    // Stock short → continue procurement at Store (not closed/allocated at PM)
-    assert.strictEqual(close.body.data.status, 'PM_APPROVED', close.body.data.status);
-    assert.strictEqual(close.body.data.pendingWith, 'STORE_INCHARGE');
-    assert.notStrictEqual(close.body.data.status, 'PENDING_HO');
-    assert.notStrictEqual(close.body.data.status, 'PURCHASE_REQUESTED');
+    assert.strictEqual(close.status, 400, JSON.stringify(close.body));
+    assert.match(close.body.message || '', /Forward to Head Office/i);
 
-    const blockHo = await request(app)
+    const forwardHo = await request(app)
       .post(`/api/material-requests/${mrId}/forward-to-ho`)
       .set('Authorization', `Bearer ${pmToken}`)
-      .send({ remark: 'Should not escalate below cap' });
-    assert.ok([400, 200].includes(blockHo.status));
-    if (blockHo.status === 400) {
-      assert.match(blockHo.body.message || '', /Below ₹5,000/i);
-    }
+      .send({ remark: 'Approved — stock short, send to HO under ₹5,000' });
+    assert.strictEqual(forwardHo.status, 200, JSON.stringify(forwardHo.body));
+    assert.strictEqual(forwardHo.body.data.status, 'PENDING_EXECUTIVE_DECISION');
+    assert.strictEqual(forwardHo.body.data.pendingWith, 'EXECUTIVE');
   });
 
   it('PM BELOW_5000: stock available closes at PM (ALLOCATED)', async () => {

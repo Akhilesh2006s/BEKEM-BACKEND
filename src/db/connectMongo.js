@@ -13,7 +13,6 @@ async function connectMongo() {
       await mongoose.connect(uri, { serverSelectionTimeoutMS: 15000 });
       await repairPurchaseOrderIndexes();
       await backfillPurchaseRequestsForApprovedIndents();
-      await repairBelowCapIndentsAwayFromHo();
       const { dedupeProjects } = require('../services/projectDeduplicationService');
       await dedupeProjects();
       await migrateBranchTransferStatuses();
@@ -156,52 +155,8 @@ async function backfillPurchaseRequestsForApprovedIndents() {
   }
 }
 
-/**
- * Below ₹5,000 must not sit in HO queues. Pull them back to Store after PM approval.
- */
 async function repairBelowCapIndentsAwayFromHo() {
-  try {
-    const { MaterialRequest, PurchaseRequest } = require('../models');
-    const statusHistoryService = require('../services/statusHistoryService');
-
-    const misplaced = await MaterialRequest.find({
-      indentRequestType: 'BELOW_5000',
-      status: {
-        $in: [
-          'PENDING_HO',
-          'PENDING_EXECUTIVE_DECISION',
-          'PURCHASE_REQUESTED',
-          'EXECUTIVE_DECISION_PO',
-          'EXECUTIVE_DECISION_BRANCH_TRANSFER',
-        ],
-      },
-    });
-
-    for (const mr of misplaced) {
-      const fromStatus = mr.status;
-      mr.status = 'PM_APPROVED';
-      mr.pendingWithRole = 'STORE_INCHARGE';
-      mr.escalatedToHo = false;
-      await mr.save();
-
-      await PurchaseRequest.deleteMany({
-        materialRequestId: mr._id,
-        status: { $in: ['OPEN', 'DRAFT'] },
-      });
-
-      await statusHistoryService.record(
-        'MaterialRequest',
-        mr._id,
-        fromStatus,
-        'PM_APPROVED',
-        null,
-        'Auto-repair: Below ₹5,000 returned to Store (no HO procurement)'
-      );
-      console.log(`Repaired Below ₹5,000 indent ${mr.indentNumber}: ${fromStatus} → PM_APPROVED`);
-    }
-  } catch (err) {
-    console.warn('Below ₹5,000 HO repair skipped:', err.message);
-  }
+  // Retained as a no-op for backward compatibility with older startup flows.
 }
 
 module.exports = { connectMongo };
