@@ -27,30 +27,51 @@ function getAllowedOrigins() {
   return [...new Set([...defaults, ...fromEnv])];
 }
 
+/** Local Vite often binds 5174+ when 5173 is taken. */
+function isLocalViteOrigin(origin) {
+  if (!origin) return false;
+  try {
+    const url = new URL(origin);
+    if (!['localhost', '127.0.0.1'].includes(url.hostname)) return false;
+    const port = Number(url.port || (url.protocol === 'https:' ? 443 : 80));
+    return port >= 5173 && port <= 5199;
+  } catch {
+    return false;
+  }
+}
+
+function isAllowedOrigin(origin) {
+  const allowed = getAllowedOrigins();
+  const normalized = normalizeOrigin(origin);
+  if (!normalized) return false;
+  if (allowed.includes(normalized)) return true;
+  if (isLocalViteOrigin(normalized)) return true;
+  if (
+    process.env.CORS_ALLOW_VERCEL_PREVIEWS === 'true' &&
+    /\.vercel\.app$/i.test(normalized)
+  ) {
+    return true;
+  }
+  return false;
+}
+
 /** cors package origin callback — reflects request origin when allowed. */
 function corsOriginCallback(origin, callback) {
-  const allowed = getAllowedOrigins();
   // Non-browser clients (no Origin header)
   if (!origin) return callback(null, true);
   const normalized = normalizeOrigin(origin);
-  if (normalized && allowed.includes(normalized)) {
+  if (normalized && isAllowedOrigin(normalized)) {
     return callback(null, normalized);
   }
-  // Also allow any *.vercel.app preview deployments when enabled
-  if (
-    process.env.CORS_ALLOW_VERCEL_PREVIEWS === 'true' &&
-    normalized &&
-    /\.vercel\.app$/i.test(normalized)
-  ) {
-    return callback(null, normalized);
-  }
-  console.warn(`[CORS] blocked origin: ${origin} (allowed: ${allowed.join(', ')})`);
+  console.warn(
+    `[CORS] blocked origin: ${origin} (allowed: ${getAllowedOrigins().join(', ')}, local Vite 5173–5199)`
+  );
   return callback(null, false);
 }
 
 function socketCorsConfig() {
   return {
-    origin: getAllowedOrigins(),
+    origin: (origin, callback) => corsOriginCallback(origin, callback),
     credentials: true,
   };
 }
