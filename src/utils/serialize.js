@@ -203,6 +203,7 @@ function serializeMaterialRequest(mr, stockContext, pricingContext) {
     requestedByUserId: resolveId(mr.requestedByUserId),
     status: mr.status,
     pendingWith: mr.pendingWithRole || pendingWithLabel(mr.status),
+    allocatedByRole: mr.allocatedByRole || null,
     estimatedValue: (pricingContext?.totalEstimatedValue ?? mr.estimatedValue) || 0,
     escalatedToHo: !!mr.escalatedToHo,
     escalatedToChairman: !!mr.escalatedToChairman,

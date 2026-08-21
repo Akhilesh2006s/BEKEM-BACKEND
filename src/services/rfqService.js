@@ -8,7 +8,6 @@ const { buildPurchaseHistoryRows } = require('./materialPricingService');
 const {
   buildComparisonTable,
   upsertRfqQuotations,
-  ensureDefaultVendorQuotations,
   computeFinalCost,
   pickL1Quotation,
 } = require('./quotationComparisonService');
@@ -148,29 +147,20 @@ async function getRfqComparison(rfqId, user) {
   assertRfqAccess(user);
   const rfqPeek = await RFQ.findById(rfqId).select('procurementMaterialIds').lean();
   const storedIds = (rfqPeek?.procurementMaterialIds || []).map(String);
-  const { rfq, mr, lineItems, quantity, materialIds } = await loadRfqContext(rfqId, {
+  const { rfq, mr, lineItems, quantity } = await loadRfqContext(rfqId, {
     includeMaterialIds: storedIds.length ? storedIds : undefined,
   });
   // When nothing stored and no shortfall lines, fall back to full indent (legacy RFQs)
   let activeLines = lineItems;
   let activeQty = quantity;
-  let activeMaterialIds = materialIds;
   if (!activeLines.length && mr) {
     const all = getIndentLineItems(mr);
     activeLines = all;
     activeQty = all.reduce((s, l) => s + (l.quantityRequested || 0), 0) || 1;
-    activeMaterialIds = all
-      .map((l) => (l.materialId?._id || l.materialId)?.toString())
-      .filter(Boolean);
   }
 
   const quotations = await Quotation.find({ rfqId: rfq._id }).populate('vendorId').sort({ amount: 1 });
-  const hasAssignments = quotations.some((q) => (q.selectedMaterialIds || []).length > 0);
-  if (!hasAssignments) {
-    await ensureDefaultVendorQuotations(rfq, rfq.purchaseRequestId, activeMaterialIds);
-  }
-  const freshQuotations = await Quotation.find({ rfqId: rfq._id }).populate('vendorId').sort({ amount: 1 });
-  const comparison = buildComparisonTable(freshQuotations, activeQty, activeLines);
+  const comparison = buildComparisonTable(quotations, activeQty, activeLines);
   const purchaseHistory = await buildPurchaseHistoryRows(activeLines);
 
   return {

@@ -61,6 +61,9 @@ const materialRequestSchema = new mongoose.Schema(
     requestedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     status: { type: String, enum: STATUSES, default: 'PENDING_STORE' },
     pendingWithRole: { type: String, default: 'STORE_INCHARGE' },
+    /** Role that transitioned this indent to ALLOCATED — distinguishes Store's normal
+     *  issue-ready allocation from a PM/Coordinator closing it locally. */
+    allocatedByRole: { type: String, default: null },
     /** Estimated indent value (INR) for PM daily cap tracking. */
     estimatedValue: { type: Number, default: 0 },
     escalatedToHo: { type: Boolean, default: false },

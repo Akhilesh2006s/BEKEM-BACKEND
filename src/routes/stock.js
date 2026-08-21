@@ -353,6 +353,22 @@ router.get('/cross-project', async (req, res, next) => {
   }
 });
 
+router.get('/cross-project/all', async (req, res, next) => {
+  try {
+    if (req.user.role !== UserRole.PROJECT_MANAGER) {
+      return res.status(403).json({ statusCode: 403, message: 'Forbidden' });
+    }
+    const { excludeProjectId } = req.query;
+    const { getAllCrossProjectStock } = require('../services/pmCrossProjectStockService');
+    const data = await getAllCrossProjectStock(req.user, {
+      excludeProjectId: excludeProjectId ? String(excludeProjectId) : undefined,
+    });
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get(
   '/material-availability/:materialId',
   param('materialId').isMongoId(),

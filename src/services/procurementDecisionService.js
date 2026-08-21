@@ -118,6 +118,11 @@ async function buildProcurementDecisionDto(mr) {
     .select('prNumber status')
     .lean();
 
+  const { serializeTransferRow } = require('./branchTransferService');
+  const linkedTransfers = await BranchTransfer.find({ materialRequestId: mr._id })
+    .sort({ createdAt: 1 })
+    .populate('fromProjectId toProjectId fromSiteId toSiteId items.materialId requestedByUserId');
+
   return {
     id: mr._id.toString(),
     indentNumber: mr.indentNumber,
@@ -142,6 +147,7 @@ async function buildProcurementDecisionDto(mr) {
     coordinatorProcurementRemark: mr.coordinatorProcurementRemark || '',
     canExecutiveDecide: EXECUTIVE_QUEUE_STATUSES.includes(mr.status),
     canCoordinatorReview: COORDINATOR_QUEUE_STATUSES.includes(mr.status),
+    linkedBranchTransfers: linkedTransfers.map(serializeTransferRow),
   };
 }
 

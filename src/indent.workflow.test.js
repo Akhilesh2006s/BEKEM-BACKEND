@@ -193,7 +193,7 @@ describe('Indent workflow v2', () => {
     assert.strictEqual(mr.status, 'FORWARDED_TO_PM');
   });
 
-  it('PM can approve stock-available indent without daily cap check', async () => {
+  it('PM cannot close locally when stock is available but daily cap is exceeded — forwards to HO', async () => {
     const createRes = await request(app)
       .post('/api/material-requests')
       .set('Authorization', `Bearer ${siteToken}`)
@@ -201,7 +201,7 @@ describe('Indent workflow v2', () => {
         indentRequestType: 'ABOVE_5000',
         requestedByName: 'Test Requester',
         indentCategoryId: indentCategoryId,
-        purpose: 'Stock available PM approve test',
+        purpose: 'Stock available, over PM daily cap',
         items: [{ materialId: material._id.toString(), quantityRequested: 1 }],
       });
     const mrId = createRes.body.data.id;
@@ -213,6 +213,7 @@ describe('Indent workflow v2', () => {
 
     assert.strictEqual(verifyRes.status, 200);
 
+    // Value far exceeds any plausible daily cap, so this must escalate to HO even though stock is on hand.
     await MaterialRequest.findByIdAndUpdate(mrId, { estimatedValue: 50000 });
 
     const closeRes = await request(app)
@@ -221,7 +222,54 @@ describe('Indent workflow v2', () => {
       .send({ remark: 'Approved — stock on hand' });
 
     assert.strictEqual(closeRes.status, 200, JSON.stringify(closeRes.body));
+    assert.strictEqual(closeRes.body.data.status, 'PENDING_EXECUTIVE_DECISION');
+    assert.match(closeRes.body.message || '', /Daily cap reached/);
+
+    const mr = await MaterialRequest.findById(mrId);
+    assert.strictEqual(mr.status, 'PENDING_EXECUTIVE_DECISION');
+    assert.notStrictEqual(mr.allocatedByRole, 'PROJECT_MANAGER');
+  });
+
+  it('PM can close locally when stock is available and within daily cap', async () => {
+    const capRes = await request(app)
+      .get('/api/material-requests/pm/daily-cap')
+      .set('Authorization', `Bearer ${pmToken}`);
+    assert.strictEqual(capRes.status, 200);
+    const remaining = capRes.body.data.remaining;
+    assert.ok(remaining > 0, 'expected PM to have remaining daily cap for this test');
+    const withinCapValue = Math.max(1, Math.floor(remaining / 2));
+
+    const createRes = await request(app)
+      .post('/api/material-requests')
+      .set('Authorization', `Bearer ${siteToken}`)
+      .send({
+        indentRequestType: 'ABOVE_5000',
+        requestedByName: 'Test Requester',
+        indentCategoryId: indentCategoryId,
+        purpose: 'Stock available, within PM daily cap',
+        items: [{ materialId: material._id.toString(), quantityRequested: 1 }],
+      });
+    const mrId = createRes.body.data.id;
+
+    const verifyRes = await request(app)
+      .post(`/api/material-requests/${mrId}/allocate`)
+      .set('Authorization', `Bearer ${storeToken}`)
+      .send({ decision: 'issue', remark: 'Stock verified — forwarding to PM' });
+
+    assert.strictEqual(verifyRes.status, 200);
+
+    await MaterialRequest.findByIdAndUpdate(mrId, { estimatedValue: withinCapValue });
+
+    const closeRes = await request(app)
+      .post(`/api/material-requests/${mrId}/pm-local-close`)
+      .set('Authorization', `Bearer ${pmToken}`)
+      .send({ remark: 'Approved — stock on hand' });
+
+    assert.strictEqual(closeRes.status, 200, JSON.stringify(closeRes.body));
     assert.strictEqual(closeRes.body.data.status, 'ALLOCATED');
+
+    const mr = await MaterialRequest.findById(mrId);
+    assert.strictEqual(mr.allocatedByRole, 'PROJECT_MANAGER');
   });
 
   it('Coordinator daily cap endpoint and local close within limit', async () => {

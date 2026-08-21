@@ -158,6 +158,8 @@ export interface ProcurementDecisionDto {
         type: string;
         path: string;
     };
+    /** Branch transfers the PM already requested for this indent (read-only for Executive review). */
+    linkedBranchTransfers?: BranchTransferDto[];
 }
 export interface PoTimelineStageDto {
     stage: string;
@@ -462,6 +464,8 @@ export interface MaterialRequestDto {
     requestedByUserId: string;
     status: string;
     pendingWith?: string;
+    /** Role that closed this indent locally when status is ALLOCATED (PM/Coordinator local close vs. Store's normal allocation). */
+    allocatedByRole?: 'PROJECT_MANAGER' | 'COORDINATOR' | 'STORE_INCHARGE' | null;
     approverNames?: {
         store?: string;
         pm?: string;
@@ -480,6 +484,10 @@ export interface MaterialRequestDto {
     };
     estimatedValue?: number;
     escalatedToHo?: boolean;
+    escalatedToChairman?: boolean;
+    pmProceededAllocation?: boolean;
+    /** Sequential allocation review after PO approval: Executive → PM → Store → Indent Raiser. */
+    allocationReviewStage?: 'EXECUTIVE' | 'PROJECT_MANAGER' | 'STORE_INCHARGE' | 'SITE_INCHARGE' | null;
     storeStockVerified?: boolean;
     origin?: 'SITE' | 'EXECUTIVE';
     purchaseRequestId?: string;
@@ -532,6 +540,7 @@ export interface PmDailyCapDto {
     dailyCap: number;
     remaining: number;
 }
+export type DailyCapDto = PmDailyCapDto;
 export interface PmDashboardDto {
     pendingRequests: MaterialRequestDto[];
     approveQueue: MaterialRequestDto[];
@@ -1540,6 +1549,7 @@ export interface OrgSettingsDto {
     poPmMaxInr: number;
     poCoordinatorMaxInr: number;
     mrPmDailyMaxInr: number;
+    mrCoordinatorDailyMaxInr: number;
     timezone: string;
     expenseCategories: ExpenseCategoryApprovalDto[];
     approvalRoutingNote: string;
@@ -1549,6 +1559,7 @@ export interface UpdateOrgSettingsDto {
     poPmMaxInr?: number;
     poCoordinatorMaxInr?: number;
     mrPmDailyMaxInr?: number;
+    mrCoordinatorDailyMaxInr?: number;
     timezone?: string;
     expenseCategories?: ExpenseCategoryApprovalDto[];
 }
@@ -1556,5 +1567,6 @@ export interface ApprovalLimitsDto {
     poPmMaxInr: number;
     poCoordinatorMaxInr: number;
     mrPmDailyMaxInr: number;
+    mrCoordinatorDailyMaxInr: number;
     approvalRoutingNote: string;
 }

@@ -91,8 +91,88 @@ async function enrichIndentWithCrossProjectStock(mr, user) {
   return getCrossProjectStockForMaterials(user, materialIds, { excludeProjectId });
 }
 
+/** Full stock-on-hand for every material at every project assigned to the PM, grouped by project. */
+async function getAllCrossProjectStock(user, options = {}) {
+  if (user.role !== UserRole.PROJECT_MANAGER) return [];
+
+  const excludeProjectId = options.excludeProjectId ? String(options.excludeProjectId) : '';
+  const projects = await getPmAssignedProjects(user);
+  const otherProjects = excludeProjectId
+    ? projects.filter((p) => p._id.toString() !== excludeProjectId)
+    : projects;
+  if (!otherProjects.length) return [];
+
+  const projectIds = otherProjects.map((p) => p._id);
+  const sites = await Site.find({ projectId: { $in: projectIds } })
+    .select('projectId name chainageLabel')
+    .lean();
+
+  const emptyResult = otherProjects.map((p) => ({
+    projectId: p._id.toString(),
+    projectCode: p.code,
+    projectName: p.name,
+    materials: [],
+  }));
+  if (!sites.length) return emptyResult;
+
+  const sitesById = new Map(sites.map((s) => [s._id.toString(), s]));
+  const ledgers = await StockLedger.find({ siteId: { $in: sites.map((s) => s._id) } })
+    .select('siteId materialId quantityOnHand quantityReserved')
+    .populate('materialId', 'name code unit')
+    .lean();
+
+  const materialsByProject = new Map();
+  for (const l of ledgers) {
+    const onHand = l.quantityOnHand || 0;
+    const reserved = l.quantityReserved || 0;
+    const available = Math.max(0, onHand - reserved);
+    if (available <= 0) continue;
+    const mat = l.materialId;
+    if (!mat) continue;
+    const site = sitesById.get(l.siteId.toString());
+    if (!site) continue;
+
+    const pid = site.projectId.toString();
+    const matId = mat._id.toString();
+    if (!materialsByProject.has(pid)) materialsByProject.set(pid, new Map());
+    const matMap = materialsByProject.get(pid);
+    if (!matMap.has(matId)) {
+      matMap.set(matId, {
+        materialId: matId,
+        materialCode: mat.code,
+        materialName: mat.name,
+        unit: mat.unit,
+        availableQty: 0,
+        sites: [],
+      });
+    }
+    const entry = matMap.get(matId);
+    entry.availableQty += available;
+    entry.sites.push({
+      siteId: l.siteId.toString(),
+      siteName: siteDisplayName(site),
+      availableQty: available,
+    });
+  }
+
+  return otherProjects.map((p) => {
+    const pid = p._id.toString();
+    const matMap = materialsByProject.get(pid);
+    const materials = matMap
+      ? [...matMap.values()].sort((a, b) => (a.materialName || '').localeCompare(b.materialName || ''))
+      : [];
+    return {
+      projectId: pid,
+      projectCode: p.code,
+      projectName: p.name,
+      materials,
+    };
+  });
+}
+
 module.exports = {
   getPmAssignedProjects,
   getCrossProjectStockForMaterials,
   enrichIndentWithCrossProjectStock,
+  getAllCrossProjectStock,
 };

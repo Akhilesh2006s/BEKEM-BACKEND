@@ -1197,6 +1197,7 @@ router.post(
             await allocateIndentStock(mr, req.user._id);
             mr.status = 'ALLOCATED';
             mr.pendingWithRole = 'STORE_INCHARGE';
+            mr.allocatedByRole = UserRole.PROJECT_MANAGER;
             belowClosedAtPm = true;
           } catch (allocErr) {
             if (allocErr.statusCode) {
@@ -1385,6 +1386,37 @@ router.post(
       }
 
       const remark = requireRemark(req.body.remark);
+
+      // Above ₹5,000: stock being available isn't enough — local close is only allowed
+      // within the PM's daily approval cap. Over cap goes to Head Office even with stock on hand.
+      if (!isBelowCap) {
+        const capCheck = await checkPmCanApprove(req.approvalContext.principal._id, mr);
+        if (capCheck.wouldExceed) {
+          await queueForExecutiveDecision(
+            mr,
+            req.user._id,
+            remark,
+            `PM daily cap reached (₹${capCheck.dailyApprovedTotal.toLocaleString('en-IN')} of ₹${capCheck.dailyCap.toLocaleString('en-IN')}) — forwarded to Head Office for approval: ${remark}`
+          );
+
+          await notificationService.notifyUser(mr.requestedByUserId, {
+            title: 'Indent forwarded to Head Office',
+            body: `${mr.indentNumber} — PM's daily approval cap reached; awaiting executive procurement decision.`,
+            relatedEntityType: 'MaterialRequest',
+            relatedEntityId: mr._id,
+          });
+
+          const enriched = await mrEnrichedBody(mr._id, req.user.role);
+          return {
+            statusCode: 200,
+            body: {
+              ...enriched,
+              message: `Daily cap reached (₹${capCheck.dailyCap.toLocaleString('en-IN')}/day) — forwarded to Head Office for approval`,
+            },
+          };
+        }
+      }
+
       const fromStatus = mr.status;
       let closedAtPm = false;
 
@@ -1393,6 +1425,7 @@ router.post(
           await allocateIndentStock(mr, req.user._id);
           mr.status = 'ALLOCATED';
           mr.pendingWithRole = 'STORE_INCHARGE';
+          mr.allocatedByRole = UserRole.PROJECT_MANAGER;
           closedAtPm = true;
         } catch (allocErr) {
           if (allocErr.statusCode) {
@@ -1642,6 +1675,7 @@ router.post(
           await allocateIndentStock(mr, req.user._id);
           mr.status = 'ALLOCATED';
           mr.pendingWithRole = 'STORE_INCHARGE';
+          mr.allocatedByRole = UserRole.COORDINATOR;
           closedLocally = true;
         } catch (allocErr) {
           if (allocErr.statusCode) {
