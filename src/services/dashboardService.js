@@ -378,6 +378,20 @@ async function getTodayActions(user) {
         count: prReady,
       });
     }
+    const pmWoPending = await WorkOrder.countDocuments({
+      projectId: { $in: user.assignedProjectIds || [] },
+      status: 'PM_PENDING',
+    });
+    if (pmWoPending > 0) {
+      actions.push({
+        id: 'pm-wo-approve',
+        title: `Approve ${pmWoPending} work order${pmWoPending > 1 ? 's' : ''}`,
+        subtitle: 'Review and send to Executive',
+        href: '/pm/approve-wos',
+        priority: 'high',
+        count: pmWoPending,
+      });
+    }
     const activeWo = await WorkOrder.countDocuments({
       projectId: { $in: user.assignedProjectIds || [] },
       status: { $in: ['ACCEPTED', 'IN_PROGRESS'] },
@@ -385,11 +399,11 @@ async function getTodayActions(user) {
     if (activeWo > 0) {
       const woHref =
         (await firstActiveWoHref({ projectId: { $in: user.assignedProjectIds || [] } })) ||
-        '/pm#work-orders';
+        '/pm/approve-wos';
       actions.push({
         id: 'pm-wo-progress',
         title: `Track ${activeWo} active work order${activeWo > 1 ? 's' : ''}`,
-        subtitle: 'Monitor milestones and verify certifications',
+        subtitle: 'Monitor milestones and update progress',
         href: woHref,
         priority: 'medium',
         count: activeWo,
@@ -441,6 +455,17 @@ async function getTodayActions(user) {
         href: await firstPendingAcceptanceWoHref(),
         priority: 'high',
         count: pendingAccept,
+      });
+    }
+    const execWoPending = await WorkOrder.countDocuments({ status: 'EXECUTIVE_PENDING' });
+    if (execWoPending > 0) {
+      actions.push({
+        id: 'exec-wo-review',
+        title: `Review ${execWoPending} work order${execWoPending > 1 ? 's' : ''}`,
+        subtitle: 'PM-approved work orders waiting on Executive',
+        href: '/executive/review-wos',
+        priority: 'high',
+        count: execWoPending,
       });
     }
     const approvedPos = await PurchaseOrder.countDocuments({ status: 'APPROVED' });
@@ -861,7 +886,7 @@ async function firstPendingAcceptanceWoHref() {
   const wo = await WorkOrder.findOne({ status: 'PENDING_ACCEPTANCE' })
     .sort({ createdAt: 1 })
     .select('_id');
-  return wo ? `/work-orders/${wo._id}` : '/executive#work-orders';
+  return wo ? `/work-orders/${wo._id}` : '/executive/review-wos';
 }
 
 async function getUserAnalytics() {

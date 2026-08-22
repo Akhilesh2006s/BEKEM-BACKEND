@@ -224,7 +224,9 @@ router.post(
         wo.executiveReviewedByUserId = req.user._id;
         wo.executiveReviewedAt = new Date();
       } else {
-        wo.status = 'DRAFT';
+        wo.status = 'PM_PENDING';
+        wo.executiveReviewedByUserId = undefined;
+        wo.executiveReviewedAt = undefined;
       }
       await wo.save();
 
@@ -234,7 +236,7 @@ router.post(
         fromStatus,
         wo.status,
         req.user._id,
-        req.body.note || req.body.action
+        req.body.note || (req.body.action === 'APPROVE' ? 'Executive approved work order' : 'Returned to Project Manager')
       );
 
       if (req.body.action === 'APPROVE') {
@@ -243,6 +245,19 @@ router.post(
           await notificationService.notifyUser(c._id, {
             title: 'Work order pending verification',
             body: `${wo.woNumber} requires coordinator verification.`,
+            relatedEntityType: 'WorkOrder',
+            relatedEntityId: wo._id,
+          });
+        }
+      } else {
+        const pms = await User.find({
+          role: UserRole.PROJECT_MANAGER,
+          assignedProjectIds: wo.projectId,
+        });
+        for (const pm of pms) {
+          await notificationService.notifyUser(pm._id, {
+            title: 'Work order returned for PM review',
+            body: `${wo.woNumber} was returned by Executive — review and approve again.`,
             relatedEntityType: 'WorkOrder',
             relatedEntityId: wo._id,
           });
