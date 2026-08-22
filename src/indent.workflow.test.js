@@ -233,7 +233,7 @@ describe('Indent workflow v2', () => {
 
     assert.strictEqual(forwardRes.status, 200, JSON.stringify(forwardRes.body));
     assert.strictEqual(forwardRes.body.data.status, 'PENDING_EXECUTIVE_DECISION');
-    assert.match(forwardRes.body.message || '', /PM approval level/i);
+    assert.match(forwardRes.body.message || '', /approved and forwarded to HO/i);
 
     const mr = await MaterialRequest.findById(mrId);
     assert.strictEqual(mr.status, 'PENDING_EXECUTIVE_DECISION');

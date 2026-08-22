@@ -756,6 +756,8 @@ export interface PurchaseRequestDto {
   rfqNumber?: string | null;
   rfqRaisedByName?: string | null;
   rfqRaisedByRole?: string | null;
+  /** Vendors the executive actually assigned on the RFQ (0 = preview-only / not saved). */
+  rfqAssignedVendorCount?: number;
   items?: Array<{
     id: string;
     materialId: string;
@@ -1188,6 +1190,8 @@ export interface RfqListItemDto {
   dueDate?: string | null;
   indentNumber?: string;
   purchaseRequestId?: string;
+  /** Vendors actually assigned (0 means RFQ was previewed but not saved with vendors). */
+  assignedVendorCount?: number;
   poId?: string | null;
   poNumber?: string | null;
   createdAt: string;

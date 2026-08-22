@@ -63,13 +63,26 @@ async function filterReadyForRfq(prs) {
   const withoutPo = prs.filter((pr) => !orderedSet.has(pr._id.toString()));
   if (!withoutPo.length) return [];
 
-  const { RFQ } = require('../models');
+  const { RFQ, Quotation } = require('../models');
   const existing = await RFQ.find({
     purchaseRequestId: { $in: withoutPo.map((p) => p._id) },
   })
-    .select('purchaseRequestId')
+    .select('_id purchaseRequestId')
     .lean();
-  const done = new Set(existing.map((r) => r.purchaseRequestId.toString()));
+  if (!existing.length) return withoutPo;
+
+  const quotedRfqIds = new Set(
+    (
+      await Quotation.distinct('rfqId', {
+        rfqId: { $in: existing.map((r) => r._id) },
+      })
+    ).map((id) => id.toString())
+  );
+  const done = new Set(
+    existing
+      .filter((r) => quotedRfqIds.has(r._id.toString()))
+      .map((r) => r.purchaseRequestId.toString())
+  );
   return withoutPo.filter((pr) => !done.has(pr._id.toString()));
 }
 

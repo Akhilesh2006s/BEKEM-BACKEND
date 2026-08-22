@@ -132,6 +132,7 @@ const { checkPmCanApprove, getPmDailyApprovedTotal, getDayBounds } = pmApprovalC
 const {
   indentExceedsPmApprovalLevel,
   PM_ABOVE_APPROVAL_LEVEL_MESSAGE,
+  PM_APPROVED_FORWARDED_TO_HO_MESSAGE,
 } = require('../services/indentApprovalRouting');
 const coordinatorApprovalCapService = require('../services/coordinatorApprovalCapService');
 const {
@@ -1836,7 +1837,7 @@ router.post(
       await notificationService.notifyUser(mr.requestedByUserId, {
         title: 'Indent forwarded to Head Office',
         body: exceedsPmLevel
-          ? `${mr.indentNumber} — indent value is higher than the PM approval level; awaiting HO approval.`
+          ? `${mr.indentNumber} — approved and forwarded to HO level.`
           : `${mr.indentNumber} — awaiting executive procurement decision.`,
         relatedEntityType: 'MaterialRequest',
         relatedEntityId: mr._id,
@@ -1848,7 +1849,7 @@ router.post(
         body: {
           ...enriched,
           message: exceedsPmLevel
-            ? PM_ABOVE_APPROVAL_LEVEL_MESSAGE
+            ? PM_APPROVED_FORWARDED_TO_HO_MESSAGE
             : 'Forwarded to Head Office — awaiting executive procurement decision',
         },
       };

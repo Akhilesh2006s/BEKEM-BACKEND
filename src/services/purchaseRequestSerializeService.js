@@ -27,14 +27,26 @@ async function resolvePmName(materialRequestId) {
 
 async function resolveRfqRaisedByForPr(purchaseRequestId) {
   if (!purchaseRequestId) {
-    return { rfqId: null, rfqNumber: null, rfqRaisedByName: null, rfqRaisedByRole: null };
+    return {
+      rfqId: null,
+      rfqNumber: null,
+      rfqRaisedByName: null,
+      rfqRaisedByRole: null,
+      rfqAssignedVendorCount: 0,
+    };
   }
-  const { RFQ, User, StatusHistory: SH } = require('../models');
+  const { RFQ, User, StatusHistory: SH, Quotation } = require('../models');
   const rfq = await RFQ.findOne({ purchaseRequestId })
     .select('_id rfqNumber createdByUserId')
     .lean();
   if (!rfq) {
-    return { rfqId: null, rfqNumber: null, rfqRaisedByName: null, rfqRaisedByRole: null };
+    return {
+      rfqId: null,
+      rfqNumber: null,
+      rfqRaisedByName: null,
+      rfqRaisedByRole: null,
+      rfqAssignedVendorCount: 0,
+    };
   }
 
   let raisedByName = null;
@@ -56,11 +68,16 @@ async function resolveRfqRaisedByForPr(purchaseRequestId) {
     raisedByRole = history?.actorUserId?.role || null;
   }
 
+  const assignedVendorCount = await Quotation.countDocuments({
+    rfqId: rfq._id,
+  });
+
   return {
     rfqId: rfq._id.toString(),
     rfqNumber: rfq.rfqNumber || null,
     rfqRaisedByName: raisedByName,
     rfqRaisedByRole: raisedByRole,
+    rfqAssignedVendorCount: assignedVendorCount,
   };
 }
 

@@ -243,6 +243,20 @@ async function listRfqs(user) {
     .lean();
 
   const purchaseRequestIds = [...new Set(rfqs.map((r) => r.purchaseRequestId?._id?.toString()).filter(Boolean))];
+  const assignedCountByRfqId = new Map();
+  if (rfqs.length) {
+    const counts = await Quotation.aggregate([
+      {
+        $match: {
+          rfqId: { $in: rfqs.map((r) => r._id) },
+        },
+      },
+      { $group: { _id: '$rfqId', n: { $sum: 1 } } },
+    ]);
+    for (const row of counts) {
+      assignedCountByRfqId.set(row._id.toString(), row.n);
+    }
+  }
   const poByPurchaseRequestId = new Map();
   if (purchaseRequestIds.length) {
     const { PurchaseOrder } = require('../models');
@@ -272,6 +286,7 @@ async function listRfqs(user) {
         dueDate: r.dueDate?.toISOString?.() || r.dueDate,
         indentNumber: r.purchaseRequestId?.materialRequestId?.indentNumber,
         purchaseRequestId: prId,
+        assignedVendorCount: assignedCountByRfqId.get(r._id.toString()) || 0,
         poId: linkedPo?._id?.toString?.() || null,
         poNumber: linkedPo?.poNumber || linkedPo?.draftRef || null,
         createdAt: r.createdAt?.toISOString?.() || r.createdAt,
@@ -641,6 +656,12 @@ async function previewRfqWizard(purchaseRequestId, user, { includeMaterialIds } 
   });
 
   rfq.procurementMaterialIds = materialIds;
+  const quotes = await Quotation.find({ rfqId: rfq._id }).select('_id').lean();
+  const hasAssignedVendors = quotes.length > 0;
+  if (!hasAssignedVendors && (rfq.vendorIds || []).length) {
+    rfq.vendorIds = [];
+    rfq.selectedVendorId = undefined;
+  }
   await rfq.save();
 
   const comparison = await getRfqComparison(rfq._id.toString(), user);

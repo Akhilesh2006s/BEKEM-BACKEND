@@ -67,6 +67,8 @@ export const PM_INDENT_APPROVAL_LIMIT_INR = INDENT_VALUE_CAP_INR;
 export const PM_ABOVE_APPROVAL_LEVEL_MESSAGE =
   'This indent value is higher than the PM approval level. Please proceed to HO level for further approvals.';
 
+export const PM_APPROVED_FORWARDED_TO_HO_MESSAGE = 'Approved and forwarded to HO level.';
+
 /** True when this indent's value is above the PM's per-indent approval limit. */
 export function indentExceedsPmApprovalLevel(
   estimatedValue?: number | null,
