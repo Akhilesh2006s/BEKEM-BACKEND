@@ -308,19 +308,32 @@ async function getTodayActions(user) {
         count: waiting,
       });
     }
-    const allocationReview = await MaterialRequest.countDocuments({
+    const yetToReceive = await MaterialRequest.countDocuments({
       siteId: user.assignedSiteId,
-      allocationReviewStage: 'STORE_INCHARGE',
-      status: { $nin: ['COMPLETED', 'CLOSED', 'REJECTED', 'CANCELLED', 'ISSUED'] },
+      status: { $in: ['CHAIRMAN_APPROVED', 'ALLOCATED'] },
     });
-    if (allocationReview > 0) {
+    if (yetToReceive > 0) {
       actions.push({
-        id: 'store-final-review',
-        title: `Final review on ${allocationReview} indent${allocationReview > 1 ? 's' : ''}`,
-        subtitle: 'Open Final review, then Proceed with Allocation to issue to site',
-        href: '/incidents?tab=pending',
+        id: 'store-grn',
+        title: `${yetToReceive} indent${yetToReceive > 1 ? 's' : ''} yet to be received`,
+        subtitle: 'Open Material GRN and record Stock Received',
+        href: '/store/grn',
         priority: 'high',
-        count: allocationReview,
+        count: yetToReceive,
+      });
+    }
+    const readyToIssue = await MaterialRequest.countDocuments({
+      siteId: user.assignedSiteId,
+      status: 'MATERIAL_RECEIVED',
+    });
+    if (readyToIssue > 0) {
+      actions.push({
+        id: 'store-issue',
+        title: `${readyToIssue} indent${readyToIssue > 1 ? 's' : ''} ready to issue`,
+        subtitle: 'Open Issue to site, then Proceed with Allocation',
+        href: '/store/issue',
+        priority: 'high',
+        count: readyToIssue,
       });
     }
     const ledgers = await StockLedger.find({ siteId: user.assignedSiteId });

@@ -87,8 +87,53 @@ async function notifyExecutives(mr, { title, body }) {
   });
 }
 
+async function issueToIndentRaiser(mr, actor, remark) {
+  const fromStatus = mr.status;
+  for (const item of getIndentLineItems(mr)) {
+    const qty = item.quantityAllocated || item.quantityRequested;
+    item.quantityAllocated = qty;
+    item.quantityIssued = qty;
+  }
+  if (mr.quantityRequested) {
+    mr.quantityAllocated = mr.quantityAllocated || mr.quantityRequested;
+    mr.quantityIssued = mr.quantityRequested;
+  }
+  mr.status = 'ISSUED';
+  mr.allocationReviewStage = STAGES.SITE_INCHARGE;
+  mr.pendingWithRole = UserRole.SITE_INCHARGE;
+  mr.pmForwardRemark = remark;
+  await mr.save();
+  await statusHistoryService.record(
+    'MaterialRequest',
+    mr._id,
+    fromStatus,
+    'ISSUED',
+    actor._id,
+    `Store proceeded with allocation — issued to indent raiser: ${remark}`
+  );
+  await notificationService.notifyUser(mr.requestedByUserId, {
+    title: 'Collect & verify materials',
+    body: `${mr.indentNumber} has been allocated. Collect and verify the materials.`,
+    relatedEntityType: 'MaterialRequest',
+    relatedEntityId: mr._id,
+  });
+  return mr;
+}
+
 async function proceedWithAllocation(mr, actor, remark, poStatus) {
   const role = actor.role;
+
+  if (role === UserRole.STORE_INCHARGE) {
+    if (mr.status !== 'MATERIAL_RECEIVED') {
+      const err = new Error(
+        'Record Stock Received in Material GRN before allocating to the indent raiser'
+      );
+      err.statusCode = 400;
+      throw err;
+    }
+    return issueToIndentRaiser(mr, actor, remark);
+  }
+
   const stage = resolveAllocationReviewStage(mr, poStatus);
   if (!ACTIVE_STAGES.has(stage)) {
     const err = new Error('Indent is not in the allocation review chain');
@@ -149,38 +194,6 @@ async function proceedWithAllocation(mr, actor, remark, poStatus) {
     await notifyStore(mr, {
       title: 'Final review',
       body: `${mr.indentNumber} — PM proceeded with allocation. Open Final review, then Proceed with Allocation.`,
-    });
-    return mr;
-  }
-
-  if (role === UserRole.STORE_INCHARGE) {
-    for (const item of getIndentLineItems(mr)) {
-      const qty = item.quantityAllocated || item.quantityRequested;
-      item.quantityAllocated = qty;
-      item.quantityIssued = qty;
-    }
-    if (mr.quantityRequested) {
-      mr.quantityAllocated = mr.quantityAllocated || mr.quantityRequested;
-      mr.quantityIssued = mr.quantityRequested;
-    }
-    mr.status = 'ISSUED';
-    mr.allocationReviewStage = STAGES.SITE_INCHARGE;
-    mr.pendingWithRole = UserRole.SITE_INCHARGE;
-    mr.pmForwardRemark = remark;
-    await mr.save();
-    await statusHistoryService.record(
-      'MaterialRequest',
-      mr._id,
-      fromStatus,
-      'ISSUED',
-      actor._id,
-      `Store proceeded with allocation — issued to site: ${remark}`
-    );
-    await notificationService.notifyUser(mr.requestedByUserId, {
-      title: 'Collect & verify materials',
-      body: `${mr.indentNumber} has been issued. Collect and verify the materials.`,
-      relatedEntityType: 'MaterialRequest',
-      relatedEntityId: mr._id,
     });
     return mr;
   }

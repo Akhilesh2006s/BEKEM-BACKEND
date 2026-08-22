@@ -505,6 +505,7 @@ export interface MaterialRequestDto {
   /** Sequential allocation review after PO approval: Executive → PM → Store → Indent Raiser. */
   allocationReviewStage?: 'EXECUTIVE' | 'PROJECT_MANAGER' | 'STORE_INCHARGE' | 'SITE_INCHARGE' | null;
   storeStockVerified?: boolean;
+  storeStockReceivedAt?: string | null;
   origin?: 'SITE' | 'EXECUTIVE';
   purchaseRequestId?: string;
   prNumber?: string;

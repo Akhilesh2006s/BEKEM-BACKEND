@@ -18,7 +18,7 @@ const {
   PurchaseOrder,
 } = require('../models');
 const { authenticate } = require('../middleware/auth');
-const { requireCapability } = require('../middleware/rbac');
+const { requireCapability, requireRoles } = require('../middleware/rbac');
 const { requirePmApproval } = require('../middleware/approvalAuth');
 const delegationService = require('../services/delegationService');
 const {
@@ -32,6 +32,7 @@ const { getIndentLineItems } = require('../services/materialRequestHelpers');
 const {
   userCanAccessSite,
   userCanAccessProject,
+  userCanAccessSiteAsync,
   serializeMaterialRequest,
   serializeMaterialRequestEnriched,
   resolveId,
@@ -144,6 +145,7 @@ const {
   isInAllocationReview,
   proceedWithAllocation,
 } = require('../services/pmProceedAllocationService');
+const { recordStoreStockReceived } = require('../services/storeStockReceivedService');
 const { handleIdempotent } = require('../utils/idempotentHandler');
 
 const router = express.Router();
@@ -343,26 +345,33 @@ router.get('/', async (req, res, next) => {
       }
     }
 
-    if (statusFilter) filter.status = statusFilter;
+    const storeQueue = req.user.role === UserRole.STORE_INCHARGE ? String(req.query.queue || '') : '';
+    if (storeQueue === 'store-yet-to-receive') {
+      filter.status = { $in: ['CHAIRMAN_APPROVED', 'ALLOCATED'] };
+    } else if (storeQueue === 'store-issue-to-site') {
+      filter.status = 'MATERIAL_RECEIVED';
+    } else {
+      if (statusFilter) filter.status = statusFilter;
 
-    if (tab === 'pending') {
-      if (req.user.role === UserRole.STORE_INCHARGE) {
-        filter.status = 'PENDING_STORE';
-      } else {
-        filter.status = { $in: IN_PROGRESS_STATUSES };
+      if (tab === 'pending') {
+        if (req.user.role === UserRole.STORE_INCHARGE) {
+          filter.status = 'PENDING_STORE';
+        } else {
+          filter.status = { $in: IN_PROGRESS_STATUSES };
+        }
+      } else if (tab === 'approved') {
+        if (req.user.role === UserRole.STORE_INCHARGE) {
+          filter.status = {
+            $in: IN_PROGRESS_STATUSES.filter((s) => s !== 'PENDING_STORE'),
+          };
+        } else {
+          filter.status = { $in: IN_PROGRESS_STATUSES };
+        }
+      } else if (tab === 'completed') {
+        filter.status = { $in: COMPLETED_STATUSES };
+      } else if (tab === 'rejected') {
+        filter.status = 'REJECTED';
       }
-    } else if (tab === 'approved') {
-      if (req.user.role === UserRole.STORE_INCHARGE) {
-        filter.status = {
-          $in: IN_PROGRESS_STATUSES.filter((s) => s !== 'PENDING_STORE'),
-        };
-      } else {
-        filter.status = { $in: IN_PROGRESS_STATUSES };
-      }
-    } else if (tab === 'completed') {
-      filter.status = { $in: COMPLETED_STATUSES };
-    } else if (tab === 'rejected') {
-      filter.status = 'REJECTED';
     }
 
     applySiteOriginFilter(filter, req.user);
@@ -1506,6 +1515,45 @@ router.post(
         relatedEntityId: mr._id,
       });
 
+      return { statusCode: 200, body: await mrEnrichedBody(mr._id, req.user.role) };
+    }, next);
+  }
+);
+
+router.post(
+  '/:id/stock-received',
+  requireRoles(UserRole.STORE_INCHARGE),
+  requireCapability('RECEIVE_MATERIAL'),
+  [
+    param('id').isMongoId(),
+    body('remark').optional().trim(),
+    body('receivedAt').optional().isISO8601(),
+    body('items').optional().isArray(),
+    body('items.*.materialId').optional().isMongoId(),
+    body('items.*.quantityReceived').optional().isFloat({ min: 0 }),
+  ],
+  validate,
+  async (req, res, next) => {
+    return handleIdempotent(req, res, `mr-stock-received:${req.params.id}`, async () => {
+      const mr = await MaterialRequest.findById(req.params.id);
+      if (!mr) {
+        return { statusCode: 404, body: { statusCode: 404, message: 'Request not found' } };
+      }
+      if (!(await userCanAccessSiteAsync(req.user, mr.siteId))) {
+        return { statusCode: 403, body: { statusCode: 403, message: 'Forbidden: not your indent' } };
+      }
+      try {
+        await recordStoreStockReceived(mr, req.user, {
+          remark: req.body.remark,
+          receivedAt: req.body.receivedAt,
+          items: req.body.items,
+        });
+      } catch (err) {
+        if (err.statusCode) {
+          return { statusCode: err.statusCode, body: { statusCode: err.statusCode, message: err.message } };
+        }
+        throw err;
+      }
       return { statusCode: 200, body: await mrEnrichedBody(mr._id, req.user.role) };
     }, next);
   }

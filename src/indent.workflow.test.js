@@ -385,6 +385,33 @@ describe('Indent workflow v2', () => {
     assert.strictEqual(pmProceed.body.data.pendingWith, 'STORE_INCHARGE');
     assert.strictEqual(pmProceed.body.data.allocationReviewStage, 'STORE_INCHARGE');
 
+    const storeTooSoon = await request(app)
+      .post(`/api/material-requests/${mrId}/proceed-allocation`)
+      .set('Authorization', `Bearer ${storeToken}`)
+      .send({ remark: 'Store cannot skip stock received' });
+    assert.strictEqual(storeTooSoon.status, 400);
+
+    const stockReceived = await request(app)
+      .post(`/api/material-requests/${mrId}/stock-received`)
+      .set('Authorization', `Bearer ${storeToken}`)
+      .send({ remark: 'Material received at store' });
+    assert.strictEqual(stockReceived.status, 200, JSON.stringify(stockReceived.body));
+    assert.strictEqual(stockReceived.body.data.status, 'MATERIAL_RECEIVED');
+
+    const yetToReceive = await request(app)
+      .get('/api/material-requests')
+      .query({ queue: 'store-yet-to-receive' })
+      .set('Authorization', `Bearer ${storeToken}`);
+    assert.strictEqual(yetToReceive.status, 200);
+    assert.ok(!(yetToReceive.body.data || []).some((row) => row.id === mrId));
+
+    const issueQueue = await request(app)
+      .get('/api/material-requests')
+      .query({ queue: 'store-issue-to-site' })
+      .set('Authorization', `Bearer ${storeToken}`);
+    assert.strictEqual(issueQueue.status, 200);
+    assert.ok((issueQueue.body.data || []).some((row) => row.id === mrId));
+
     const storeProceed = await request(app)
       .post(`/api/material-requests/${mrId}/proceed-allocation`)
       .set('Authorization', `Bearer ${storeToken}`)
@@ -393,5 +420,33 @@ describe('Indent workflow v2', () => {
     assert.strictEqual(storeProceed.body.data.status, 'ISSUED');
     assert.strictEqual(storeProceed.body.data.pendingWith, 'SITE_INCHARGE');
     assert.strictEqual(storeProceed.body.data.allocationReviewStage, 'SITE_INCHARGE');
+  });
+
+  it('stock-received is store-only and requires an approved indent', async () => {
+    const coordinatorToken = await loginAs('coordinator@bekem.com');
+    const createRes = await request(app)
+      .post('/api/material-requests')
+      .set('Authorization', `Bearer ${siteToken}`)
+      .send({
+        indentRequestType: 'ABOVE_5000',
+        requestedByName: 'Test Requester',
+        indentCategoryId: indentCategoryId,
+        purpose: 'Stock received guard',
+        items: [{ materialId: material._id.toString(), quantityRequested: 1 }],
+      });
+    assert.strictEqual(createRes.status, 201);
+    const mrId = createRes.body.data.id;
+
+    const coordBlocked = await request(app)
+      .post(`/api/material-requests/${mrId}/stock-received`)
+      .set('Authorization', `Bearer ${coordinatorToken}`)
+      .send({ remark: 'Coordinator cannot record store GRN' });
+    assert.strictEqual(coordBlocked.status, 403);
+
+    const tooEarly = await request(app)
+      .post(`/api/material-requests/${mrId}/stock-received`)
+      .set('Authorization', `Bearer ${storeToken}`)
+      .send({ remark: 'Still pending at store' });
+    assert.strictEqual(tooEarly.status, 400);
   });
 });

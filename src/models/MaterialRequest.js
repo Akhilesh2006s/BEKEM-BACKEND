@@ -82,6 +82,10 @@ const materialRequestSchema = new mongoose.Schema(
     pmProceededAllocation: { type: Boolean, default: false },
     /** Store confirmed stock is available before PM approval (no direct issue). */
     storeStockVerified: { type: Boolean, default: false },
+    /** Store Incharge Material GRN — physical stock received against this indent. */
+    storeStockReceivedAt: { type: Date, default: null },
+    storeStockReceivedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    storeStockReceivedRemark: { type: String, default: '' },
     executiveProcurementMethod: {
       type: String,
       enum: ['PURCHASE_ORDER', 'BRANCH_TRANSFER', null],

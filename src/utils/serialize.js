@@ -210,6 +210,7 @@ function serializeMaterialRequest(mr, stockContext, pricingContext) {
     pmProceededAllocation: !!mr.pmProceededAllocation,
     allocationReviewStage: mr.allocationReviewStage || null,
     storeStockVerified: !!mr.storeStockVerified,
+    storeStockReceivedAt: mr.storeStockReceivedAt?.toISOString?.() || mr.storeStockReceivedAt || null,
     origin: mr.origin || 'SITE',
     indentRequestType: mr.indentRequestType || 'ABOVE_5000',
     indentCategoryId: resolveId(mr.indentCategoryId) || undefined,
