@@ -60,3 +60,20 @@ export function hideIndentPricingForRole(
 
 export const INDENT_CAP_REACHED_MESSAGE =
   'The ₹5,000 limit for this indent has been reached. Please create an Above ₹5,000 indent request if additional materials are required.';
+
+/** PM may close a single indent only up to this value. Above this, routing goes to HO. */
+export const PM_INDENT_APPROVAL_LIMIT_INR = INDENT_VALUE_CAP_INR;
+
+export const PM_ABOVE_APPROVAL_LEVEL_MESSAGE =
+  'This indent value is higher than the PM approval level. Please proceed to HO level for further approvals.';
+
+/** True when this indent's value is above the PM's per-indent approval limit. */
+export function indentExceedsPmApprovalLevel(
+  estimatedValue?: number | null,
+  indentRequestType?: IndentRequestType | null
+): boolean {
+  const value = Number(estimatedValue) || 0;
+  if (value > PM_INDENT_APPROVAL_LIMIT_INR) return true;
+  if (value > 0) return false;
+  return indentRequestType === 'ABOVE_5000';
+}

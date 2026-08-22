@@ -84,14 +84,14 @@ async function ensureRfqAndQuotations(
   { creationNote = 'RFQ created', seedDemoQuotes = false } = {}
 ) {
   let rfq = await RFQ.findOne({ purchaseRequestId: purchaseRequest._id });
-  const vendors = await resolveVendorsForIndent(materialIds);
+  const vendors = seedDemoQuotes ? await resolveVendorsForIndent(materialIds) : [];
 
   if (!rfq) {
     const rfqNumber = await generateRfqNumber(projectCode);
     rfq = await RFQ.create({
       rfqNumber,
       purchaseRequestId: purchaseRequest._id,
-      vendorIds: vendors.map((v) => v._id),
+      vendorIds: [],
       dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
       status: 'OPEN',
       createdByUserId: actorUserId || undefined,

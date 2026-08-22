@@ -51,7 +51,7 @@ async function filterReadyForExecutivePo(prs) {
   return withoutPo.filter((pr) => ready.has(pr._id.toString()));
 }
 
-/** OPEN PRs that still need RFQ share / vendor quotes (not yet finalized). */
+/** OPEN PRs that still need an RFQ to be created (existing RFQs reopen from the RFQ list). */
 async function filterReadyForRfq(prs) {
   if (!prs.length) return [];
   const prIds = prs.map((pr) => pr._id);
@@ -64,13 +64,12 @@ async function filterReadyForRfq(prs) {
   if (!withoutPo.length) return [];
 
   const { RFQ } = require('../models');
-  const finalized = await RFQ.find({
+  const existing = await RFQ.find({
     purchaseRequestId: { $in: withoutPo.map((p) => p._id) },
-    status: 'FINALIZED',
   })
     .select('purchaseRequestId')
     .lean();
-  const done = new Set(finalized.map((r) => r.purchaseRequestId.toString()));
+  const done = new Set(existing.map((r) => r.purchaseRequestId.toString()));
   return withoutPo.filter((pr) => !done.has(pr._id.toString()));
 }
 

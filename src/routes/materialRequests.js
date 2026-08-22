@@ -129,6 +129,10 @@ const {
 } = require('../services/executiveRoutingService');
 const pmApprovalCapService = require('../services/pmApprovalCapService');
 const { checkPmCanApprove, getPmDailyApprovedTotal, getDayBounds } = pmApprovalCapService;
+const {
+  indentExceedsPmApprovalLevel,
+  PM_ABOVE_APPROVAL_LEVEL_MESSAGE,
+} = require('../services/indentApprovalRouting');
 const coordinatorApprovalCapService = require('../services/coordinatorApprovalCapService');
 const {
   checkCoordinatorCanApprove,
@@ -232,7 +236,13 @@ async function buildPmIndentNotification(mr, pmUserId) {
   let body = `${mr.indentNumber} · ${project} · ${materialSummary} · by ${requester}`;
   if (pmUserId) {
     const capCheck = await checkPmCanApprove(pmUserId, populated || mr);
-    if (!capCheck.wouldExceed) {
+    const exceedsPmLevel = indentExceedsPmApprovalLevel(
+      (populated || mr).estimatedValue,
+      (populated || mr).indentRequestType
+    );
+    if (exceedsPmLevel) {
+      body += `\n${PM_ABOVE_APPROVAL_LEVEL_MESSAGE}`;
+    } else if (!capCheck.wouldExceed) {
       body += '\nCan locally approve and close. No need to reach out to HO level.';
     }
   }
@@ -1391,8 +1401,18 @@ router.post(
 
       const remark = requireRemark(req.body.remark);
 
-      // Above ₹5,000: stock being available isn't enough — local close is only allowed
-      // within the PM's daily approval cap. Over cap goes to Head Office even with stock on hand.
+      // Indent value above the PM per-indent approval limit cannot close at PM.
+      if (indentExceedsPmApprovalLevel(mr.estimatedValue, mr.indentRequestType)) {
+        return {
+          statusCode: 400,
+          body: {
+            statusCode: 400,
+            message: PM_ABOVE_APPROVAL_LEVEL_MESSAGE,
+          },
+        };
+      }
+
+      // Above ₹5,000 type still within the per-indent limit: daily-cap overflow goes to HO.
       if (!isBelowCap) {
         const capCheck = await checkPmCanApprove(req.approvalContext.principal._id, mr);
         if (capCheck.wouldExceed) {
@@ -1798,10 +1818,13 @@ router.post(
       const remark = requireRemark(req.body.remark);
       if (!mr.estimatedValue) mr.estimatedValue = await estimateIndentAmount(mr);
 
+      const exceedsPmLevel = indentExceedsPmApprovalLevel(mr.estimatedValue, mr.indentRequestType);
       const remainingNote =
         mr.status === 'BRANCH_TRANSFER_REQUESTED'
           ? `Forwarded remaining shortfall to Head Office: ${remark}`
-          : `Forwarded to Head Office (insufficient stock): ${remark}`;
+          : exceedsPmLevel
+            ? `Forwarded to Head Office — indent value exceeds PM approval level: ${remark}`
+            : `Forwarded to Head Office (insufficient stock): ${remark}`;
 
       await queueForExecutiveDecision(
         mr,
@@ -1812,7 +1835,9 @@ router.post(
 
       await notificationService.notifyUser(mr.requestedByUserId, {
         title: 'Indent forwarded to Head Office',
-        body: `${mr.indentNumber} — awaiting executive procurement decision.`,
+        body: exceedsPmLevel
+          ? `${mr.indentNumber} — indent value is higher than the PM approval level; awaiting HO approval.`
+          : `${mr.indentNumber} — awaiting executive procurement decision.`,
         relatedEntityType: 'MaterialRequest',
         relatedEntityId: mr._id,
       });
@@ -1822,7 +1847,9 @@ router.post(
         statusCode: 200,
         body: {
           ...enriched,
-          message: 'Forwarded to Head Office — awaiting executive procurement decision',
+          message: exceedsPmLevel
+            ? PM_ABOVE_APPROVAL_LEVEL_MESSAGE
+            : 'Forwarded to Head Office — awaiting executive procurement decision',
         },
       };
     }, next);

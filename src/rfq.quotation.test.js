@@ -309,4 +309,29 @@ describe('RFQ quotation comparison & vendor selection', () => {
       .set('Authorization', `Bearer ${pmToken}`);
     assert.strictEqual(res.status, 403);
   });
+
+  it('wizard preview does not auto-assign vendors', async () => {
+    const prs = await PurchaseRequest.find({ status: 'OPEN' });
+    let target = null;
+    for (const pr of prs) {
+      const existing = await RFQ.findOne({ purchaseRequestId: pr._id }).select('_id');
+      if (!existing) {
+        target = pr;
+        break;
+      }
+    }
+    if (!target) return;
+
+    const preview = await request(app)
+      .post('/api/rfqs/wizard/preview')
+      .set('Authorization', `Bearer ${execToken}`)
+      .send({ purchaseRequestId: target._id.toString() });
+    assert.strictEqual(preview.status, 200, JSON.stringify(preview.body));
+
+    const rfq = await RFQ.findById(preview.body.data.rfqId);
+    assert.ok(rfq);
+    assert.equal((rfq.vendorIds || []).length, 0);
+    const quotes = await Quotation.find({ rfqId: rfq._id });
+    assert.equal(quotes.length, 0);
+  });
 });

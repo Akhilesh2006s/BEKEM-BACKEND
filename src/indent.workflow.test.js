@@ -196,7 +196,7 @@ describe('Indent workflow v2', () => {
     assert.strictEqual(mr.status, 'FORWARDED_TO_PM');
   });
 
-  it('PM cannot close locally when stock is available but daily cap is exceeded — forwards to HO', async () => {
+  it('PM cannot close locally when indent exceeds PM approval level — must forward to HO', async () => {
     const createRes = await request(app)
       .post('/api/material-requests')
       .set('Authorization', `Bearer ${siteToken}`)
@@ -204,7 +204,7 @@ describe('Indent workflow v2', () => {
         indentRequestType: 'ABOVE_5000',
         requestedByName: 'Test Requester',
         indentCategoryId: indentCategoryId,
-        purpose: 'Stock available, over PM daily cap',
+        purpose: 'Stock available, above PM approval level',
         items: [{ materialId: material._id.toString(), quantityRequested: 1 }],
       });
     const mrId = createRes.body.data.id;
@@ -216,17 +216,24 @@ describe('Indent workflow v2', () => {
 
     assert.strictEqual(verifyRes.status, 200);
 
-    // Value far exceeds any plausible daily cap, so this must escalate to HO even though stock is on hand.
-    await MaterialRequest.findByIdAndUpdate(mrId, { estimatedValue: 50000 });
+    await MaterialRequest.findByIdAndUpdate(mrId, { estimatedValue: 6800 });
 
     const closeRes = await request(app)
       .post(`/api/material-requests/${mrId}/pm-local-close`)
       .set('Authorization', `Bearer ${pmToken}`)
       .send({ remark: 'Approved — stock on hand' });
 
-    assert.strictEqual(closeRes.status, 200, JSON.stringify(closeRes.body));
-    assert.strictEqual(closeRes.body.data.status, 'PENDING_EXECUTIVE_DECISION');
-    assert.match(closeRes.body.message || '', /Daily cap reached/);
+    assert.strictEqual(closeRes.status, 400, JSON.stringify(closeRes.body));
+    assert.match(closeRes.body.message || '', /PM approval level/i);
+
+    const forwardRes = await request(app)
+      .post(`/api/material-requests/${mrId}/forward-to-ho`)
+      .set('Authorization', `Bearer ${pmToken}`)
+      .send({ remark: 'Indent exceeds PM approval level' });
+
+    assert.strictEqual(forwardRes.status, 200, JSON.stringify(forwardRes.body));
+    assert.strictEqual(forwardRes.body.data.status, 'PENDING_EXECUTIVE_DECISION');
+    assert.match(forwardRes.body.message || '', /PM approval level/i);
 
     const mr = await MaterialRequest.findById(mrId);
     assert.strictEqual(mr.status, 'PENDING_EXECUTIVE_DECISION');
@@ -240,7 +247,7 @@ describe('Indent workflow v2', () => {
     assert.strictEqual(capRes.status, 200);
     const remaining = capRes.body.data.remaining;
     assert.ok(remaining > 0, 'expected PM to have remaining daily cap for this test');
-    const withinCapValue = Math.max(1, Math.floor(remaining / 2));
+    const withinCapValue = Math.max(1, Math.min(5000, Math.floor(remaining / 2)));
 
     const createRes = await request(app)
       .post('/api/material-requests')
