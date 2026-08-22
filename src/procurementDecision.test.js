@@ -133,6 +133,97 @@ describe('Executive procurement decision workflow', () => {
     assert.strictEqual(pr.executiveRecommendation, 'PURCHASE_ORDER');
   });
 
+  it('executive can accept against site stock and still raise RFQ when stock exists', async () => {
+    const ctx = await getSeedContext();
+    const mrId = await createForwardedIndent(app, siteToken, storeToken, material._id);
+
+    await request(app)
+      .post(`/api/material-requests/${mrId}/forward-to-ho`)
+      .set('Authorization', `Bearer ${pmToken}`)
+      .send({ remark: 'HO review' });
+
+    await StockLedger.updateMany(
+      { siteId: ctx.site._id, materialId: material._id },
+      { $set: { quantityOnHand: 0, quantityReserved: 0 } }
+    );
+
+    const noStock = await request(app)
+      .get(`/api/procurement-decisions/${mrId}`)
+      .set('Authorization', `Bearer ${executiveToken}`);
+    assert.strictEqual(noStock.status, 200);
+    assert.strictEqual(noStock.body.data.hasAvailableStock, false);
+    assert.strictEqual(noStock.body.data.canFullyIssue, false);
+
+    const acceptNoStock = await request(app)
+      .post(`/api/procurement-decisions/${mrId}/executive-decide`)
+      .set('Authorization', `Bearer ${executiveToken}`)
+      .send({ method: 'ACCEPT_STOCK', remark: 'Try accept with no stock' });
+    assert.strictEqual(acceptNoStock.status, 400);
+
+    await StockLedger.updateMany(
+      { siteId: ctx.site._id, materialId: material._id },
+      { $set: { quantityOnHand: 80, quantityReserved: 0 } }
+    );
+
+    const withStock = await request(app)
+      .get(`/api/procurement-decisions/${mrId}`)
+      .set('Authorization', `Bearer ${executiveToken}`);
+    assert.strictEqual(withStock.status, 200);
+    assert.strictEqual(withStock.body.data.hasAvailableStock, true);
+    assert.strictEqual(withStock.body.data.canFullyIssue, true);
+
+    const accept = await request(app)
+      .post(`/api/procurement-decisions/${mrId}/executive-decide`)
+      .set('Authorization', `Bearer ${executiveToken}`)
+      .send({ method: 'ACCEPT_STOCK', remark: 'Use site stock' });
+    assert.strictEqual(accept.status, 200, JSON.stringify(accept.body));
+    assert.strictEqual(accept.body.data.status, 'HO_PENDING_COORDINATOR');
+    assert.ok(accept.body.data.purchaseRequestId);
+    assert.ok(accept.body.data.prNumber);
+
+    await MaterialRequest.findByIdAndUpdate(mrId, { estimatedValue: 2500 });
+
+    const prList = await request(app)
+      .get('/api/purchase-requests')
+      .query({ scope: 'procurement' })
+      .set('Authorization', `Bearer ${coordinatorToken}`);
+    assert.strictEqual(prList.status, 200);
+    assert.ok(
+      (prList.body.data || []).some((row) => row.materialRequestId === mrId || row.id === accept.body.data.purchaseRequestId),
+      'Accepted indent should appear in Coordinator procurement requests'
+    );
+
+    const closeRes = await request(app)
+      .post(`/api/material-requests/${mrId}/coordinator-local-close`)
+      .set('Authorization', `Bearer ${coordinatorToken}`)
+      .send({ remark: 'Within daily cap — close against stock' });
+    assert.strictEqual(closeRes.status, 200, JSON.stringify(closeRes.body));
+    assert.strictEqual(closeRes.body.data.status, 'ALLOCATED');
+  });
+
+  it('executive can proceed with RFQ even when site stock is available', async () => {
+    const ctx = await getSeedContext();
+    const mrId = await createForwardedIndent(app, siteToken, storeToken, material._id);
+
+    await request(app)
+      .post(`/api/material-requests/${mrId}/forward-to-ho`)
+      .set('Authorization', `Bearer ${pmToken}`)
+      .send({ remark: 'HO review with stock on hand' });
+
+    await StockLedger.updateMany(
+      { siteId: ctx.site._id, materialId: material._id },
+      { $set: { quantityOnHand: 80, quantityReserved: 0 } }
+    );
+
+    const execDecide = await request(app)
+      .post(`/api/procurement-decisions/${mrId}/executive-decide`)
+      .set('Authorization', `Bearer ${executiveToken}`)
+      .send({ method: 'PURCHASE_ORDER', remark: 'Buy anyway' });
+    assert.strictEqual(execDecide.status, 200);
+    assert.strictEqual(execDecide.body.data.status, 'PURCHASE_REQUESTED');
+    assert.ok(execDecide.body.data.purchaseRequestId);
+  });
+
   it('executive cannot approve via legacy material-request approve endpoint', async () => {
     const mrId = await createForwardedIndent(app, siteToken, storeToken, material._id);
     await request(app)

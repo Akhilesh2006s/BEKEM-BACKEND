@@ -168,6 +168,8 @@ export interface ProcurementDecisionDto {
   coordinatorProcurementRemark: string;
   canExecutiveDecide: boolean;
   canCoordinatorReview: boolean;
+  canFullyIssue?: boolean;
+  hasAvailableStock?: boolean;
   redirect?: { type: string; path: string };
   /** Branch transfers the PM already requested for this indent (read-only for Executive review). */
   linkedBranchTransfers?: BranchTransferDto[];
@@ -484,7 +486,7 @@ export interface MaterialRequestDto {
   status: string;
   pendingWith?: string;
   /** Role that closed this indent locally when status is ALLOCATED (PM/Coordinator local close vs. Store's normal allocation). */
-  allocatedByRole?: 'PROJECT_MANAGER' | 'COORDINATOR' | 'STORE_INCHARGE' | null;
+  allocatedByRole?: 'PROJECT_MANAGER' | 'COORDINATOR' | 'STORE_INCHARGE' | 'EXECUTIVE' | null;
   approverNames?: {
     store?: string;
     pm?: string;

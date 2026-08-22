@@ -1778,6 +1778,11 @@ router.post(
           req.user._id,
           `Coordinator closed locally (stock reserved): ${remark}`
         );
+        const linkedPr = await PurchaseRequest.findOne({ materialRequestId: mr._id });
+        if (linkedPr && !['PO_CREATED', 'CANCELLED'].includes(linkedPr.status)) {
+          linkedPr.status = 'CLOSED';
+          await linkedPr.save();
+        }
       } else {
         mr.coordinatorProcurementRemark = remark;
         mr.coordinatorProcurementDecidedByUserId = req.user._id;

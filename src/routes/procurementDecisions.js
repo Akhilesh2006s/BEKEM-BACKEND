@@ -62,7 +62,7 @@ router.post(
   requireRoles(UserRole.EXECUTIVE),
   [
     param('id').isMongoId(),
-    body('method').optional().isIn(['PURCHASE_ORDER', 'BRANCH_TRANSFER']),
+    body('method').optional().isIn(['PURCHASE_ORDER', 'BRANCH_TRANSFER', 'ACCEPT_STOCK']),
     body('remark').optional().trim(),
   ],
   validate,

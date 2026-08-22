@@ -7,13 +7,15 @@ const {
   Project,
   User,
   BranchTransfer,
+  PurchaseRequest,
 } = require('../models');
 const { getIndentLineItems } = require('./materialRequestHelpers');
-const { openPurchaseRequestForExecutivePo } = require('./purchaseRequestService');
+const { openPurchaseRequestForExecutivePo, createPurchaseRequestForIndent, estimateIndentAmount } = require('./purchaseRequestService');
 const { derivePriority } = require('./purchaseRequestSerializeService');
-const { generateTransferNumber } = require('./documentNumberService');
+const { generateTransferNumber, generatePrNumber } = require('./documentNumberService');
 const statusHistoryService = require('./statusHistoryService');
 const notificationService = require('./notificationService');
+const { enrichIndentWithStock } = require('./indentStockService');
 const { notifyExecutivesForIndent, buildExecutiveIndentCategoryFilter, executiveCanAccessIndent } = require('./executiveRoutingService');
 
 const EXECUTIVE_QUEUE_STATUSES = ['PENDING_EXECUTIVE_DECISION', 'PENDING_HO'];
@@ -147,6 +149,8 @@ async function buildProcurementDecisionDto(mr) {
     coordinatorProcurementRemark: mr.coordinatorProcurementRemark || '',
     canExecutiveDecide: EXECUTIVE_QUEUE_STATUSES.includes(mr.status),
     canCoordinatorReview: COORDINATOR_QUEUE_STATUSES.includes(mr.status),
+    canFullyIssue: !!stockContext.canFullyIssue,
+    hasAvailableStock: (stockContext.stockByLine || []).some((s) => (s.availableQty || 0) > 0),
     linkedBranchTransfers: linkedTransfers.map(serializeTransferRow),
   };
 }
@@ -222,6 +226,90 @@ async function queueForExecutiveDecision(mr, actorUserId, remark, historyNote) {
   });
 }
 
+async function executiveAcceptStock(mr, user, remark) {
+  const stockContext = await enrichIndentWithStock(mr);
+  if (!stockContext.canFullyIssue) {
+    const err = new Error(
+      'Site stock cannot cover this indent. Accept is available when stock is sufficient; you can still proceed with RFQ.'
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const fromStatus = mr.status;
+  const project = mr.projectId?._id ? mr.projectId : await Project.findById(mr.projectId);
+  const projectCode = project?.code || 'PRJ';
+  const estimate = mr.estimatedValue || (await estimateIndentAmount(mr));
+  if (!mr.estimatedValue) mr.estimatedValue = estimate;
+
+  let pr = await PurchaseRequest.findOne({ materialRequestId: mr._id });
+  if (!pr) {
+    pr = await PurchaseRequest.create({
+      prNumber: await generatePrNumber(projectCode),
+      materialRequestId: mr._id,
+      projectId: project._id || mr.projectId,
+      status: 'PENDING_COORDINATOR',
+      createdByUserId: user._id,
+      amountEstimate: estimate,
+      executiveRecommendationRemark: remark || 'Accepted against site stock',
+      executiveRecommendedByUserId: user._id,
+      executiveRecommendedAt: new Date(),
+    });
+  } else if (!['PO_CREATED', 'CLOSED', 'COMPLETED', 'CANCELLED'].includes(pr.status)) {
+    pr.status = 'PENDING_COORDINATOR';
+    pr.executiveRecommendationRemark = remark || pr.executiveRecommendationRemark || 'Accepted against site stock';
+    pr.executiveRecommendedByUserId = user._id;
+    pr.executiveRecommendedAt = new Date();
+    await pr.save();
+  }
+
+  mr.status = 'HO_PENDING_COORDINATOR';
+  mr.pendingWithRole = 'COORDINATOR';
+  mr.executiveProcurementMethod = null;
+  mr.executiveDecisionRemark = remark || '';
+  mr.executiveDecidedByUserId = user._id;
+  mr.executiveDecidedAt = new Date();
+  await mr.save();
+
+  await statusHistoryService.record(
+    'PurchaseRequest',
+    pr._id,
+    null,
+    pr.status,
+    user._id,
+    'Queued for Coordinator local approval after Executive accept'
+  );
+  await statusHistoryService.record(
+    'MaterialRequest',
+    mr._id,
+    fromStatus,
+    'HO_PENDING_COORDINATOR',
+    user._id,
+    remark
+      ? `Executive accepted against site stock — sent to Coordinator: ${remark}`
+      : 'Executive accepted against site stock — sent to Coordinator procurement requests'
+  );
+
+  const { checkCoordinatorCanApprove } = require('./coordinatorApprovalCapService');
+  const coordinators = await User.find({ role: UserRole.COORDINATOR });
+  await Promise.all(
+    coordinators.map(async (coord) => {
+      const capCheck = await checkCoordinatorCanApprove(coord._id, mr);
+      const hint = capCheck.wouldExceed
+        ? ''
+        : '\nCan locally approve and close. No need to reach out to MD/Coordinator level.';
+      return notificationService.notifyUser(coord._id, {
+        title: 'Procurement request pending local approval',
+        body: `${mr.indentNumber} (${pr.prNumber}) — Executive accepted against site stock.${hint}`,
+        relatedEntityType: 'MaterialRequest',
+        relatedEntityId: mr._id,
+      });
+    })
+  );
+
+  return buildProcurementDecisionDto(await loadDecisionIndent(mr._id));
+}
+
 async function executiveDecide(mr, user, { method, remark }) {
   if (!executiveCanAccessIndent(user, mr)) {
     const err = new Error('This indent is not in your assigned categories');
@@ -234,10 +322,14 @@ async function executiveDecide(mr, user, { method, remark }) {
     throw err;
   }
   const resolvedMethod = method || 'PURCHASE_ORDER';
-  if (!['PURCHASE_ORDER', 'BRANCH_TRANSFER'].includes(resolvedMethod)) {
+  if (!['PURCHASE_ORDER', 'BRANCH_TRANSFER', 'ACCEPT_STOCK'].includes(resolvedMethod)) {
     const err = new Error('Invalid procurement method');
     err.statusCode = 400;
     throw err;
+  }
+
+  if (resolvedMethod === 'ACCEPT_STOCK') {
+    return executiveAcceptStock(mr, user, remark);
   }
 
   if (resolvedMethod === 'PURCHASE_ORDER') {
