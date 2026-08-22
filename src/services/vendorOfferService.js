@@ -11,12 +11,7 @@ function toId(value) {
 async function vendorsForMaterial(materialId, { strict = false } = {}) {
   const material = await Material.findById(materialId);
   if (!material) {
-    return Vendor.find({
-      isActive: { $ne: false },
-      authorizationStatus: { $in: ['AUTHORIZED', null] },
-    })
-      .sort({ name: 1 })
-      .lean();
+    return [];
   }
 
   const baseFilter = {
