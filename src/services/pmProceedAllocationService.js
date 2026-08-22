@@ -87,6 +87,12 @@ async function notifyExecutives(mr, { title, body }) {
   });
 }
 
+const STORE_ISSUE_STATUSES = new Set(['MATERIAL_RECEIVED', 'ALLOCATED']);
+
+function storeCanIssueToRaiser(mr) {
+  return STORE_ISSUE_STATUSES.has(mr?.status);
+}
+
 async function issueToIndentRaiser(mr, actor, remark) {
   const fromStatus = mr.status;
   for (const item of getIndentLineItems(mr)) {
@@ -124,9 +130,9 @@ async function proceedWithAllocation(mr, actor, remark, poStatus) {
   const role = actor.role;
 
   if (role === UserRole.STORE_INCHARGE) {
-    if (mr.status !== 'MATERIAL_RECEIVED') {
+    if (!storeCanIssueToRaiser(mr)) {
       const err = new Error(
-        'Record Stock Received in Material GRN before allocating to the indent raiser'
+        'Indent is not ready to allocate. Record Stock Received in Material GRN, or close against available store stock first.'
       );
       err.statusCode = 400;
       throw err;
@@ -228,4 +234,5 @@ module.exports = {
   notifyStore,
   proceedWithAllocation,
   pmProceedWithAllocation,
+  storeCanIssueToRaiser,
 };

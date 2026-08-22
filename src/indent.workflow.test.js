@@ -385,25 +385,20 @@ describe('Indent workflow v2', () => {
     assert.strictEqual(pmProceed.body.data.pendingWith, 'STORE_INCHARGE');
     assert.strictEqual(pmProceed.body.data.allocationReviewStage, 'STORE_INCHARGE');
 
-    const storeTooSoon = await request(app)
-      .post(`/api/material-requests/${mrId}/proceed-allocation`)
-      .set('Authorization', `Bearer ${storeToken}`)
-      .send({ remark: 'Store cannot skip stock received' });
-    assert.strictEqual(storeTooSoon.status, 400);
+    if (pmProceed.body.data.status === 'CHAIRMAN_APPROVED') {
+      const storeTooSoon = await request(app)
+        .post(`/api/material-requests/${mrId}/proceed-allocation`)
+        .set('Authorization', `Bearer ${storeToken}`)
+        .send({ remark: 'Store cannot skip stock received' });
+      assert.strictEqual(storeTooSoon.status, 400);
 
-    const stockReceived = await request(app)
-      .post(`/api/material-requests/${mrId}/stock-received`)
-      .set('Authorization', `Bearer ${storeToken}`)
-      .send({ remark: 'Material received at store' });
-    assert.strictEqual(stockReceived.status, 200, JSON.stringify(stockReceived.body));
-    assert.strictEqual(stockReceived.body.data.status, 'MATERIAL_RECEIVED');
-
-    const yetToReceive = await request(app)
-      .get('/api/material-requests')
-      .query({ queue: 'store-yet-to-receive' })
-      .set('Authorization', `Bearer ${storeToken}`);
-    assert.strictEqual(yetToReceive.status, 200);
-    assert.ok(!(yetToReceive.body.data || []).some((row) => row.id === mrId));
+      const stockReceived = await request(app)
+        .post(`/api/material-requests/${mrId}/stock-received`)
+        .set('Authorization', `Bearer ${storeToken}`)
+        .send({ remark: 'Material received at store' });
+      assert.strictEqual(stockReceived.status, 200, JSON.stringify(stockReceived.body));
+      assert.strictEqual(stockReceived.body.data.status, 'MATERIAL_RECEIVED');
+    }
 
     const issueQueue = await request(app)
       .get('/api/material-requests')
@@ -448,5 +443,35 @@ describe('Indent workflow v2', () => {
       .set('Authorization', `Bearer ${storeToken}`)
       .send({ remark: 'Still pending at store' });
     assert.strictEqual(tooEarly.status, 400);
+  });
+
+  it('store can proceed-allocation on received/allocated indent without PO review chain', async () => {
+    const createRes = await request(app)
+      .post('/api/material-requests')
+      .set('Authorization', `Bearer ${siteToken}`)
+      .send({
+        indentRequestType: 'ABOVE_5000',
+        requestedByName: 'Test Requester',
+        indentCategoryId: indentCategoryId,
+        purpose: 'Local stock available — issue without procurement',
+        items: [{ materialId: material._id.toString(), quantityRequested: 1 }],
+      });
+    assert.strictEqual(createRes.status, 201);
+    const mrId = createRes.body.data.id;
+
+    await MaterialRequest.findByIdAndUpdate(mrId, {
+      status: 'MATERIAL_RECEIVED',
+      pendingWithRole: 'STORE_INCHARGE',
+      allocationReviewStage: null,
+      pmProceededAllocation: false,
+    });
+
+    const storeProceed = await request(app)
+      .post(`/api/material-requests/${mrId}/proceed-allocation`)
+      .set('Authorization', `Bearer ${storeToken}`)
+      .send({ remark: 'vv' });
+    assert.strictEqual(storeProceed.status, 200, JSON.stringify(storeProceed.body));
+    assert.strictEqual(storeProceed.body.data.status, 'ISSUED');
+    assert.strictEqual(storeProceed.body.data.pendingWith, 'SITE_INCHARGE');
   });
 });

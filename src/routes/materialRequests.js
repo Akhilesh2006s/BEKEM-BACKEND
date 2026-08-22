@@ -144,6 +144,7 @@ const {
 const {
   isInAllocationReview,
   proceedWithAllocation,
+  storeCanIssueToRaiser,
 } = require('../services/pmProceedAllocationService');
 const { recordStoreStockReceived } = require('../services/storeStockReceivedService');
 const { handleIdempotent } = require('../utils/idempotentHandler');
@@ -347,9 +348,9 @@ router.get('/', async (req, res, next) => {
 
     const storeQueue = req.user.role === UserRole.STORE_INCHARGE ? String(req.query.queue || '') : '';
     if (storeQueue === 'store-yet-to-receive') {
-      filter.status = { $in: ['CHAIRMAN_APPROVED', 'ALLOCATED'] };
+      filter.status = 'CHAIRMAN_APPROVED';
     } else if (storeQueue === 'store-issue-to-site') {
-      filter.status = 'MATERIAL_RECEIVED';
+      filter.status = { $in: ['MATERIAL_RECEIVED', 'ALLOCATED'] };
     } else {
       if (statusFilter) filter.status = statusFilter;
 
@@ -1601,11 +1602,16 @@ async function handleProceedAllocation(req) {
   }
 
   if (!canAccessProceedAllocation(req.user, mr)) {
-    return { statusCode: 403, body: { statusCode: 403, message: 'Forbidden: not your indent' } };
+    if (req.user.role !== UserRole.STORE_INCHARGE || !(await userCanAccessSiteAsync(req.user, mr.siteId))) {
+      return { statusCode: 403, body: { statusCode: 403, message: 'Forbidden: not your indent' } };
+    }
   }
 
   const poStatus = await loadPoStatusForMaterialRequest(mr._id);
-  if (!isInAllocationReview(mr, poStatus)) {
+  if (
+    !(req.user.role === UserRole.STORE_INCHARGE && storeCanIssueToRaiser(mr)) &&
+    !isInAllocationReview(mr, poStatus)
+  ) {
     return {
       statusCode: 400,
       body: {

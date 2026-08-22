@@ -310,7 +310,7 @@ async function getTodayActions(user) {
     }
     const yetToReceive = await MaterialRequest.countDocuments({
       siteId: user.assignedSiteId,
-      status: { $in: ['CHAIRMAN_APPROVED', 'ALLOCATED'] },
+      status: 'CHAIRMAN_APPROVED',
     });
     if (yetToReceive > 0) {
       actions.push({
@@ -324,7 +324,7 @@ async function getTodayActions(user) {
     }
     const readyToIssue = await MaterialRequest.countDocuments({
       siteId: user.assignedSiteId,
-      status: 'MATERIAL_RECEIVED',
+      status: { $in: ['MATERIAL_RECEIVED', 'ALLOCATED'] },
     });
     if (readyToIssue > 0) {
       actions.push({
