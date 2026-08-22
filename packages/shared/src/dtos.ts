@@ -553,6 +553,8 @@ export interface MaterialRequestDto {
 }
 
 export interface PmDailyCapDto {
+  /** Org-timezone calendar day (YYYY-MM-DD) this total applies to. */
+  day?: string;
   dailyApprovedTotal: number;
   dailyCap: number;
   remaining: number;

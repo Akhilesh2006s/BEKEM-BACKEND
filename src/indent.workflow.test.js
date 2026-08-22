@@ -121,13 +121,16 @@ describe('Indent workflow v2', () => {
     const pmUser = await User.findOne({ email: 'pm@bekem.com' });
     const cement = await Material.findOne({ code: 'MAT-CEMENT-OPC53' });
     assert.ok(cement, 'seed cement required for cap test');
-    const { start, end } = getDayBounds();
+    const { start, endExclusive } = getDayBounds();
     const { StatusHistory } = require('./models');
     await StatusHistory.deleteMany({
       entityType: 'MaterialRequest',
       actorUserId: pmUser._id,
-      toStatus: 'PM_APPROVED',
-      timestamp: { $gte: start, $lte: end },
+      timestamp: { $gte: start, $lt: endExclusive },
+      $or: [
+        { toStatus: 'PM_APPROVED' },
+        { toStatus: 'ALLOCATED', fromStatus: 'FORWARDED_TO_PM' },
+      ],
     });
 
     const createAndForward = async (quantityRequested) => {

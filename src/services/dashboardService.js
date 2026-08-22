@@ -1103,7 +1103,7 @@ async function getExecutiveDashboard(user, query = {}) {
 async function getPmDashboard(user) {
   const { MaterialRequest, Notification } = require('../models');
   const { serializeMaterialRequestEnriched } = require('../utils/serialize');
-  const { getPmDailyApprovedTotal, MR_PM_DAILY_MAX_INR } = require('./pmApprovalCapService');
+  const { getPmDailyApprovedTotal, getDayBounds, MR_PM_DAILY_MAX_INR } = require('./pmApprovalCapService');
 
   const projectIds = user.assignedProjectIds || [];
   const projectFilter = projectIds.length
@@ -1166,6 +1166,7 @@ async function getPmDashboard(user) {
       relatedEntityId: n.relatedEntityId?.toString(),
     })),
     dailyCap: {
+      day: getDayBounds().dayStr,
       dailyApprovedTotal,
       dailyCap: MR_PM_DAILY_MAX_INR,
       remaining: Math.max(0, MR_PM_DAILY_MAX_INR - dailyApprovedTotal),

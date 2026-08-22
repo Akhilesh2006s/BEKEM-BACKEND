@@ -18,12 +18,12 @@ function dailyCap() {
 }
 
 async function getCoordinatorDailyApprovedTotal(coordinatorUserId, date = new Date()) {
-  const { start, end } = getDayBounds(date);
+  const { start, endExclusive } = getDayBounds(date);
   const approvals = await StatusHistory.find({
     entityType: 'MaterialRequest',
     actorUserId: coordinatorUserId,
     toStatus: { $in: COORDINATOR_CAP_STATUSES },
-    timestamp: { $gte: start, $lte: end },
+    timestamp: { $gte: start, $lt: endExclusive },
   }).select('entityId');
 
   const seen = new Set();

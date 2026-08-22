@@ -128,7 +128,7 @@ const {
   notifyExecutivesForIndent,
 } = require('../services/executiveRoutingService');
 const pmApprovalCapService = require('../services/pmApprovalCapService');
-const { checkPmCanApprove, getPmDailyApprovedTotal } = pmApprovalCapService;
+const { checkPmCanApprove, getPmDailyApprovedTotal, getDayBounds } = pmApprovalCapService;
 const coordinatorApprovalCapService = require('../services/coordinatorApprovalCapService');
 const {
   checkCoordinatorCanApprove,
@@ -380,9 +380,11 @@ router.get('/pm/daily-cap', async (req, res, next) => {
     }
     const { getApprovalLimits } = require('../services/orgSettingsService');
     const limits = getApprovalLimits();
+    const { dayStr } = getDayBounds();
     const dailyApprovedTotal = await getPmDailyApprovedTotal(req.user._id);
     res.json({
       data: {
+        day: dayStr,
         dailyApprovedTotal,
         dailyCap: limits.mrPmDailyMaxInr,
         remaining: Math.max(0, limits.mrPmDailyMaxInr - dailyApprovedTotal),
@@ -400,9 +402,11 @@ router.get('/coordinator/daily-cap', async (req, res, next) => {
     }
     const { getApprovalLimits } = require('../services/orgSettingsService');
     const limits = getApprovalLimits();
+    const { dayStr } = getDayBounds();
     const dailyApprovedTotal = await getCoordinatorDailyApprovedTotal(req.user._id);
     res.json({
       data: {
+        day: dayStr,
         dailyApprovedTotal,
         dailyCap: limits.mrCoordinatorDailyMaxInr,
         remaining: Math.max(0, limits.mrCoordinatorDailyMaxInr - dailyApprovedTotal),
