@@ -86,6 +86,17 @@ const materialRequestSchema = new mongoose.Schema(
     storeStockReceivedAt: { type: Date, default: null },
     storeStockReceivedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     storeStockReceivedRemark: { type: String, default: '' },
+    storeStockReceivedAttachments: {
+      type: [
+        {
+          name: { type: String, default: '' },
+          fileType: { type: String, default: '' },
+          category: { type: String, enum: ['INVOICE', 'CHALLAN', 'PHOTO'], default: 'PHOTO' },
+          url: { type: String, default: '' },
+        },
+      ],
+      default: [],
+    },
     executiveProcurementMethod: {
       type: String,
       enum: ['PURCHASE_ORDER', 'BRANCH_TRANSFER', null],

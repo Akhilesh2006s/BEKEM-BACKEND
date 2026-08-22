@@ -508,6 +508,12 @@ export interface MaterialRequestDto {
   allocationReviewStage?: 'EXECUTIVE' | 'PROJECT_MANAGER' | 'STORE_INCHARGE' | 'SITE_INCHARGE' | null;
   storeStockVerified?: boolean;
   storeStockReceivedAt?: string | null;
+  storeStockReceivedAttachments?: Array<{
+    name: string;
+    fileType?: string;
+    category?: 'INVOICE' | 'CHALLAN' | 'PHOTO';
+    url?: string;
+  }>;
   origin?: 'SITE' | 'EXECUTIVE';
   purchaseRequestId?: string;
   prNumber?: string;

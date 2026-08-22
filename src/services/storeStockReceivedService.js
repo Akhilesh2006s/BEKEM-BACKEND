@@ -2,7 +2,26 @@ const { UserRole } = require('@afios/shared');
 const statusHistoryService = require('./statusHistoryService');
 const { getIndentLineItems } = require('./materialRequestHelpers');
 
+const { persistGrnAttachments } = require('./grnFileService');
+
 const RECEIVABLE_STATUSES = new Set(['CHAIRMAN_APPROVED', 'ALLOCATED']);
+const REQUIRED_RECEIPT_CATEGORIES = ['INVOICE', 'CHALLAN'];
+
+function hasRequiredReceiptDocuments(attachments = []) {
+  const categories = new Set(
+    (attachments || [])
+      .filter((a) => String(a.name || '').trim() && (a.dataBase64 || a.contentBase64 || a.url))
+      .map((a) => String(a.category || '').toUpperCase())
+  );
+  return REQUIRED_RECEIPT_CATEGORIES.every((cat) => categories.has(cat));
+}
+
+function assertRequiredReceiptDocuments(attachments = []) {
+  if (hasRequiredReceiptDocuments(attachments)) return;
+  const err = new Error('Invoice and Challan uploads are required before submitting a GRN');
+  err.statusCode = 400;
+  throw err;
+}
 
 function assertStoreCanRecordStockReceived(mr, actor) {
   if (actor.role !== UserRole.STORE_INCHARGE) {
@@ -45,11 +64,12 @@ function applyReceivedQuantities(mr, items = []) {
   }
 }
 
-async function recordStoreStockReceived(mr, actor, { remark, receivedAt, items } = {}) {
+async function recordStoreStockReceived(mr, actor, { remark, receivedAt, items, attachments } = {}) {
   assertStoreCanRecordStockReceived(mr, actor);
   if (mr.status === 'MATERIAL_RECEIVED') {
     return mr;
   }
+  assertRequiredReceiptDocuments(attachments);
 
   const fromStatus = mr.status;
   applyReceivedQuantities(mr, items);
@@ -58,6 +78,7 @@ async function recordStoreStockReceived(mr, actor, { remark, receivedAt, items }
   mr.storeStockReceivedAt = receivedAt ? new Date(receivedAt) : new Date();
   mr.storeStockReceivedByUserId = actor._id;
   mr.storeStockReceivedRemark = String(remark || '').trim();
+  mr.storeStockReceivedAttachments = persistGrnAttachments(attachments);
   await mr.save();
 
   await statusHistoryService.record(
@@ -78,4 +99,5 @@ module.exports = {
   RECEIVABLE_STATUSES,
   assertStoreCanRecordStockReceived,
   recordStoreStockReceived,
+  hasRequiredReceiptDocuments,
 };

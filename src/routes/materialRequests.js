@@ -1531,7 +1531,11 @@ router.post(
     body('receivedAt').optional().isISO8601(),
     body('items').optional().isArray(),
     body('items.*.materialId').optional().isMongoId(),
-    body('items.*.quantityReceived').optional().isFloat({ min: 0 }),
+    body('attachments').optional().isArray(),
+    body('attachments.*.name').optional().isString(),
+    body('attachments.*.fileType').optional().isString(),
+    body('attachments.*.category').optional().isIn(['INVOICE', 'CHALLAN', 'PHOTO']),
+    body('attachments.*.dataBase64').optional().isString(),
   ],
   validate,
   async (req, res, next) => {
@@ -1548,6 +1552,7 @@ router.post(
           remark: req.body.remark,
           receivedAt: req.body.receivedAt,
           items: req.body.items,
+          attachments: req.body.attachments,
         });
       } catch (err) {
         if (err.statusCode) {

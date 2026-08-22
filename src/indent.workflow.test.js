@@ -10,6 +10,21 @@ const {
 } = require('./test/helpers');
 const { MaterialRequest, Material } = require('./models');
 
+const GRN_RECEIPT_ATTACHMENTS = [
+  {
+    name: 'invoice.pdf',
+    fileType: 'application/pdf',
+    category: 'INVOICE',
+    dataBase64: Buffer.from('invoice').toString('base64'),
+  },
+  {
+    name: 'challan.pdf',
+    fileType: 'application/pdf',
+    category: 'CHALLAN',
+    dataBase64: Buffer.from('challan').toString('base64'),
+  },
+];
+
 describe('Indent workflow v2', () => {
   let app;
   let siteToken;
@@ -392,12 +407,33 @@ describe('Indent workflow v2', () => {
         .send({ remark: 'Store cannot skip stock received' });
       assert.strictEqual(storeTooSoon.status, 400);
 
-      const stockReceived = await request(app)
+      const missingDocs = await request(app)
         .post(`/api/material-requests/${mrId}/stock-received`)
         .set('Authorization', `Bearer ${storeToken}`)
         .send({ remark: 'Material received at store' });
+      assert.strictEqual(missingDocs.status, 400);
+      assert.match(
+        String(missingDocs.body.message || ''),
+        /Invoice and Challan/i
+      );
+
+      const invoiceOnly = await request(app)
+        .post(`/api/material-requests/${mrId}/stock-received`)
+        .set('Authorization', `Bearer ${storeToken}`)
+        .send({ remark: 'Material received at store', attachments: [GRN_RECEIPT_ATTACHMENTS[0]] });
+      assert.strictEqual(invoiceOnly.status, 400);
+
+      const stockReceived = await request(app)
+        .post(`/api/material-requests/${mrId}/stock-received`)
+        .set('Authorization', `Bearer ${storeToken}`)
+        .send({ remark: 'Material received at store', attachments: GRN_RECEIPT_ATTACHMENTS });
       assert.strictEqual(stockReceived.status, 200, JSON.stringify(stockReceived.body));
       assert.strictEqual(stockReceived.body.data.status, 'MATERIAL_RECEIVED');
+      const savedCats = (stockReceived.body.data.storeStockReceivedAttachments || []).map(
+        (a) => a.category
+      );
+      assert.ok(savedCats.includes('INVOICE'));
+      assert.ok(savedCats.includes('CHALLAN'));
     }
 
     const issueQueue = await request(app)

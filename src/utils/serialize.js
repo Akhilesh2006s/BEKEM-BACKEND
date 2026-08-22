@@ -211,6 +211,12 @@ function serializeMaterialRequest(mr, stockContext, pricingContext) {
     allocationReviewStage: mr.allocationReviewStage || null,
     storeStockVerified: !!mr.storeStockVerified,
     storeStockReceivedAt: mr.storeStockReceivedAt?.toISOString?.() || mr.storeStockReceivedAt || null,
+    storeStockReceivedAttachments: (mr.storeStockReceivedAttachments || []).map((a) => ({
+      name: a.name,
+      fileType: a.fileType,
+      category: a.category,
+      url: a.url || '',
+    })),
     origin: mr.origin || 'SITE',
     indentRequestType: mr.indentRequestType || 'ABOVE_5000',
     indentCategoryId: resolveId(mr.indentCategoryId) || undefined,
