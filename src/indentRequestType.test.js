@@ -133,16 +133,10 @@ describe('Indent request type', () => {
       .post(`/api/material-requests/${mrId}/pm-local-close`)
       .set('Authorization', `Bearer ${pmToken}`)
       .send({ remark: 'Approved — Store to purchase under ₹5,000' });
-    assert.strictEqual(close.status, 400, JSON.stringify(close.body));
-    assert.match(close.body.message || '', /Forward to Head Office/i);
-
-    const forwardHo = await request(app)
-      .post(`/api/material-requests/${mrId}/forward-to-ho`)
-      .set('Authorization', `Bearer ${pmToken}`)
-      .send({ remark: 'Approved — stock short, send to HO under ₹5,000' });
-    assert.strictEqual(forwardHo.status, 200, JSON.stringify(forwardHo.body));
-    assert.strictEqual(forwardHo.body.data.status, 'PENDING_EXECUTIVE_DECISION');
-    assert.strictEqual(forwardHo.body.data.pendingWith, 'EXECUTIVE');
+    assert.strictEqual(close.status, 200, JSON.stringify(close.body));
+    assert.strictEqual(close.body.data.status, 'PENDING_EXECUTIVE_DECISION');
+    assert.strictEqual(close.body.pmApprovalState.decision, 'FORWARDED_STOCK');
+    assert.match(String(close.body.message || ''), /Insufficient current stock/i);
   });
 
   it('PM BELOW_5000: stock available closes at PM (ALLOCATED)', async () => {

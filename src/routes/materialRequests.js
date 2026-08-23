@@ -147,6 +147,10 @@ const {
   storeCanIssueToRaiser,
 } = require('../services/pmProceedAllocationService');
 const { recordStoreStockReceived } = require('../services/storeStockReceivedService');
+const {
+  evaluatePmLocalApproval,
+  buildPmApprovalState,
+} = require('../services/pmLocalApprovalService');
 const { handleIdempotent } = require('../utils/idempotentHandler');
 
 const router = express.Router();
@@ -1393,27 +1397,12 @@ router.post(
         return { statusCode: 400, body: { statusCode: 400, message: 'Indent is not awaiting PM review' } };
       }
 
-      if (!mr.estimatedValue) mr.estimatedValue = await estimateIndentAmount(mr);
-      const stockContext = await enrichIndentWithStock(mr);
-      const canIssueFromStock = stockContext.canFullyIssue;
+      const pmId = req.approvalContext.principal._id;
+      const evaluation = await evaluatePmLocalApproval(pmId, mr);
       const isBelowCap = mr.indentRequestType === 'BELOW_5000';
-
-      // Close at PM only when stock is available. Any stock-short indent must use HO flow.
-      if (!canIssueFromStock) {
-        return {
-          statusCode: 400,
-          body: {
-            statusCode: 400,
-            message:
-              'Cannot close at PM — stock is short. Forward to Head Office for stock requisition.',
-          },
-        };
-      }
-
       const remark = requireRemark(req.body.remark);
 
-      // Indent value above the PM per-indent approval limit cannot close at PM.
-      if (indentExceedsPmApprovalLevel(mr.estimatedValue, mr.indentRequestType)) {
+      if (evaluation.decision === 'APPROVAL_LEVEL') {
         return {
           statusCode: 400,
           body: {
@@ -1423,54 +1412,60 @@ router.post(
         };
       }
 
-      // Above ₹5,000 type still within the per-indent limit: daily-cap overflow goes to HO.
-      if (!isBelowCap) {
-        const capCheck = await checkPmCanApprove(req.approvalContext.principal._id, mr);
-        if (capCheck.wouldExceed) {
-          await queueForExecutiveDecision(
-            mr,
-            req.user._id,
-            remark,
-            `PM daily cap reached (₹${capCheck.dailyApprovedTotal.toLocaleString('en-IN')} of ₹${capCheck.dailyCap.toLocaleString('en-IN')}) — forwarded to Head Office for approval: ${remark}`
-          );
+      if (
+        evaluation.decision === 'FORWARDED_STOCK' ||
+        evaluation.decision === 'FORWARDED_DAILY_CAP'
+      ) {
+        const capCheck = evaluation.capCheck;
+        const historyNote =
+          evaluation.decision === 'FORWARDED_STOCK'
+            ? `Insufficient current stock after prior PM approvals — forwarded to Head Office for procurement: ${remark}`
+            : `PM daily cap reached (₹${capCheck.dailyApprovedTotal.toLocaleString('en-IN')} of ₹${capCheck.dailyCap.toLocaleString('en-IN')}) — forwarded to Head Office for approval: ${remark}`;
+        await queueForExecutiveDecision(mr, req.user._id, remark, historyNote);
 
-          await notificationService.notifyUser(mr.requestedByUserId, {
-            title: 'Indent forwarded to Head Office',
-            body: `${mr.indentNumber} — PM's daily approval cap reached; awaiting executive procurement decision.`,
-            relatedEntityType: 'MaterialRequest',
-            relatedEntityId: mr._id,
-          });
+        await notificationService.notifyUser(mr.requestedByUserId, {
+          title: 'Indent forwarded to Head Office',
+          body:
+            evaluation.decision === 'FORWARDED_STOCK'
+              ? `${mr.indentNumber} — current stock cannot cover this indent after prior PM approvals; awaiting executive procurement decision.`
+              : `${mr.indentNumber} — PM's daily approval cap reached; awaiting executive procurement decision.`,
+          relatedEntityType: 'MaterialRequest',
+          relatedEntityId: mr._id,
+        });
 
-          const enriched = await mrEnrichedBody(mr._id, req.user.role);
-          return {
-            statusCode: 200,
-            body: {
-              ...enriched,
-              message: `Daily cap reached (₹${capCheck.dailyCap.toLocaleString('en-IN')}/day) — forwarded to Head Office for approval`,
-            },
-          };
-        }
+        const enriched = await mrEnrichedBody(mr._id, req.user.role);
+        const message =
+          evaluation.decision === 'FORWARDED_STOCK'
+            ? 'Insufficient current stock — forwarded to Head Office for procurement'
+            : `Daily cap reached (₹${capCheck.dailyCap.toLocaleString('en-IN')}/day) — forwarded to Head Office for approval`;
+        return {
+          statusCode: 200,
+          body: {
+            ...enriched,
+            message,
+            pmApprovalState: buildPmApprovalState(
+              evaluation.decision,
+              capCheck,
+              evaluation.stockContext
+            ),
+          },
+        };
       }
 
       const fromStatus = mr.status;
-      let closedAtPm = false;
-
-      if (canIssueFromStock) {
-        try {
-          await allocateIndentStock(mr, req.user._id);
-          mr.status = 'ALLOCATED';
-          mr.pendingWithRole = 'STORE_INCHARGE';
-          mr.allocatedByRole = UserRole.PROJECT_MANAGER;
-          closedAtPm = true;
-        } catch (allocErr) {
-          if (allocErr.statusCode) {
-            return {
-              statusCode: allocErr.statusCode,
-              body: { statusCode: allocErr.statusCode, message: allocErr.message },
-            };
-          }
-          throw allocErr;
+      try {
+        await allocateIndentStock(mr, req.user._id);
+        mr.status = 'ALLOCATED';
+        mr.pendingWithRole = 'STORE_INCHARGE';
+        mr.allocatedByRole = UserRole.PROJECT_MANAGER;
+      } catch (allocErr) {
+        if (allocErr.statusCode) {
+          return {
+            statusCode: allocErr.statusCode,
+            body: { statusCode: allocErr.statusCode, message: allocErr.message },
+          };
         }
+        throw allocErr;
       }
 
       mr.pmForwardRemark = remark;
@@ -1482,9 +1477,7 @@ router.post(
         fromStatus,
         mr.status,
         req.user._id,
-        closedAtPm
-          ? `PM closed at PM level (stock reserved${isBelowCap ? ' · Below ₹5,000' : ''}): ${remark}`
-          : `PM approved — forwarded to Head Office: ${remark}`
+        `PM closed at PM level (stock reserved${isBelowCap ? ' · Below ₹5,000' : ''}): ${remark}`
       );
 
       const storeUsers = await User.find({
@@ -1494,29 +1487,35 @@ router.post(
       await notificationService.notifyUsers(
         storeUsers.map((u) => u._id),
         {
-          title: closedAtPm
-            ? isBelowCap
-              ? 'Below ₹5,000 indent closed by PM — issue stock'
-              : 'Indent closed by PM — ready to issue'
-            : 'Indent approved by PM',
-          body: closedAtPm
-            ? `${mr.indentNumber} — stock reserved; issue material.`
-            : `${mr.indentNumber} — awaiting Head Office procurement.`,
+          title: isBelowCap
+            ? 'Below ₹5,000 indent closed by PM — issue stock'
+            : 'Indent closed by PM — ready to issue',
+          body: `${mr.indentNumber} — stock reserved; issue material.`,
           relatedEntityType: 'MaterialRequest',
           relatedEntityId: mr._id,
         }
       );
 
       await notificationService.notifyUser(mr.requestedByUserId, {
-        title: closedAtPm ? 'Indent closed by PM' : 'Indent approved',
-        body: closedAtPm
-          ? `Your request ${mr.indentNumber} was closed by the Project Manager — stock reserved for issue.`
-          : `Your request ${mr.indentNumber} was approved by the Project Manager — now awaiting Head Office procurement.`,
+        title: 'Indent closed by PM',
+        body: `Your request ${mr.indentNumber} was closed by the Project Manager — stock reserved for issue.`,
         relatedEntityType: 'MaterialRequest',
         relatedEntityId: mr._id,
       });
 
-      return { statusCode: 200, body: await mrEnrichedBody(mr._id, req.user.role) };
+      const [afterStock, capAfter] = await Promise.all([
+        enrichIndentWithStock(mr),
+        checkPmCanApprove(pmId, mr),
+      ]);
+      const enriched = await mrEnrichedBody(mr._id, req.user.role);
+      return {
+        statusCode: 200,
+        body: {
+          ...enriched,
+          message: 'Closed at PM — stock reserved',
+          pmApprovalState: buildPmApprovalState('CLOSED_LOCAL', capAfter, afterStock),
+        },
+      };
     }, next);
   }
 );

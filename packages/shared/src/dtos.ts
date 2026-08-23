@@ -571,6 +571,20 @@ export interface PmDailyCapDto {
 
 export type DailyCapDto = PmDailyCapDto;
 
+export interface PmApprovalStockLineDto {
+  materialId: string;
+  requestedQty: number;
+  availableQty: number;
+}
+
+export interface PmApprovalStateDto {
+  decision: 'CLOSED_LOCAL' | 'FORWARDED_STOCK' | 'FORWARDED_DAILY_CAP';
+  dailyApprovedTotal: number;
+  dailyCap: number;
+  remaining: number;
+  stockByLine: PmApprovalStockLineDto[];
+}
+
 export interface PmDashboardDto {
   pendingRequests: MaterialRequestDto[];
   approveQueue: MaterialRequestDto[];
