@@ -66,6 +66,10 @@ describe('Branch transfer workflow', () => {
     destProject = ctx.project;
     sourceProject = await Project.findOne({ _id: { $ne: destProject._id } });
     sourceSite = await Site.findOne({ projectId: sourceProject._id });
+    const pm = await User.findOne({ email: 'pm@bekem.com' });
+    pm.assignedProjectIds = (await Project.find()).map((p) => p._id);
+    await pm.save();
+    pmToken = await loginAs('pm@bekem.com');
   });
 
   after(async () => {
@@ -73,23 +77,28 @@ describe('Branch transfer workflow', () => {
   });
 
   it('runs PM request → Head Office → Transfer without PO side effects', async () => {
-    const sourceBefore = await StockLedger.findOne({
+    const destSite = await Site.findOne({ projectId: destProject._id }).sort({ createdAt: 1 });
+    const qty = 2;
+    await StockLedger.findOneAndUpdate(
+      { siteId: sourceSite._id, materialId: material._id },
+      { $set: { quantityOnHand: qty + 5, quantityReserved: 0 } },
+      { upsert: true }
+    );
+    const sourceReady = await StockLedger.findOne({
       siteId: sourceSite._id,
       materialId: material._id,
     });
-    const destSite = await Site.findOne({ projectId: destProject._id }).sort({ createdAt: 1 });
-    const destBefore = await StockLedger.findOne({
+    const destReady = await StockLedger.findOne({
       siteId: destSite._id,
       materialId: material._id,
     });
-
-    const qty = 2;
     const mr = await createForwardedIndent(app, siteToken, storeToken, material._id);
     const createRes = await request(app)
       .post('/api/branch-transfers')
       .set('Authorization', `Bearer ${pmToken}`)
       .send({
         fromProjectId: sourceProject._id.toString(),
+        fromSiteId: sourceSite._id.toString(),
         materialRequestId: mr._id.toString(),
         items: [{ materialId: material._id.toString(), quantity: qty }],
         note: 'Need stock from other supervised project',
@@ -103,14 +112,8 @@ describe('Branch transfer workflow', () => {
       .set('Authorization', `Bearer ${execToken}`)
       .send({ note: 'Approve branch transfer' });
     assert.strictEqual(decideRes.status, 200);
-    assert.strictEqual(decideRes.body.data.status, 'COORDINATOR_DECIDED');
-
-    const executeRes = await request(app)
-      .post(`/api/branch-transfers/${transferId}/execute`)
-      .set('Authorization', `Bearer ${coordinatorToken}`)
-      .send({});
-    assert.strictEqual(executeRes.status, 200);
-    assert.strictEqual(executeRes.body.data.status, 'TRANSFERRED');
+    assert.strictEqual(decideRes.body.data.status, 'TRANSFERRED');
+    assert.equal(decideRes.body.data.stockUpdated, true);
 
     const transfer = await BranchTransfer.findById(transferId);
     assert.strictEqual(transfer.status, 'TRANSFERRED');
@@ -124,8 +127,16 @@ describe('Branch transfer workflow', () => {
       siteId: destSite._id,
       materialId: material._id,
     });
-    assert.strictEqual(sourceAfter.quantityOnHand, sourceBefore.quantityOnHand - qty);
-    assert.strictEqual(destAfter.quantityOnHand, destBefore.quantityOnHand + qty);
+    assert.strictEqual(sourceAfter.quantityOnHand, sourceReady.quantityOnHand - qty);
+    assert.strictEqual(destAfter.quantityOnHand, (destReady?.quantityOnHand || 0) + qty);
+
+    const executeRes = await request(app)
+      .post(`/api/branch-transfers/${transferId}/execute`)
+      .set('Authorization', `Bearer ${coordinatorToken}`)
+      .send({});
+    assert.strictEqual(executeRes.status, 200);
+    assert.strictEqual(executeRes.body.data.status, 'TRANSFERRED');
+
   });
 
   it('store cannot initiate branch transfers', async () => {
@@ -332,5 +343,88 @@ describe('Branch transfer workflow', () => {
     assert.strictEqual(batchRes.status, 201, batchRes.body.message);
     const afterBt = await MaterialRequest.findById(mr._id);
     assert.strictEqual(afterBt.status, 'BRANCH_TRANSFER_REQUESTED');
+  });
+
+  it('combined stock shortfall is not branch-transfer viable and GET exposes the formula', async () => {
+    const destSite = await Site.findOne({ projectId: destProject._id }).sort({ createdAt: 1 });
+    const cheapMaterial =
+      (await Material.findOne({ code: 'MAT-CEMENT-OPC53' })) ||
+      (await Material.findOne({ referenceUnitPrice: { $gt: 0, $lt: 500 } }));
+    assert.ok(cheapMaterial, 'need a below-cap catalogue material for this test');
+
+    const pm = await User.findOne({ email: 'pm@bekem.com' });
+    pm.assignedProjectIds = (await Project.find()).map((p) => p._id);
+    await pm.save();
+    pmToken = await loginAs('pm@bekem.com');
+
+    await StockLedger.updateMany(
+      { materialId: cheapMaterial._id },
+      { $set: { quantityOnHand: 0, quantityReserved: 0 } }
+    );
+    await StockLedger.findOneAndUpdate(
+      { siteId: destSite._id, materialId: cheapMaterial._id },
+      { $set: { quantityOnHand: 1, quantityReserved: 0 } },
+      { upsert: true }
+    );
+    await StockLedger.findOneAndUpdate(
+      { siteId: sourceSite._id, materialId: cheapMaterial._id },
+      { $set: { quantityOnHand: 2, quantityReserved: 0 } },
+      { upsert: true }
+    );
+
+    const mr = await createForwardedIndent(
+      app,
+      siteToken,
+      storeToken,
+      cheapMaterial._id,
+      8,
+      'BELOW_5000'
+    );
+    const detail = await request(app)
+      .get(`/api/material-requests/${mr._id}`)
+      .set('Authorization', `Bearer ${pmToken}`);
+    assert.strictEqual(detail.status, 200);
+    const decision = detail.body.data.pmStockDecision;
+    assert.ok(decision);
+    assert.equal(decision.currentProjectInsufficient, true);
+    assert.equal(decision.branchTransferViable, false);
+    assert.ok(decision.lines[0].combinedAvailableQty < 8);
+
+    const close = await request(app)
+      .post(`/api/material-requests/${mr._id}/pm-local-close`)
+      .set('Authorization', `Bearer ${pmToken}`)
+      .send({ remark: 'Combined stock cannot fulfill — forward to HO' });
+    assert.strictEqual(close.status, 200, JSON.stringify(close.body));
+    assert.strictEqual(close.body.data.status, 'PENDING_EXECUTIVE_DECISION');
+    assert.strictEqual(close.body.pmApprovalState.decision, 'FORWARDED_STOCK');
+  });
+
+  it('GET indent marks branch transfer viable when other projects cover the shortfall', async () => {
+    const destSite = await Site.findOne({ projectId: destProject._id }).sort({ createdAt: 1 });
+    const pm = await User.findOne({ email: 'pm@bekem.com' });
+    pm.assignedProjectIds = (await Project.find()).map((p) => p._id);
+    await pm.save();
+    pmToken = await loginAs('pm@bekem.com');
+
+    await StockLedger.findOneAndUpdate(
+      { siteId: destSite._id, materialId: material._id },
+      { $set: { quantityOnHand: 2, quantityReserved: 0 } },
+      { upsert: true }
+    );
+    await StockLedger.findOneAndUpdate(
+      { siteId: sourceSite._id, materialId: material._id },
+      { $set: { quantityOnHand: 25, quantityReserved: 0 } },
+      { upsert: true }
+    );
+
+    const mr = await createForwardedIndent(app, siteToken, storeToken, material._id, 10);
+    const detail = await request(app)
+      .get(`/api/material-requests/${mr._id}`)
+      .set('Authorization', `Bearer ${pmToken}`);
+    assert.strictEqual(detail.status, 200);
+    const decision = detail.body.data.pmStockDecision;
+    assert.equal(decision.currentProjectInsufficient, true);
+    assert.equal(decision.branchTransferViable, true);
+    assert.ok(decision.lines[0].combinedAvailableQty >= 10);
   });
 });

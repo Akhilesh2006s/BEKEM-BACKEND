@@ -55,6 +55,10 @@ describe('PM sequential stock + daily cap approval', () => {
       { materialId: material._id, siteId: { $ne: site._id } },
       { $set: { quantityOnHand: 0, quantityReserved: 0 } }
     );
+    await StockLedger.updateMany(
+      { materialId: material._id, siteId: { $ne: site._id } },
+      { $set: { quantityOnHand: 0, quantityReserved: 0 } }
+    );
   }
 
   async function createAndStoreForward(qty, purpose) {
