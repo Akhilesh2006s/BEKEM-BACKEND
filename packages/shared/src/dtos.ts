@@ -559,6 +559,30 @@ export interface MaterialRequestDto {
       }>;
     }>;
   }>;
+  /** Combined current-project + other-PM-projects stock vs indent required qty. */
+  pmStockDecision?: PmStockDecisionDto;
+}
+
+export interface PmStockDecisionLineDto {
+  materialId: string;
+  materialName?: string;
+  unit?: string;
+  requiredQty: number;
+  currentProjectAvailableQty: number;
+  otherProjectsAvailableQty: number;
+  combinedAvailableQty: number;
+  alreadyCoveredQty: number;
+  remainingNeedQty: number;
+  shortfallAfterCurrent: number;
+  shortfallAfterCombined: number;
+  branchTransferViable: boolean;
+}
+
+export interface PmStockDecisionDto {
+  currentProjectInsufficient: boolean;
+  /** True when every short line can be fully covered by current + other PM projects. */
+  branchTransferViable: boolean;
+  lines: PmStockDecisionLineDto[];
 }
 
 export interface PmDailyCapDto {
@@ -578,7 +602,7 @@ export interface PmApprovalStockLineDto {
 }
 
 export interface PmApprovalStateDto {
-  decision: 'CLOSED_LOCAL' | 'FORWARDED_STOCK' | 'FORWARDED_DAILY_CAP';
+  decision: 'CLOSED_LOCAL' | 'FORWARDED_STOCK' | 'FORWARDED_DAILY_CAP' | 'USE_BRANCH_TRANSFER';
   dailyApprovedTotal: number;
   dailyCap: number;
   remaining: number;

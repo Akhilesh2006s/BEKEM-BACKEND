@@ -6,16 +6,21 @@ async function resolveDefaultSiteForProject(projectId, session) {
   return site?._id || null;
 }
 
+function asId(value) {
+  if (!value) return value;
+  return value._id || value;
+}
+
 async function applyStockMovements(transfer, actorUserId, session) {
-  let fromSiteId = transfer.fromSiteId;
-  let toSiteId = transfer.toSiteId;
+  let fromSiteId = asId(transfer.fromSiteId);
+  let toSiteId = asId(transfer.toSiteId);
 
   if (!fromSiteId) {
-    fromSiteId = await resolveDefaultSiteForProject(transfer.fromProjectId, session);
+    fromSiteId = await resolveDefaultSiteForProject(asId(transfer.fromProjectId), session);
     if (fromSiteId) transfer.fromSiteId = fromSiteId;
   }
   if (!toSiteId) {
-    toSiteId = await resolveDefaultSiteForProject(transfer.toProjectId, session);
+    toSiteId = await resolveDefaultSiteForProject(asId(transfer.toProjectId), session);
     if (toSiteId) transfer.toSiteId = toSiteId;
   }
 
@@ -26,9 +31,10 @@ async function applyStockMovements(transfer, actorUserId, session) {
   }
 
   for (const item of transfer.items) {
+    const materialId = asId(item.materialId);
     const sourceLedger = await StockLedger.findOne({
       siteId: fromSiteId,
-      materialId: item.materialId,
+      materialId,
     }).session(session || null);
 
     if (!sourceLedger || sourceLedger.quantityOnHand < item.quantity) {
@@ -43,7 +49,7 @@ async function applyStockMovements(transfer, actorUserId, session) {
 
     let destLedger = await StockLedger.findOne({
       siteId: toSiteId,
-      materialId: item.materialId,
+      materialId,
     }).session(session || null);
 
     if (!destLedger) {
@@ -51,7 +57,7 @@ async function applyStockMovements(transfer, actorUserId, session) {
         [
           {
             siteId: toSiteId,
-            materialId: item.materialId,
+            materialId,
             quantityOnHand: 0,
             lowStockThreshold: 10,
           },
@@ -71,14 +77,14 @@ async function applyStockMovements(transfer, actorUserId, session) {
       [
         {
           siteId: fromSiteId,
-          materialId: item.materialId,
+          materialId,
           quantityDelta: -item.quantity,
           type: 'ADJUSTMENT',
           actorUserId,
         },
         {
           siteId: toSiteId,
-          materialId: item.materialId,
+          materialId,
           quantityDelta: item.quantity,
           type: 'INCOMING',
           actorUserId,

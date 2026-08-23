@@ -12,15 +12,22 @@ const { BranchTransfer, StockLedger, Site, Project, MaterialRequest, User, Mater
 
 let indentCategoryId;
 
-async function createForwardedIndent(app, siteToken, storeToken, materialId, quantityRequested = 99999) {
+async function createForwardedIndent(
+  app,
+  siteToken,
+  storeToken,
+  materialId,
+  quantityRequested = 99999,
+  indentRequestType = 'ABOVE_5000'
+) {
   const createRes = await request(app)
     .post('/api/material-requests')
     .set('Authorization', `Bearer ${siteToken}`)
-    .send({ indentRequestType: 'ABOVE_5000',
+    .send({ indentRequestType,
         requestedByName: 'Test Requester',
         indentCategoryId: indentCategoryId,
         purpose: 'UAT test reason', items: [{ materialId: materialId.toString(), quantityRequested }] });
-  assert.strictEqual(createRes.status, 201);
+  assert.strictEqual(createRes.status, 201, JSON.stringify(createRes.body));
   const mrId = createRes.body.data.id;
 
   const forwardRes = await request(app)
@@ -251,5 +258,79 @@ describe('Branch transfer workflow', () => {
       .send({ remark: 'Remaining 330 still needed at site' });
     assert.strictEqual(hoRes.status, 200, hoRes.body.message);
     assert.strictEqual(hoRes.body.data.status, 'PENDING_EXECUTIVE_DECISION');
+  });
+
+  it('BELOW_5000: other-project stock enables BT and blocks auto-HO', async () => {
+    const destSite = await Site.findOne({ projectId: destProject._id }).sort({ createdAt: 1 });
+    const cheapMaterial =
+      (await Material.findOne({ code: 'MAT-CEMENT-OPC53' })) ||
+      (await Material.findOne({ referenceUnitPrice: { $gt: 0, $lt: 500 } }));
+    assert.ok(sourceProject && sourceSite && destSite);
+    assert.ok(cheapMaterial, 'need a below-cap catalogue material for this test');
+
+    const pm = await User.findOne({ email: 'pm@bekem.com' });
+    pm.assignedProjectIds = (await Project.find()).map((p) => p._id);
+    await pm.save();
+    pmToken = await loginAs('pm@bekem.com');
+
+    await StockLedger.findOneAndUpdate(
+      { siteId: destSite._id, materialId: cheapMaterial._id },
+      { $set: { quantityOnHand: 0, quantityReserved: 0 } },
+      { upsert: true }
+    );
+    await StockLedger.findOneAndUpdate(
+      { siteId: sourceSite._id, materialId: cheapMaterial._id },
+      { $set: { quantityOnHand: 10, quantityReserved: 0 } },
+      { upsert: true }
+    );
+
+    const mr = await createForwardedIndent(
+      app,
+      siteToken,
+      storeToken,
+      cheapMaterial._id,
+      2,
+      'BELOW_5000'
+    );
+
+    const detail = await request(app)
+      .get(`/api/material-requests/${mr._id}`)
+      .set('Authorization', `Bearer ${pmToken}`);
+    assert.strictEqual(detail.status, 200);
+    assert.strictEqual(detail.body.data.indentRequestType, 'BELOW_5000');
+    assert.strictEqual(detail.body.data.canFullyIssue, false);
+    const otherQty = (detail.body.data.crossProjectStock || []).some((row) =>
+      (row.projects || []).some((p) => (p.sites || []).some((s) => Number(s.availableQty) > 0))
+    );
+    assert.ok(otherQty, 'PM should see other-project stock for this indent');
+
+    const close = await request(app)
+      .post(`/api/material-requests/${mr._id}/pm-local-close`)
+      .set('Authorization', `Bearer ${pmToken}`)
+      .send({ remark: 'Try close while other projects have stock' });
+    assert.strictEqual(close.status, 409, JSON.stringify(close.body));
+    assert.strictEqual(close.body.pmApprovalState.decision, 'USE_BRANCH_TRANSFER');
+    assert.match(String(close.body.message || ''), /branch transfer/i);
+    const still = await MaterialRequest.findById(mr._id);
+    assert.strictEqual(still.status, 'FORWARDED_TO_PM');
+    assert.equal(!!still.escalatedToHo, false);
+
+    const batchRes = await request(app)
+      .post('/api/branch-transfers/batch')
+      .set('Authorization', `Bearer ${pmToken}`)
+      .send({
+        materialRequestId: mr._id.toString(),
+        note: 'Take from other project',
+        sources: [
+          {
+            fromProjectId: sourceProject._id.toString(),
+            fromSiteId: sourceSite._id.toString(),
+            items: [{ materialId: cheapMaterial._id.toString(), quantity: 2 }],
+          },
+        ],
+      });
+    assert.strictEqual(batchRes.status, 201, batchRes.body.message);
+    const afterBt = await MaterialRequest.findById(mr._id);
+    assert.strictEqual(afterBt.status, 'BRANCH_TRANSFER_REQUESTED');
   });
 });

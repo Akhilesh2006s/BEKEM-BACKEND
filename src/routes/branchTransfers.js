@@ -438,39 +438,67 @@ router.post(
   async (req, res, next) => {
     try {
       const transfer = req.branchTransfer;
+      if (transfer.status === 'TRANSFERRED') {
+        return res.json({
+          data: { id: transfer._id.toString(), status: transfer.status, stockUpdated: true },
+        });
+      }
       if (transfer.status !== 'REQUESTED') {
         return res.status(400).json({ statusCode: 400, message: 'Transfer not awaiting Executive review' });
       }
 
       const fromStatus = transfer.status;
-      transfer.status = 'COORDINATOR_DECIDED';
       transfer.coordinatorDecision = 'transfer';
       transfer.pmApprovedByUserId = req.user._id;
       transfer.pmApprovedAt = new Date();
       transfer.coordinatorDecidedByUserId = req.user._id;
       transfer.coordinatorDecidedAt = new Date();
-      await transfer.save();
+
+      try {
+        await executeBranchTransfer(transfer, req.user._id);
+      } catch (execErr) {
+        if (execErr.statusCode) {
+          return res.status(execErr.statusCode).json({
+            statusCode: execErr.statusCode,
+            message: execErr.message,
+          });
+        }
+        throw execErr;
+      }
 
       await statusHistoryService.record(
         'BranchTransfer',
         transfer._id,
         fromStatus,
-        transfer.status,
+        'TRANSFERRED',
         req.user._id,
-        req.body.note?.trim() || 'Executive approved branch transfer — pending Coordinator execution'
+        req.body.note?.trim() ||
+          'Executive approved branch transfer — stock deducted at source project(s) and added to the requesting project'
       );
 
-      const coordinators = await require('../models').User.find({ role: UserRole.COORDINATOR });
-      for (const c of coordinators) {
-        await notificationService.notifyUser(c._id, {
-          title: 'Execute branch transfer',
-          body: `${transfer.transferNumber} approved by Executive — execute stock movement when ready.`,
+      const requesterId = transfer.requestedByUserId?._id || transfer.requestedByUserId;
+      if (requesterId) {
+        await notificationService.notifyUser(requesterId, {
+          title: 'Branch transfer approved — stock updated',
+          body: `${transfer.transferNumber}: Executive approved. Source project stock deducted and requesting project stock increased.`,
           relatedEntityType: 'BranchTransfer',
           relatedEntityId: transfer._id,
         });
       }
 
-      res.json({ data: { id: transfer._id.toString(), status: transfer.status } });
+      const coordinators = await require('../models').User.find({ role: UserRole.COORDINATOR });
+      for (const c of coordinators) {
+        await notificationService.notifyUser(c._id, {
+          title: 'Branch transfer completed',
+          body: `${transfer.transferNumber} approved by Executive — stock has been moved between projects.`,
+          relatedEntityType: 'BranchTransfer',
+          relatedEntityId: transfer._id,
+        });
+      }
+
+      res.json({
+        data: { id: transfer._id.toString(), status: transfer.status, stockUpdated: true },
+      });
     } catch (err) {
       next(err);
     }

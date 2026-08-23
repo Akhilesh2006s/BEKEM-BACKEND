@@ -154,6 +154,8 @@ export interface ProcurementDecisionDto {
     coordinatorProcurementRemark: string;
     canExecutiveDecide: boolean;
     canCoordinatorReview: boolean;
+    canFullyIssue?: boolean;
+    hasAvailableStock?: boolean;
     redirect?: {
         type: string;
         path: string;
@@ -465,7 +467,7 @@ export interface MaterialRequestDto {
     status: string;
     pendingWith?: string;
     /** Role that closed this indent locally when status is ALLOCATED (PM/Coordinator local close vs. Store's normal allocation). */
-    allocatedByRole?: 'PROJECT_MANAGER' | 'COORDINATOR' | 'STORE_INCHARGE' | null;
+    allocatedByRole?: 'PROJECT_MANAGER' | 'COORDINATOR' | 'STORE_INCHARGE' | 'EXECUTIVE' | null;
     approverNames?: {
         store?: string;
         pm?: string;
@@ -489,6 +491,13 @@ export interface MaterialRequestDto {
     /** Sequential allocation review after PO approval: Executive → PM → Store → Indent Raiser. */
     allocationReviewStage?: 'EXECUTIVE' | 'PROJECT_MANAGER' | 'STORE_INCHARGE' | 'SITE_INCHARGE' | null;
     storeStockVerified?: boolean;
+    storeStockReceivedAt?: string | null;
+    storeStockReceivedAttachments?: Array<{
+        name: string;
+        fileType?: string;
+        category?: 'INVOICE' | 'CHALLAN' | 'PHOTO';
+        url?: string;
+    }>;
     origin?: 'SITE' | 'EXECUTIVE';
     purchaseRequestId?: string;
     prNumber?: string;
@@ -536,11 +545,25 @@ export interface MaterialRequestDto {
     }>;
 }
 export interface PmDailyCapDto {
+    /** Org-timezone calendar day (YYYY-MM-DD) this total applies to. */
+    day?: string;
     dailyApprovedTotal: number;
     dailyCap: number;
     remaining: number;
 }
 export type DailyCapDto = PmDailyCapDto;
+export interface PmApprovalStockLineDto {
+    materialId: string;
+    requestedQty: number;
+    availableQty: number;
+}
+export interface PmApprovalStateDto {
+    decision: 'CLOSED_LOCAL' | 'FORWARDED_STOCK' | 'FORWARDED_DAILY_CAP' | 'USE_BRANCH_TRANSFER';
+    dailyApprovedTotal: number;
+    dailyCap: number;
+    remaining: number;
+    stockByLine: PmApprovalStockLineDto[];
+}
 export interface PmDashboardDto {
     pendingRequests: MaterialRequestDto[];
     approveQueue: MaterialRequestDto[];
@@ -722,6 +745,8 @@ export interface PurchaseRequestDto {
     rfqNumber?: string | null;
     rfqRaisedByName?: string | null;
     rfqRaisedByRole?: string | null;
+    /** Vendors the executive actually assigned on the RFQ (0 = preview-only / not saved). */
+    rfqAssignedVendorCount?: number;
     items?: Array<{
         id: string;
         materialId: string;
@@ -1149,6 +1174,8 @@ export interface RfqListItemDto {
     dueDate?: string | null;
     indentNumber?: string;
     purchaseRequestId?: string;
+    /** Vendors actually assigned (0 means RFQ was previewed but not saved with vendors). */
+    assignedVendorCount?: number;
     poId?: string | null;
     poNumber?: string | null;
     createdAt: string;

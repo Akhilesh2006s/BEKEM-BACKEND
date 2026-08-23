@@ -19,3 +19,9 @@ export declare function computeIndentRunningTotal(lines: Array<{
 /** Site / store must not see pricing on indents (Below or Above ₹5,000). */
 export declare function hideIndentPricingForRole(role: string, indentRequestType?: IndentRequestType | null): boolean;
 export declare const INDENT_CAP_REACHED_MESSAGE = "The \u20B95,000 limit for this indent has been reached. Please create an Above \u20B95,000 indent request if additional materials are required.";
+/** PM may close a single indent only up to this value. Above this, routing goes to HO. */
+export declare const PM_INDENT_APPROVAL_LIMIT_INR = 5000;
+export declare const PM_ABOVE_APPROVAL_LEVEL_MESSAGE = "This indent value is higher than the PM approval level. Please proceed to HO level for further approvals.";
+export declare const PM_APPROVED_FORWARDED_TO_HO_MESSAGE = "Approved and forwarded to HO level.";
+/** True when this indent's value is above the PM's per-indent approval limit. */
+export declare function indentExceedsPmApprovalLevel(estimatedValue?: number | null, indentRequestType?: IndentRequestType | null): boolean;

@@ -150,7 +150,14 @@ const { recordStoreStockReceived } = require('../services/storeStockReceivedServ
 const {
   evaluatePmLocalApproval,
   buildPmApprovalState,
+  PM_USE_BRANCH_TRANSFER_MESSAGE,
 } = require('../services/pmLocalApprovalService');
+const {
+  enrichIndentWithCrossProjectStock,
+  evaluateBranchTransferViability,
+  evaluateIndentBranchTransfer,
+  coveredQtyByMaterialFromTransfers,
+} = require('../services/pmCrossProjectStockService');
 const { handleIdempotent } = require('../utils/idempotentHandler');
 
 const router = express.Router();
@@ -638,7 +645,6 @@ router.get('/:id', param('id').isMongoId(), validate, async (req, res, next) => 
       data.canEdit = !!data.canEdit && requesterId === req.user._id.toString();
     }
     if (req.user.role === UserRole.PROJECT_MANAGER) {
-      const { enrichIndentWithCrossProjectStock } = require('../services/pmCrossProjectStockService');
       const cross = await enrichIndentWithCrossProjectStock(mr, req.user);
       const lineItems = data.items || [];
       data.crossProjectStock = (cross || [])
@@ -647,6 +653,17 @@ router.get('/:id', param('id').isMongoId(), validate, async (req, res, next) => 
           return { ...row, materialName: item?.material?.name || row.materialName };
         })
         .filter((row) => row.projects?.length);
+      data.pmStockDecision = evaluateBranchTransferViability(
+        lineItems.map((item) => ({
+          materialId: item.materialId,
+          materialName: item.material?.name,
+          unit: item.unit || item.material?.unit,
+          requestedQty: item.quantityRequested ?? item.requestedQty,
+          availableQty: item.availableQty,
+        })),
+        data.crossProjectStock,
+        coveredQtyByMaterialFromTransfers(data.linkedBranchTransfers)
+      );
     }
 
     await attachProcurementTrace([data]);
@@ -1238,6 +1255,17 @@ router.post(
             throw allocErr;
           }
         } else {
+          const pmStockDecision = await evaluateIndentBranchTransfer(mr, req.user, stockContext);
+          if (pmStockDecision.branchTransferViable) {
+            return {
+              statusCode: 409,
+              body: {
+                statusCode: 409,
+                message: PM_USE_BRANCH_TRANSFER_MESSAGE,
+                pmStockDecision,
+              },
+            };
+          }
           await queueForExecutiveDecision(
             mr,
             req.user._id,
@@ -1398,7 +1426,7 @@ router.post(
       }
 
       const pmId = req.approvalContext.principal._id;
-      const evaluation = await evaluatePmLocalApproval(pmId, mr);
+      const evaluation = await evaluatePmLocalApproval(pmId, mr, req.user);
       const isBelowCap = mr.indentRequestType === 'BELOW_5000';
       const remark = requireRemark(req.body.remark);
 
@@ -1408,6 +1436,23 @@ router.post(
           body: {
             statusCode: 400,
             message: PM_ABOVE_APPROVAL_LEVEL_MESSAGE,
+          },
+        };
+      }
+
+      if (evaluation.decision === 'USE_BRANCH_TRANSFER') {
+        const enriched = await mrEnrichedBody(mr._id, req.user.role);
+        return {
+          statusCode: 409,
+          body: {
+            statusCode: 409,
+            message: PM_USE_BRANCH_TRANSFER_MESSAGE,
+            ...enriched,
+            pmApprovalState: buildPmApprovalState(
+              evaluation.decision,
+              evaluation.capCheck,
+              evaluation.stockContext
+            ),
           },
         };
       }

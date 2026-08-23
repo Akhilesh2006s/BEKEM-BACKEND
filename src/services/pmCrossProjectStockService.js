@@ -91,6 +91,103 @@ async function enrichIndentWithCrossProjectStock(mr, user) {
   return getCrossProjectStockForMaterials(user, materialIds, { excludeProjectId });
 }
 
+function hasPositiveOtherProjectStock(crossRows) {
+  for (const row of crossRows || []) {
+    for (const project of row.projects || []) {
+      for (const site of project.sites || []) {
+        if (Number(site.availableQty) > 0) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function otherQtyByMaterial(crossProjectStock) {
+  const map = new Map();
+  for (const row of crossProjectStock || []) {
+    const mid = String(row.materialId);
+    const total = (row.projects || []).reduce(
+      (sum, p) => sum + Math.max(0, Number(p.availableQty || 0)),
+      0
+    );
+    map.set(mid, (map.get(mid) || 0) + total);
+  }
+  return map;
+}
+
+function coveredQtyByMaterialFromTransfers(transfers) {
+  const closed = new Set(['REJECTED', 'RAISE_PO_INSTEAD']);
+  const map = {};
+  for (const t of transfers || []) {
+    if (closed.has(t.status)) continue;
+    for (const item of t.items || []) {
+      const mid = String(item.materialId || '');
+      if (!mid) continue;
+      map[mid] = (map[mid] || 0) + Number(item.quantity || 0);
+    }
+  }
+  return map;
+}
+
+/**
+ * Combined current-project + other-PM-projects stock vs indent required qty.
+ * Branch Transfer is viable only when every short line can be fully covered
+ * by (current available + other assigned projects).
+ */
+function evaluateBranchTransferViability(stockByLine, crossProjectStock, alreadyCoveredByMaterial = {}) {
+  const otherByMaterial = otherQtyByMaterial(crossProjectStock);
+  const lines = (stockByLine || []).map((s) => {
+    const materialId = String(s.materialId);
+    const requiredQty = Number(s.requestedQty ?? s.requiredQty ?? s.quantityRequested ?? 0);
+    const currentProjectAvailableQty = Math.max(
+      0,
+      Number(s.availableQty ?? s.currentProjectAvailableQty ?? 0)
+    );
+    const otherProjectsAvailableQty = Math.max(0, Number(otherByMaterial.get(materialId) || 0));
+    const alreadyCoveredQty = Math.max(0, Number(alreadyCoveredByMaterial[materialId] || 0));
+    const remainingNeedQty = Math.max(0, requiredQty - alreadyCoveredQty);
+    const combinedAvailableQty = currentProjectAvailableQty + otherProjectsAvailableQty;
+    const shortfallAfterCurrent = Math.max(0, remainingNeedQty - currentProjectAvailableQty);
+    const shortfallAfterCombined = Math.max(0, remainingNeedQty - combinedAvailableQty);
+    return {
+      materialId,
+      materialName: s.materialName,
+      unit: s.unit,
+      requiredQty,
+      currentProjectAvailableQty,
+      otherProjectsAvailableQty,
+      combinedAvailableQty,
+      alreadyCoveredQty,
+      remainingNeedQty,
+      shortfallAfterCurrent,
+      shortfallAfterCombined,
+      branchTransferViable: shortfallAfterCurrent > 0 && shortfallAfterCombined <= 0,
+    };
+  });
+
+  const shortLines = lines.filter((l) => l.shortfallAfterCurrent > 0);
+  return {
+    currentProjectInsufficient: shortLines.length > 0,
+    branchTransferViable:
+      shortLines.length > 0 && shortLines.every((l) => l.shortfallAfterCombined <= 0),
+    lines,
+  };
+}
+
+async function evaluateIndentBranchTransfer(mr, user, stockContext) {
+  if (!user || user.role !== UserRole.PROJECT_MANAGER) {
+    return evaluateBranchTransferViability(stockContext?.stockByLine || [], []);
+  }
+  const cross = await enrichIndentWithCrossProjectStock(mr, user);
+  return evaluateBranchTransferViability(stockContext?.stockByLine || [], cross || []);
+}
+
+/** True when another PM-assigned project has on-hand qty for this indent's materials. */
+async function indentHasOtherProjectStock(mr, user) {
+  const cross = await enrichIndentWithCrossProjectStock(mr, user);
+  return hasPositiveOtherProjectStock(cross);
+}
+
 /** Full stock-on-hand for every material at every project assigned to the PM, grouped by project. */
 async function getAllCrossProjectStock(user, options = {}) {
   if (user.role !== UserRole.PROJECT_MANAGER) return [];
@@ -175,4 +272,9 @@ module.exports = {
   getCrossProjectStockForMaterials,
   enrichIndentWithCrossProjectStock,
   getAllCrossProjectStock,
+  hasPositiveOtherProjectStock,
+  indentHasOtherProjectStock,
+  evaluateBranchTransferViability,
+  evaluateIndentBranchTransfer,
+  coveredQtyByMaterialFromTransfers,
 };

@@ -121,12 +121,12 @@ describe('Indent request type', () => {
       .send({ decision: 'forward', remark: 'Stock short — forward to PM' });
     assert.strictEqual(fwd.status, 200, JSON.stringify(fwd.body));
 
-    // Force a real stock shortfall so PM cannot close at PM level
+    // Force a real stock shortfall with no other-project stock so PM cannot
+    // close locally or branch-transfer — must go to HO.
     const { StockLedger } = require('./models');
-    const { site } = await getSeedContext();
     await StockLedger.updateMany(
-      { siteId: site._id, materialId: material._id },
-      { $set: { quantityOnHand: 0 } }
+      { materialId: material._id },
+      { $set: { quantityOnHand: 0, quantityReserved: 0 } }
     );
 
     const close = await request(app)
