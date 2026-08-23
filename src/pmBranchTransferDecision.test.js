@@ -34,4 +34,30 @@ describe('PM branch-transfer combined-stock formula', () => {
     assert.equal(result.currentProjectInsufficient, false);
     assert.equal(result.branchTransferViable, false);
   });
+
+  it('treats requirement as met when current stock + existing BT cover required qty', () => {
+    // Need 21, current 10, BT already requested 11 → fully covered; do not push HO.
+    const result = evaluateBranchTransferViability(
+      [{ materialId: 'm1', requestedQty: 21, availableQty: 10, materialName: 'Cement' }],
+      [{ materialId: 'm1', projects: [{ availableQty: 50 }] }],
+      { m1: 11 }
+    );
+    assert.equal(result.lines[0].remainingNeedQty, 10);
+    assert.equal(result.lines[0].shortfallAfterCurrent, 0);
+    assert.equal(result.lines[0].shortfallAfterCombined, 0);
+    assert.equal(result.currentProjectInsufficient, false);
+    assert.equal(result.branchTransferViable, false);
+  });
+
+  it('still needs HO when current + BT leave a shortfall', () => {
+    const result = evaluateBranchTransferViability(
+      [{ materialId: 'm1', requestedQty: 21, availableQty: 10 }],
+      [{ materialId: 'm1', projects: [{ availableQty: 50 }] }],
+      { m1: 5 }
+    );
+    assert.equal(result.lines[0].remainingNeedQty, 16);
+    assert.equal(result.lines[0].shortfallAfterCurrent, 6);
+    assert.equal(result.currentProjectInsufficient, true);
+    assert.equal(result.branchTransferViable, true);
+  });
 });

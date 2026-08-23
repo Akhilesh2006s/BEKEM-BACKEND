@@ -179,7 +179,15 @@ async function evaluateIndentBranchTransfer(mr, user, stockContext) {
     return evaluateBranchTransferViability(stockContext?.stockByLine || [], []);
   }
   const cross = await enrichIndentWithCrossProjectStock(mr, user);
-  return evaluateBranchTransferViability(stockContext?.stockByLine || [], cross || []);
+  const { BranchTransfer } = require('../models');
+  const transfers = await BranchTransfer.find({ materialRequestId: mr._id })
+    .select('status items')
+    .lean();
+  return evaluateBranchTransferViability(
+    stockContext?.stockByLine || [],
+    cross || [],
+    coveredQtyByMaterialFromTransfers(transfers)
+  );
 }
 
 /** True when another PM-assigned project has on-hand qty for this indent's materials. */
