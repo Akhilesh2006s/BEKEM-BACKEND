@@ -36,7 +36,6 @@ describe('PM branch-transfer combined-stock formula', () => {
   });
 
   it('treats requirement as met when current stock + existing BT cover required qty', () => {
-    // Need 21, current 10, BT already requested 11 → fully covered; do not push HO.
     const result = evaluateBranchTransferViability(
       [{ materialId: 'm1', requestedQty: 21, availableQty: 10, materialName: 'Cement' }],
       [{ materialId: 'm1', projects: [{ availableQty: 50 }] }],
@@ -49,14 +48,28 @@ describe('PM branch-transfer combined-stock formula', () => {
     assert.equal(result.branchTransferViable, false);
   });
 
-  it('still needs HO when current + BT leave a shortfall', () => {
+  it('is not viable when combined stock cannot cover full indent (63 need, 5 current, 50 other)', () => {
+    const result = evaluateBranchTransferViability(
+      [{ materialId: 'm1', requestedQty: 63, availableQty: 5, materialName: 'Anchor Bolts' }],
+      [{ materialId: 'm1', projects: [{ availableQty: 50 }] }],
+      { m1: 50 }
+    );
+    assert.equal(result.lines[0].requiredQty, 63);
+    assert.equal(result.lines[0].combinedAvailableQty, 55);
+    assert.equal(result.lines[0].shortfallAfterCombined, 8);
+    assert.equal(result.lines[0].shortfallAfterCurrent, 8);
+    assert.equal(result.currentProjectInsufficient, true);
+    assert.equal(result.branchTransferViable, false);
+  });
+
+  it('still allows branch transfer when combined stock covers full indent but BT is partial', () => {
     const result = evaluateBranchTransferViability(
       [{ materialId: 'm1', requestedQty: 21, availableQty: 10 }],
       [{ materialId: 'm1', projects: [{ availableQty: 50 }] }],
       { m1: 5 }
     );
-    assert.equal(result.lines[0].remainingNeedQty, 16);
     assert.equal(result.lines[0].shortfallAfterCurrent, 6);
+    assert.equal(result.lines[0].shortfallAfterCombined, 0);
     assert.equal(result.currentProjectInsufficient, true);
     assert.equal(result.branchTransferViable, true);
   });

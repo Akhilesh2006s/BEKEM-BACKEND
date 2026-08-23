@@ -130,9 +130,9 @@ function coveredQtyByMaterialFromTransfers(transfers) {
 }
 
 /**
- * Combined current-project + other-PM-projects stock vs indent required qty.
- * Branch Transfer is viable only when every short line can be fully covered
- * by (current available + other assigned projects).
+ * Combined current-project + other-PM-projects stock vs full indent required qty.
+ * Branch Transfer is viable only when physical stock across projects can cover
+ * the entire indent quantity (not just the remainder after an existing BT).
  */
 function evaluateBranchTransferViability(stockByLine, crossProjectStock, alreadyCoveredByMaterial = {}) {
   const otherByMaterial = otherQtyByMaterial(crossProjectStock);
@@ -147,8 +147,16 @@ function evaluateBranchTransferViability(stockByLine, crossProjectStock, already
     const alreadyCoveredQty = Math.max(0, Number(alreadyCoveredByMaterial[materialId] || 0));
     const remainingNeedQty = Math.max(0, requiredQty - alreadyCoveredQty);
     const combinedAvailableQty = currentProjectAvailableQty + otherProjectsAvailableQty;
-    const shortfallAfterCurrent = Math.max(0, remainingNeedQty - currentProjectAvailableQty);
-    const shortfallAfterCombined = Math.max(0, remainingNeedQty - combinedAvailableQty);
+    /** Still uncovered after current site stock + existing branch transfers. */
+    const shortfallAfterCurrent = Math.max(
+      0,
+      requiredQty - currentProjectAvailableQty - alreadyCoveredQty
+    );
+    /** Gap vs full indent after combining all project stock (current + other projects). */
+    const shortfallAfterCombined = Math.max(0, requiredQty - combinedAvailableQty);
+    const fulfilledByCurrentAndBt =
+      currentProjectAvailableQty + alreadyCoveredQty >= requiredQty;
+    const canCoverViaCombinedStock = combinedAvailableQty >= requiredQty;
     return {
       materialId,
       materialName: s.materialName,
@@ -161,15 +169,21 @@ function evaluateBranchTransferViability(stockByLine, crossProjectStock, already
       remainingNeedQty,
       shortfallAfterCurrent,
       shortfallAfterCombined,
-      branchTransferViable: shortfallAfterCurrent > 0 && shortfallAfterCombined <= 0,
+      branchTransferViable:
+        !fulfilledByCurrentAndBt &&
+        currentProjectAvailableQty < requiredQty &&
+        canCoverViaCombinedStock,
     };
   });
 
-  const shortLines = lines.filter((l) => l.shortfallAfterCurrent > 0);
+  const unfulfilledLines = lines.filter(
+    (l) => l.currentProjectAvailableQty + l.alreadyCoveredQty < l.requiredQty
+  );
   return {
-    currentProjectInsufficient: shortLines.length > 0,
+    currentProjectInsufficient: unfulfilledLines.length > 0,
     branchTransferViable:
-      shortLines.length > 0 && shortLines.every((l) => l.shortfallAfterCombined <= 0),
+      unfulfilledLines.length > 0 &&
+      unfulfilledLines.every((l) => l.combinedAvailableQty >= l.requiredQty),
     lines,
   };
 }
