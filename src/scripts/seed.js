@@ -37,6 +37,8 @@ const USERS = [
   { name: 'Ravi Kumar', email: 'request@bekem.com', role: 'SITE_INCHARGE', avatarColor: '#1A4FA0' },
   { name: 'Suresh Patel', email: 'storeincharge@bekem.com', role: 'STORE_INCHARGE', avatarColor: '#2563EB' },
   { name: 'Priya Sharma', email: 'pm@bekem.com', role: 'PROJECT_MANAGER', avatarColor: '#1E5BB8' },
+  /** Second PM on other projects — needed for real branch-transfer source vs destination. */
+  { name: 'Karthik Rao', email: 'pm2@bekem.com', role: 'PROJECT_MANAGER', avatarColor: '#0F766E' },
   { name: 'Anil Mehta', email: 'executive@bekem.com', role: 'EXECUTIVE', avatarColor: '#153E7A' },
   { name: 'Neha Gupta', email: 'coordinator@bekem.com', role: 'COORDINATOR', avatarColor: '#0D9488' },
   { name: 'Rajesh Bekem', email: 'chairman@bekem.com', role: 'CHAIRMAN', avatarColor: '#1E3A5F' },
@@ -255,6 +257,8 @@ GST No.: 29AADCB5671Q1ZY`,
   const passwordHash = await bcrypt.hash(DEMO_PASSWORD, 10);
   const userMap = {};
   const allProjectIds = [project._id, project2._id, project3._id];
+  /** Track first PM so second PM gets complementary projects. */
+  let primaryPmAssigned = null;
 
   for (const u of USERS) {
     const data = { ...u, passwordHash, assignedProjectIds: [], assignedSiteId: null };
@@ -267,13 +271,14 @@ GST No.: 29AADCB5671Q1ZY`,
       data.assignedProjectIds = [project._id];
     }
     if (u.role === 'PROJECT_MANAGER') {
-      const count = 2 + Math.floor(Math.random() * 3);
-      const shuffled = [...allProjectIds].sort(() => Math.random() - 0.5);
-      let selected = shuffled.slice(0, count);
-      if (!selected.some((id) => id.equals(project._id))) {
-        selected = [project._id, ...selected.filter((id) => !id.equals(project._id))].slice(0, count);
+      if (!primaryPmAssigned) {
+        // Primary PM (pm@bekem.com): requesting / home project only
+        data.assignedProjectIds = [project._id];
+        primaryPmAssigned = data.assignedProjectIds;
+      } else {
+        // Second PM (pm2@bekem.com): source projects for branch-transfer demos
+        data.assignedProjectIds = [project2._id, project3._id];
       }
-      data.assignedProjectIds = selected;
     }
     if (u.role === 'EXECUTIVE') data.assignedProjectIds = [project._id, project2._id, project3._id];
     if (u.role === 'COORDINATOR') {
@@ -282,7 +287,12 @@ GST No.: 29AADCB5671Q1ZY`,
     }
     if (u.role === 'CHAIRMAN') data.assignedProjectIds = [project._id, project2._id, project3._id];
     const created = await User.create(data);
-    userMap[u.role] = created;
+    // Keep role map for first of each role; also store PM2 explicitly
+    if (u.role === 'PROJECT_MANAGER' && userMap.PROJECT_MANAGER) {
+      userMap.PROJECT_MANAGER_2 = created;
+    } else {
+      userMap[u.role] = created;
+    }
   }
 
   const indentCategories = await IndentCategory.find({ isActive: true }).select('_id');

@@ -17,6 +17,12 @@ async function getPmAssignedProjects(user) {
     .lean();
 }
 
+/** All active company projects except the requesting one — for BT stock visibility. */
+async function getOtherCompanyProjects(excludeProjectId) {
+  const filter = excludeProjectId ? { _id: { $ne: excludeProjectId } } : {};
+  return Project.find(filter).select('name code').sort({ name: 1 }).lean();
+}
+
 async function getCrossProjectStockForMaterials(user, materialIds, options = {}) {
   if (user.role !== UserRole.PROJECT_MANAGER || !materialIds?.length) {
     return [];
@@ -24,10 +30,9 @@ async function getCrossProjectStockForMaterials(user, materialIds, options = {})
 
   const excludeProjectId = options.excludeProjectId ? String(options.excludeProjectId) : '';
 
-  const projects = await getPmAssignedProjects(user);
-  const otherProjects = excludeProjectId
-    ? projects.filter((p) => p._id.toString() !== excludeProjectId)
-    : projects;
+  // Show stock at other company projects (not only PM's own assignments) so a
+  // requesting PM can propose a transfer from another PM's project.
+  const otherProjects = await getOtherCompanyProjects(excludeProjectId);
   if (!otherProjects.length) return [];
 
   const projectIds = otherProjects.map((p) => p._id);

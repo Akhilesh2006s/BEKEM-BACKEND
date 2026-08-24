@@ -146,21 +146,19 @@ async function searchProjects(q, user) {
 async function searchBranchTransferTargets(q, user, { fromProjectId, excludeProjectId } = {}) {
   const term = String(q || '').trim();
   let filter = {};
-  const canSearchAll = [UserRole.EXECUTIVE, UserRole.COORDINATOR, UserRole.CHAIRMAN].includes(
-    user.role
-  );
-  if (canSearchAll) {
-    filter = {};
-  } else if (user.role === UserRole.PROJECT_MANAGER && user.assignedProjectIds?.length) {
-    filter = { _id: { $in: user.assignedProjectIds } };
-  } else if (user.assignedProjectIds?.length) {
-    filter = { _id: { $in: user.assignedProjectIds } };
-  } else {
+  const canSearchCompanyProjects = [
+    UserRole.PROJECT_MANAGER,
+    UserRole.EXECUTIVE,
+    UserRole.COORDINATOR,
+    UserRole.CHAIRMAN,
+  ].includes(user.role);
+  if (!canSearchCompanyProjects) {
     return [];
   }
+  // PMs can request transfer FROM any other company project (source PM dispatches later).
   const exclude = excludeProjectId || fromProjectId;
   if (exclude) {
-    filter._id = { ...(filter._id || {}), $ne: exclude };
+    filter._id = { $ne: exclude };
   }
   if (term.length >= 1) {
     const regex = new RegExp(escapeRegex(term), 'i');

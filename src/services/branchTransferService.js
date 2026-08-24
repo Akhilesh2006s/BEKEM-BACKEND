@@ -226,8 +226,10 @@ async function createIndentLinkedTransfers(user, { materialRequestId, note, sour
     if (usedSites.has(fromSiteId)) {
       return fail(409, 'A branch transfer is already in progress from this site for this indent');
     }
-    if (!userManagesProject(user, fromProjectId)) {
-      return fail(403, 'You do not manage the source project');
+    // Source project may be owned by another PM — requestor only needs destination scope.
+    const sourceProject = await Project.findById(fromProjectId).select('_id');
+    if (!sourceProject) {
+      return fail(400, 'Source project not found');
     }
     if (fromProjectId === toProjectId) {
       return fail(400, 'Source and destination projects must differ');

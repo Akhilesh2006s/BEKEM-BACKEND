@@ -12,6 +12,7 @@
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
     "seed": "node src/scripts/seed.js",
+    "ensure:pm2": "node src/scripts/ensureSecondPm.js",
     "backfill:uat": "node src/scripts/backfillUatData.js",
     "backfill:stock-batches": "node src/scripts/backfillStockBatches.js",
     "backfill:material-prices": "node src/scripts/backfillMaterialReferencePrices.js",

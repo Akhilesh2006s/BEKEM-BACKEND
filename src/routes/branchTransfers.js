@@ -209,10 +209,12 @@ router.post(
               body: { statusCode: 403, message: 'You do not manage the requesting project' },
             };
           }
-          if (!userManagesProject(req.user, fromProjectId)) {
+          // Source may belong to another PM — Executive still approves; source PM dispatches.
+          const sourceExists = await Project.findById(fromProjectId).select('_id');
+          if (!sourceExists) {
             return {
-              statusCode: 403,
-              body: { statusCode: 403, message: 'You do not manage the source project' },
+              statusCode: 400,
+              body: { statusCode: 400, message: 'Source project not found' },
             };
           }
         }
@@ -233,9 +235,6 @@ router.post(
       const { userCanAccessProject } = require('../utils/serialize');
       // Destination must be in PM scope; source may be another company project.
       if (!userCanAccessProject(req.user, toProjectId)) {
-        return { statusCode: 403, body: { statusCode: 403, message: 'Forbidden — project out of scope' } };
-      }
-      if (materialRequestId && !userCanAccessProject(req.user, fromProjectId)) {
         return { statusCode: 403, body: { statusCode: 403, message: 'Forbidden — project out of scope' } };
       }
 

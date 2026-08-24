@@ -41,6 +41,7 @@ Password: `Bekem@Demo2026!`
 | Site Manager | request@bekem.com |
 | Store Manager | storeincharge@bekem.com |
 | Project Manager | pm@bekem.com |
+| Project Manager (other projects) | pm2@bekem.com |
 | Executive | executive@bekem.com |
 | Coordinator | coordinator@bekem.com |
 | Chairman | chairman@bekem.com |
