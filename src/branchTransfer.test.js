@@ -112,31 +112,63 @@ describe('Branch transfer workflow', () => {
       .set('Authorization', `Bearer ${execToken}`)
       .send({ note: 'Approve branch transfer' });
     assert.strictEqual(decideRes.status, 200);
-    assert.strictEqual(decideRes.body.data.status, 'TRANSFERRED');
-    assert.equal(decideRes.body.data.stockUpdated, true);
+    assert.strictEqual(decideRes.body.data.status, 'EXECUTIVE_APPROVED');
+    assert.equal(decideRes.body.data.stockUpdated, false);
 
-    const transfer = await BranchTransfer.findById(transferId);
-    assert.strictEqual(transfer.status, 'TRANSFERRED');
-    assert.ok(transfer.transferredAt);
+    let transfer = await BranchTransfer.findById(transferId);
+    assert.strictEqual(transfer.status, 'EXECUTIVE_APPROVED');
 
-    const sourceAfter = await StockLedger.findOne({
+    // Source not deducted yet
+    let sourceMid = await StockLedger.findOne({
       siteId: sourceSite._id,
       materialId: material._id,
     });
+    assert.strictEqual(sourceMid.quantityOnHand, sourceReady.quantityOnHand);
+
+    const dispatchRes = await request(app)
+      .post(`/api/branch-transfers/${transferId}/dispatch`)
+      .set('Authorization', `Bearer ${pmToken}`)
+      .send({
+        challanNo: 'CH/TEST/001',
+        expectedArrivalDate: new Date(Date.now() + 86400000).toISOString(),
+        dispatchNote: 'Leaving tonight',
+      });
+    assert.strictEqual(dispatchRes.status, 200, JSON.stringify(dispatchRes.body));
+    assert.strictEqual(dispatchRes.body.data.status, 'DISPATCHED');
+
+    sourceMid = await StockLedger.findOne({
+      siteId: sourceSite._id,
+      materialId: material._id,
+    });
+    assert.strictEqual(sourceMid.quantityOnHand, sourceReady.quantityOnHand - qty);
+
+    const receiveRes = await request(app)
+      .post(`/api/branch-transfers/${transferId}/receive`)
+      .set('Authorization', `Bearer ${pmToken}`)
+      .send({
+        items: [{ materialId: material._id.toString(), quantity: qty }],
+      });
+    assert.strictEqual(receiveRes.status, 200, JSON.stringify(receiveRes.body));
+    assert.strictEqual(receiveRes.body.data.status, 'TRANSFERRED');
+    assert.ok(receiveRes.body.grn?.grnNumber);
+
+    transfer = await BranchTransfer.findById(transferId);
+    assert.strictEqual(transfer.status, 'TRANSFERRED');
+    assert.ok(transfer.transferredAt);
+    assert.ok(transfer.receiptGrnIds?.length >= 1);
+
     const destAfter = await StockLedger.findOne({
       siteId: destSite._id,
       materialId: material._id,
     });
-    assert.strictEqual(sourceAfter.quantityOnHand, sourceReady.quantityOnHand - qty);
     assert.strictEqual(destAfter.quantityOnHand, (destReady?.quantityOnHand || 0) + qty);
 
     const executeRes = await request(app)
       .post(`/api/branch-transfers/${transferId}/execute`)
       .set('Authorization', `Bearer ${coordinatorToken}`)
       .send({});
-    assert.strictEqual(executeRes.status, 200);
-    assert.strictEqual(executeRes.body.data.status, 'TRANSFERRED');
-
+    // Already transferred — execute should not apply again as COORDINATOR_DECIDED
+    assert.ok([200, 400].includes(executeRes.status));
   });
 
   it('store cannot initiate branch transfers', async () => {

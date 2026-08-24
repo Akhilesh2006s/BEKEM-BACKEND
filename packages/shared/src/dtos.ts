@@ -1462,6 +1462,16 @@ export interface BranchTransferItemDto {
   materialName?: string;
   quantity: number;
   quantityReceived?: number;
+  quantityRemaining?: number;
+}
+
+export interface BranchTransferReceiptGrnDto {
+  id: string;
+  grnNumber: string;
+  challanNo?: string;
+  receivedAt?: string | null;
+  receivedQuantity?: number;
+  status?: string;
 }
 
 export interface BranchTransferDto {
@@ -1484,8 +1494,17 @@ export interface BranchTransferDto {
   items?: BranchTransferItemDto[];
   note?: string;
   rejectionNote?: string;
+  challanNo?: string;
+  expectedArrivalDate?: string | null;
+  dispatchNote?: string;
+  dispatchedAt?: string | null;
+  dispatchedBy?: string;
+  receiptGrnIds?: string[];
+  receiptGrns?: BranchTransferReceiptGrnDto[];
   requestedBy?: string;
   requestedByUserId?: string;
+  executiveApprovedBy?: string;
+  executiveApprovedAt?: string;
   pmApprovedBy?: string;
   pmApprovedAt?: string;
   coordinatorDecidedBy?: string;
@@ -1499,6 +1518,8 @@ export interface BranchTransferDto {
   canExecutiveApprove?: boolean;
   canExecutiveReject?: boolean;
   canExecute?: boolean;
+  canSourceDispatch?: boolean;
+  canReceive?: boolean;
 }
 
 export interface CreateBranchTransferDto {

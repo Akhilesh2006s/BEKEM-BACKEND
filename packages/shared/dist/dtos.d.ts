@@ -543,6 +543,28 @@ export interface MaterialRequestDto {
             }>;
         }>;
     }>;
+    /** Combined current-project + other-PM-projects stock vs indent required qty. */
+    pmStockDecision?: PmStockDecisionDto;
+}
+export interface PmStockDecisionLineDto {
+    materialId: string;
+    materialName?: string;
+    unit?: string;
+    requiredQty: number;
+    currentProjectAvailableQty: number;
+    otherProjectsAvailableQty: number;
+    combinedAvailableQty: number;
+    alreadyCoveredQty: number;
+    remainingNeedQty: number;
+    shortfallAfterCurrent: number;
+    shortfallAfterCombined: number;
+    branchTransferViable: boolean;
+}
+export interface PmStockDecisionDto {
+    currentProjectInsufficient: boolean;
+    /** True when every short line can be fully covered by current + other PM projects. */
+    branchTransferViable: boolean;
+    lines: PmStockDecisionLineDto[];
 }
 export interface PmDailyCapDto {
     /** Org-timezone calendar day (YYYY-MM-DD) this total applies to. */
@@ -1391,6 +1413,15 @@ export interface BranchTransferItemDto {
     materialName?: string;
     quantity: number;
     quantityReceived?: number;
+    quantityRemaining?: number;
+}
+export interface BranchTransferReceiptGrnDto {
+    id: string;
+    grnNumber: string;
+    challanNo?: string;
+    receivedAt?: string | null;
+    receivedQuantity?: number;
+    status?: string;
 }
 export interface BranchTransferDto {
     id: string;
@@ -1412,8 +1443,17 @@ export interface BranchTransferDto {
     items?: BranchTransferItemDto[];
     note?: string;
     rejectionNote?: string;
+    challanNo?: string;
+    expectedArrivalDate?: string | null;
+    dispatchNote?: string;
+    dispatchedAt?: string | null;
+    dispatchedBy?: string;
+    receiptGrnIds?: string[];
+    receiptGrns?: BranchTransferReceiptGrnDto[];
     requestedBy?: string;
     requestedByUserId?: string;
+    executiveApprovedBy?: string;
+    executiveApprovedAt?: string;
     pmApprovedBy?: string;
     pmApprovedAt?: string;
     coordinatorDecidedBy?: string;
@@ -1427,6 +1467,8 @@ export interface BranchTransferDto {
     canExecutiveApprove?: boolean;
     canExecutiveReject?: boolean;
     canExecute?: boolean;
+    canSourceDispatch?: boolean;
+    canReceive?: boolean;
 }
 export interface CreateBranchTransferDto {
     fromProjectId: string;

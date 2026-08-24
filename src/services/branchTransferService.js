@@ -42,12 +42,29 @@ function serializeTransferRow(t) {
       materialId: item.materialId?._id?.toString() || item.materialId?.toString(),
       materialName: item.materialId?.name,
       quantity: item.quantity,
-      quantityReceived: item.quantityReceived,
+      quantityReceived: item.quantityReceived || 0,
+      quantityRemaining: Math.max(0, Number(item.quantity || 0) - Number(item.quantityReceived || 0)),
     })),
     note: t.note,
     rejectionNote: t.rejectionNote || '',
+    challanNo: t.challanNo || '',
+    expectedArrivalDate: t.expectedArrivalDate?.toISOString?.() || null,
+    dispatchNote: t.dispatchNote || '',
+    dispatchedAt: t.dispatchedAt?.toISOString?.() || null,
+    dispatchedBy: t.dispatchedByUserId?.name,
+    receiptGrnIds: (t.receiptGrnIds || []).map((id) => id.toString()),
+    receiptGrns: (t.receiptGrns || []).map((g) => ({
+      id: g._id.toString(),
+      grnNumber: g.grnNumber,
+      challanNo: g.challanNo || '',
+      receivedAt: g.receivedAt?.toISOString?.() || g.createdAt?.toISOString?.(),
+      receivedQuantity: g.receivedQuantity || 0,
+      status: g.status,
+    })),
     requestedBy: t.requestedByUserId?.name,
     requestedByUserId: t.requestedByUserId?._id?.toString() || t.requestedByUserId?.toString(),
+    executiveApprovedBy: t.executiveApprovedByUserId?.name,
+    executiveApprovedAt: t.executiveApprovedAt?.toISOString?.(),
     pmApprovedBy: t.pmApprovedByUserId?.name,
     pmApprovedAt: t.pmApprovedAt?.toISOString?.(),
     coordinatorDecidedBy: t.coordinatorDecidedByUserId?.name,
@@ -66,6 +83,8 @@ function transferActionFlags(t, user) {
     canCoordinatorDecide: false,
     canCoordinatorReject: false,
     canExecute: false,
+    canSourceDispatch: false,
+    canReceive: false,
   };
 
   if (user.role === UserRole.EXECUTIVE && t.status === 'REQUESTED') {
@@ -79,10 +98,27 @@ function transferActionFlags(t, user) {
 
   if (
     user.role === UserRole.COORDINATOR &&
-    t.status === 'COORDINATOR_DECIDED' &&
+    (t.status === 'COORDINATOR_DECIDED' || t.status === 'EXECUTIVE_APPROVED') &&
     t.coordinatorDecision === 'transfer'
   ) {
-    flags.canExecute = true;
+    // Legacy one-shot execute still available for coordinator if needed
+    flags.canExecute = t.status === 'COORDINATOR_DECIDED';
+  }
+
+  if (
+    user.role === UserRole.PROJECT_MANAGER &&
+    t.status === 'EXECUTIVE_APPROVED' &&
+    userManagesProject(user, t.fromProjectId?._id || t.fromProjectId)
+  ) {
+    flags.canSourceDispatch = true;
+  }
+
+  if (
+    user.role === UserRole.PROJECT_MANAGER &&
+    ['DISPATCHED', 'PARTIALLY_RECEIVED'].includes(t.status) &&
+    userManagesProject(user, t.toProjectId?._id || t.toProjectId)
+  ) {
+    flags.canReceive = true;
   }
 
   return flags;

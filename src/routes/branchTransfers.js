@@ -9,7 +9,7 @@ const { assertCanAccessBranchTransfer } = require('../middleware/projectScope');
 const { generateTransferNumber } = require('../services/documentNumberService');
 const notificationService = require('../services/notificationService');
 const statusHistoryService = require('../services/statusHistoryService');
-const { executeBranchTransfer } = require('../services/branchTransferExecutionService');
+const { executeBranchTransfer, dispatchBranchTransfer, receiveBranchTransfer } = require('../services/branchTransferExecutionService');
 const {
   getProjectManagers,
   userManagesProject,
@@ -22,26 +22,39 @@ const { handleIdempotent } = require('../utils/idempotentHandler');
 
 const COORDINATOR_DECIDED_BT = ['COORDINATOR_DECIDED', 'RAISE_PO_INSTEAD', 'TRANSFERRED'];
 
-async function btResponse(transferId) {
-  const populated = await BranchTransfer.findById(transferId).populate(transferPopulate);
-  return { statusCode: 200, body: { data: serializeTransferRow(populated) } };
+async function btResponse(transferId, user) {
+  const populated = await BranchTransfer.findById(transferId)
+    .populate(transferPopulate)
+    .populate('receiptGrnIds', 'grnNumber challanNo receivedAt receivedQuantity status createdAt');
+  const row = serializeTransferRow({
+    ...populated.toObject(),
+    receiptGrns: populated.receiptGrnIds,
+  });
+  return {
+    statusCode: 200,
+    body: { data: { ...row, ...transferActionFlags(populated, user) } },
+  };
 }
 
 const router = express.Router();
 router.use(authenticate);
 
 const transferPopulate =
-  'fromProjectId toProjectId fromSiteId toSiteId items.materialId requestedByUserId pmApprovedByUserId coordinatorDecidedByUserId executedByUserId rejectedByUserId materialRequestId';
+  'fromProjectId toProjectId fromSiteId toSiteId items.materialId requestedByUserId pmApprovedByUserId coordinatorDecidedByUserId executedByUserId rejectedByUserId materialRequestId dispatchedByUserId executiveApprovedByUserId';
 
 async function loadTransfer(req, res, next) {
   try {
-    const t = await BranchTransfer.findById(req.params.id).populate(transferPopulate);
+    const t = await BranchTransfer.findById(req.params.id)
+      .populate(transferPopulate)
+      .populate('receiptGrnIds', 'grnNumber challanNo receivedAt receivedQuantity status createdAt');
     if (!t) return res.status(404).json({ statusCode: 404, message: 'Not found' });
     assertCanAccessBranchTransfer(req.user, t);
     req.branchTransfer = t;
     next();
   } catch (err) {
-    if (err.statusCode) return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
+    if (err.statusCode) {
+      return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
+    }
     next(err);
   }
 }
@@ -103,9 +116,13 @@ router.get('/', async (req, res, next) => {
 
 router.get('/:id', param('id').isMongoId(), validate, loadTransfer, async (req, res, next) => {
   try {
-    const row = serializeTransferRow(req.branchTransfer);
+    const t = req.branchTransfer;
+    const row = serializeTransferRow({
+      ...t.toObject(),
+      receiptGrns: t.receiptGrnIds,
+    });
     res.json({
-      data: { ...row, ...transferActionFlags(req.branchTransfer, req.user) },
+      data: { ...row, ...transferActionFlags(t, req.user) },
     });
   } catch (err) {
     next(err);
@@ -438,9 +455,9 @@ router.post(
   async (req, res, next) => {
     try {
       const transfer = req.branchTransfer;
-      if (transfer.status === 'TRANSFERRED') {
+      if (transfer.status === 'EXECUTIVE_APPROVED' || transfer.status === 'DISPATCHED' || transfer.status === 'TRANSFERRED') {
         return res.json({
-          data: { id: transfer._id.toString(), status: transfer.status, stockUpdated: true },
+          data: { id: transfer._id.toString(), status: transfer.status, stockUpdated: false },
         });
       }
       if (transfer.status !== 'REQUESTED') {
@@ -448,14 +465,103 @@ router.post(
       }
 
       const fromStatus = transfer.status;
+      transfer.status = 'EXECUTIVE_APPROVED';
       transfer.coordinatorDecision = 'transfer';
+      transfer.executiveApprovedByUserId = req.user._id;
+      transfer.executiveApprovedAt = new Date();
       transfer.pmApprovedByUserId = req.user._id;
       transfer.pmApprovedAt = new Date();
       transfer.coordinatorDecidedByUserId = req.user._id;
       transfer.coordinatorDecidedAt = new Date();
+      if (req.body.note?.trim()) transfer.note = req.body.note.trim();
+      await transfer.save();
 
+      await statusHistoryService.record(
+        'BranchTransfer',
+        transfer._id,
+        fromStatus,
+        'EXECUTIVE_APPROVED',
+        req.user._id,
+        req.body.note?.trim() ||
+          'Executive approved — source Project Manager must dispatch with challan and expected arrival'
+      );
+
+      const fromProjectId = transfer.fromProjectId?._id || transfer.fromProjectId;
+      const toProjectId = transfer.toProjectId?._id || transfer.toProjectId;
+      const sourcePms = await getProjectManagers(fromProjectId);
+      for (const pm of sourcePms) {
+        await notificationService.notifyUser(pm._id, {
+          title: 'Dispatch branch transfer',
+          body: `${transfer.transferNumber}: Executive approved. Confirm challan no. and expected arrival, then dispatch stock.`,
+          relatedEntityType: 'BranchTransfer',
+          relatedEntityId: transfer._id,
+        });
+      }
+      const requesterId = transfer.requestedByUserId?._id || transfer.requestedByUserId;
+      if (requesterId) {
+        await notificationService.notifyUser(requesterId, {
+          title: 'Branch transfer approved by Executive',
+          body: `${transfer.transferNumber}: awaiting source project dispatch (challan / ETA).`,
+          relatedEntityType: 'BranchTransfer',
+          relatedEntityId: transfer._id,
+        });
+      }
+      const destPms = await getProjectManagers(toProjectId);
+      for (const pm of destPms) {
+        if (requesterId && pm._id.toString() === requesterId.toString()) continue;
+        await notificationService.notifyUser(pm._id, {
+          title: 'Branch transfer approved',
+          body: `${transfer.transferNumber}: source PM will dispatch; you will receive and post GRN after arrival.`,
+          relatedEntityType: 'BranchTransfer',
+          relatedEntityId: transfer._id,
+        });
+      }
+
+      res.json({
+        data: { id: transfer._id.toString(), status: transfer.status, stockUpdated: false },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+router.post(
+  '/:id/dispatch',
+  [
+    param('id').isMongoId(),
+    body('challanNo').trim().notEmpty().withMessage('Challan number is required'),
+    body('expectedArrivalDate').isISO8601().withMessage('Expected arrival date is required'),
+    body('dispatchNote').optional().trim(),
+  ],
+  validate,
+  loadTransfer,
+  async (req, res, next) => {
+    try {
+      const transfer = req.branchTransfer;
+      if (req.user.role !== UserRole.PROJECT_MANAGER) {
+        return res.status(403).json({ statusCode: 403, message: 'Only Project Managers can dispatch' });
+      }
+      if (transfer.status !== 'EXECUTIVE_APPROVED') {
+        return res.status(400).json({
+          statusCode: 400,
+          message: 'Transfer must be Executive-approved before source PM dispatch',
+        });
+      }
+      if (!userManagesProject(req.user, transfer.fromProjectId?._id || transfer.fromProjectId)) {
+        return res.status(403).json({
+          statusCode: 403,
+          message: 'Only the source project PM can dispatch this transfer',
+        });
+      }
+
+      const fromStatus = transfer.status;
       try {
-        await executeBranchTransfer(transfer, req.user._id);
+        await dispatchBranchTransfer(transfer, req.user._id, {
+          challanNo: req.body.challanNo,
+          expectedArrivalDate: req.body.expectedArrivalDate,
+          dispatchNote: req.body.dispatchNote,
+        });
       } catch (execErr) {
         if (execErr.statusCode) {
           return res.status(execErr.statusCode).json({
@@ -470,34 +576,112 @@ router.post(
         'BranchTransfer',
         transfer._id,
         fromStatus,
-        'TRANSFERRED',
+        'DISPATCHED',
         req.user._id,
-        req.body.note?.trim() ||
-          'Executive approved branch transfer — stock deducted at source project(s) and added to the requesting project'
+        `Dispatched — challan ${req.body.challanNo}, expected ${req.body.expectedArrivalDate}${
+          req.body.dispatchNote ? ` · ${req.body.dispatchNote}` : ''
+        }`
       );
 
-      const requesterId = transfer.requestedByUserId?._id || transfer.requestedByUserId;
-      if (requesterId) {
-        await notificationService.notifyUser(requesterId, {
-          title: 'Branch transfer approved — stock updated',
-          body: `${transfer.transferNumber}: Executive approved. Source project stock deducted and requesting project stock increased.`,
+      const toProjectId = transfer.toProjectId?._id || transfer.toProjectId;
+      const destPms = await getProjectManagers(toProjectId);
+      for (const pm of destPms) {
+        await notificationService.notifyUser(pm._id, {
+          title: 'Branch transfer dispatched — await receipt',
+          body: `${transfer.transferNumber}: challan ${req.body.challanNo}. Submit receipt / GRN when material arrives.`,
           relatedEntityType: 'BranchTransfer',
           relatedEntityId: transfer._id,
         });
       }
 
-      const coordinators = await require('../models').User.find({ role: UserRole.COORDINATOR });
-      for (const c of coordinators) {
-        await notificationService.notifyUser(c._id, {
-          title: 'Branch transfer completed',
-          body: `${transfer.transferNumber} approved by Executive — stock has been moved between projects.`,
+      const payload = await btResponse(transfer._id, req.user);
+      res.json(payload.body);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+router.post(
+  '/:id/receive',
+  [
+    param('id').isMongoId(),
+    body('challanNo').optional().trim(),
+    body('note').optional().trim(),
+    body('deliveryDate').optional().isISO8601(),
+    body('items').optional().isArray(),
+    body('items.*.materialId').optional().isMongoId(),
+    body('items.*.quantity').optional().isFloat({ gt: 0 }),
+  ],
+  validate,
+  loadTransfer,
+  async (req, res, next) => {
+    try {
+      const transfer = req.branchTransfer;
+      if (req.user.role !== UserRole.PROJECT_MANAGER) {
+        return res.status(403).json({ statusCode: 403, message: 'Only Project Managers can receive' });
+      }
+      if (!['DISPATCHED', 'PARTIALLY_RECEIVED'].includes(transfer.status)) {
+        return res.status(400).json({
+          statusCode: 400,
+          message: 'Transfer must be dispatched before receipt',
+        });
+      }
+      if (!userManagesProject(req.user, transfer.toProjectId?._id || transfer.toProjectId)) {
+        return res.status(403).json({
+          statusCode: 403,
+          message: 'Only the requesting project PM can submit receipt',
+        });
+      }
+
+      const fromStatus = transfer.status;
+      let result;
+      try {
+        result = await receiveBranchTransfer(transfer, req.user._id, {
+          challanNo: req.body.challanNo,
+          note: req.body.note,
+          deliveryDate: req.body.deliveryDate,
+          items: req.body.items,
+        });
+      } catch (execErr) {
+        if (execErr.statusCode) {
+          return res.status(execErr.statusCode).json({
+            statusCode: execErr.statusCode,
+            message: execErr.message,
+          });
+        }
+        throw execErr;
+      }
+
+      await statusHistoryService.record(
+        'BranchTransfer',
+        transfer._id,
+        fromStatus,
+        result.transfer.status,
+        req.user._id,
+        `Receipt posted — GRN ${result.grn.grnNumber}${
+          result.transfer.status === 'PARTIALLY_RECEIVED' ? ' (partial)' : ' (complete)'
+        }`
+      );
+
+      const fromProjectId = transfer.fromProjectId?._id || transfer.fromProjectId;
+      const sourcePms = await getProjectManagers(fromProjectId);
+      for (const pm of sourcePms) {
+        await notificationService.notifyUser(pm._id, {
+          title: 'Branch transfer receipt recorded',
+          body: `${transfer.transferNumber}: GRN ${result.grn.grnNumber} created at destination.`,
           relatedEntityType: 'BranchTransfer',
           relatedEntityId: transfer._id,
         });
       }
 
+      const payload = await btResponse(transfer._id, req.user);
       res.json({
-        data: { id: transfer._id.toString(), status: transfer.status, stockUpdated: true },
+        ...payload.body,
+        grn: {
+          id: result.grn._id.toString(),
+          grnNumber: result.grn.grnNumber,
+        },
       });
     } catch (err) {
       next(err);

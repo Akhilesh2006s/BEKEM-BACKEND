@@ -81,6 +81,9 @@ var WorkOrderStatus;
 var BranchTransferStatus;
 (function (BranchTransferStatus) {
     BranchTransferStatus["REQUESTED"] = "REQUESTED";
+    BranchTransferStatus["EXECUTIVE_APPROVED"] = "EXECUTIVE_APPROVED";
+    BranchTransferStatus["DISPATCHED"] = "DISPATCHED";
+    BranchTransferStatus["PARTIALLY_RECEIVED"] = "PARTIALLY_RECEIVED";
     BranchTransferStatus["PM_APPROVED"] = "PM_APPROVED";
     BranchTransferStatus["COORDINATOR_DECIDED"] = "COORDINATOR_DECIDED";
     BranchTransferStatus["TRANSFERRED"] = "TRANSFERRED";

@@ -31,9 +31,12 @@ const grnAttachmentSchema = new mongoose.Schema(
 const grnSchema = new mongoose.Schema(
   {
     grnNumber: { type: String, required: true },
-    purchaseOrderId: { type: mongoose.Schema.Types.ObjectId, ref: 'PurchaseOrder', required: true },
+    purchaseOrderId: { type: mongoose.Schema.Types.ObjectId, ref: 'PurchaseOrder', default: null },
+    /** Inter-project branch transfer receipt (no PO). */
+    branchTransferId: { type: mongoose.Schema.Types.ObjectId, ref: 'BranchTransfer', default: null },
     /** Denormalized traceability (Req 45) — also resolvable via PO → PR → Indent. */
     poNumber: { type: String, default: '' },
+    transferNumber: { type: String, default: '' },
     indentNumber: { type: String, default: '' },
     vendorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Vendor', default: null },
     vendorName: { type: String, default: '' },
@@ -69,7 +72,9 @@ const grnSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-grnSchema.index({ purchaseOrderId: 1, grnNumber: 1 }, { unique: true });
+grnSchema.index({ purchaseOrderId: 1, grnNumber: 1 }, { unique: true, sparse: true });
+grnSchema.index({ branchTransferId: 1, grnNumber: 1 }, { unique: true, sparse: true });
+grnSchema.index({ grnNumber: 1 }, { unique: true });
 
 module.exports = mongoose.model('GoodsReceiptNote', grnSchema);
 module.exports.GRN_STATUSES = GRN_STATUSES;
