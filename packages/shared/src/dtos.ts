@@ -399,6 +399,8 @@ export interface IndentLineItemDto {
   quantityReceived?: number;
   /** Qty that can be issued now against this indent (remaining request ∩ site stock / GRN). */
   availableToIssueQty?: number;
+  /** Requested minus already issued. */
+  remainingToIssueQty?: number;
   /** Qty still needing inbound receipt after site stock and prior issues. */
   pendingReceiptQty?: number;
   /** Individual GRN receipt quantities and dates for this indent line. */
@@ -541,6 +543,21 @@ export interface MaterialRequestDto {
       materialId: string;
       materialName: string;
       quantityReceived: number;
+      unit?: string;
+    }>;
+  }>;
+  /** Per issue-slip history against this indent (partial issues listed separately). */
+  issues?: Array<{
+    id: string;
+    issueNumber: string;
+    status: string;
+    issuedAt: string | null;
+    issuedToName?: string;
+    issuedByName?: string;
+    items: Array<{
+      materialId: string;
+      materialName: string;
+      quantityIssued: number;
       unit?: string;
     }>;
   }>;

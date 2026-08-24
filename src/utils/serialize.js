@@ -34,7 +34,7 @@ function userCanAccessSite(user, siteId) {
   return false;
 }
 
-/** Store Manager may access the site on their one assigned project. */
+/** Store managers with multiple projects may access any site under those projects. */
 async function userCanAccessSiteAsync(user, siteId) {
   if (userCanAccessSite(user, siteId)) return true;
   if (user.role !== UserRole.STORE_INCHARGE || !user.assignedProjectIds?.length) return false;
@@ -105,6 +105,7 @@ function serializeLineItem(item, stockFields, pricingFields) {
     base.requiredQty = stockFields.requiredQty;
     base.quantityReceived = stockFields.quantityReceived;
     base.availableToIssueQty = stockFields.availableToIssueQty;
+    base.remainingToIssueQty = stockFields.remainingToIssueQty;
     base.pendingReceiptQty = stockFields.pendingReceiptQty;
     base.receipts = (stockFields.receipts || []).map((receipt) => ({
       quantity: receipt.quantity,
@@ -203,20 +204,9 @@ function serializeMaterialRequest(mr, stockContext, pricingContext) {
     requestedByUserId: resolveId(mr.requestedByUserId),
     status: mr.status,
     pendingWith: mr.pendingWithRole || pendingWithLabel(mr.status),
-    allocatedByRole: mr.allocatedByRole || null,
     estimatedValue: (pricingContext?.totalEstimatedValue ?? mr.estimatedValue) || 0,
     escalatedToHo: !!mr.escalatedToHo,
-    escalatedToChairman: !!mr.escalatedToChairman,
-    pmProceededAllocation: !!mr.pmProceededAllocation,
-    allocationReviewStage: mr.allocationReviewStage || null,
     storeStockVerified: !!mr.storeStockVerified,
-    storeStockReceivedAt: mr.storeStockReceivedAt?.toISOString?.() || mr.storeStockReceivedAt || null,
-    storeStockReceivedAttachments: (mr.storeStockReceivedAttachments || []).map((a) => ({
-      name: a.name,
-      fileType: a.fileType,
-      category: a.category,
-      url: a.url || '',
-    })),
     origin: mr.origin || 'SITE',
     indentRequestType: mr.indentRequestType || 'ABOVE_5000',
     indentCategoryId: resolveId(mr.indentCategoryId) || undefined,
@@ -227,15 +217,15 @@ function serializeMaterialRequest(mr, stockContext, pricingContext) {
   };
 
   if (firstMat?.name) base.material = serializeMaterial(firstMat);
-  if (mr.siteId?.name) {
+  if (mr.siteId?.chainageLabel) {
     base.site = {
       id: mr.siteId._id.toString(),
       projectId: resolveId(mr.siteId.projectId),
       name: mr.siteId.name,
-      chainageLabel: mr.siteId.chainageLabel || '',
+      chainageLabel: mr.siteId.chainageLabel,
     };
   }
-  if (mr.projectId?.name || mr.projectId?.code) {
+  if (mr.projectId?.code) {
     base.project = {
       id: mr.projectId._id.toString(),
       code: mr.projectId.code,
@@ -295,16 +285,7 @@ async function serializeMaterialRequestEnriched(mr, viewerRole, options = {}) {
   data.approverNames = deriveApproverNamesFromHistory(history);
 
   if (options.includeGrns) {
-    const { BranchTransfer } = require('../models');
-    const { serializeTransferRow } = require('../services/branchTransferService');
-    const linkedTransfers = await BranchTransfer.find({ materialRequestId: mr._id })
-      .sort({ createdAt: 1 })
-      .populate(
-        'fromProjectId toProjectId fromSiteId toSiteId items.materialId requestedByUserId'
-      );
-    data.linkedBranchTransfers = linkedTransfers.map(serializeTransferRow);
-
-    const { GoodsReceiptNote, PurchaseRequest, PurchaseOrder } = require('../models');
+    const { GoodsReceiptNote, PurchaseRequest, PurchaseOrder, MaterialIssue } = require('../models');
     const purchaseRequest = await PurchaseRequest.findOne({ materialRequestId: mr._id })
       .select('_id')
       .lean();
@@ -322,11 +303,18 @@ async function serializeMaterialRequestEnriched(mr, viewerRole, options = {}) {
           ],
         }
       : { indentNumber: mr.indentNumber };
-    const grns = await GoodsReceiptNote.find(grnFilter)
-      .sort({ receivedAt: 1 })
-      .populate('items.materialId', 'name unit')
-      .populate('purchaseOrderId', 'lineItems')
-      .lean();
+    const [grns, issues] = await Promise.all([
+      GoodsReceiptNote.find(grnFilter)
+        .sort({ receivedAt: 1 })
+        .populate('items.materialId', 'name unit')
+        .populate('purchaseOrderId', 'lineItems')
+        .lean(),
+      MaterialIssue.find({ materialRequestId: mr._id })
+        .sort({ issuedAt: 1, createdAt: 1 })
+        .populate('items.materialId', 'name unit')
+        .populate('issuedByUserId', 'name')
+        .lean(),
+    ]);
     data.grns = grns.map((grn) => ({
       id: grn._id.toString(),
       grnNumber: grn.grnNumber,
@@ -349,14 +337,24 @@ async function serializeMaterialRequestEnriched(mr, viewerRole, options = {}) {
         };
       }),
     }));
+    data.issues = issues.map((issue) => ({
+      id: issue._id.toString(),
+      issueNumber: issue.issueNumber,
+      status: issue.status,
+      issuedAt: issue.issuedAt?.toISOString?.() || issue.createdAt?.toISOString?.() || null,
+      issuedToName: issue.issuedToName || '',
+      issuedByName: issue.issuedByUserId?.name || '',
+      items: (issue.items || []).map((item) => ({
+        materialId: resolveId(item.materialId),
+        materialName: item.materialId?.name || 'Material',
+        quantityIssued: item.quantity || 0,
+        unit: item.materialId?.unit || '',
+      })),
+    }));
   }
 
-  const { resolveAllocationReviewStage } = require('../services/pmProceedAllocationService');
-  const allocationStage = resolveAllocationReviewStage(mr, data.poStatus);
-  if (allocationStage) {
-    data.allocationReviewStage = allocationStage;
-    data.pendingWith = allocationStage;
-  } else if (data.status === 'PO_CREATED') {
+  // Align "who holds it" with the live PO desk when indent is already at PO_CREATED.
+  if (data.status === 'PO_CREATED') {
     const { PurchaseRequest } = require('../models');
     const { resolveLinkedPoApprovalState } = require('../services/linkedPoApprovalState');
     const pr = await PurchaseRequest.findOne({ materialRequestId: mr._id }).select('_id').lean();
@@ -365,9 +363,7 @@ async function serializeMaterialRequestEnriched(mr, viewerRole, options = {}) {
       if (linked?.pendingWithRole) {
         data.pendingWith = linked.pendingWithRole;
       } else if (linked?.poStatus === 'APPROVED') {
-        const stage = resolveAllocationReviewStage(mr, 'APPROVED');
-        data.allocationReviewStage = stage;
-        data.pendingWith = stage || null;
+        data.pendingWith = null;
       }
     }
   }

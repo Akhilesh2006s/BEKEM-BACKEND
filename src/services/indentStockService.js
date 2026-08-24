@@ -35,6 +35,7 @@ function computeLineStockFields(item, ledger, receivedQty = 0, receipts = []) {
     requiredQty,
     quantityReceived,
     availableToIssueQty,
+    remainingToIssueQty: remainingRequest,
     pendingReceiptQty,
     receipts,
   };
