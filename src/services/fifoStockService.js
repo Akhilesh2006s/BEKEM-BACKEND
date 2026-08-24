@@ -152,7 +152,10 @@ async function getStockAging({ siteId } = {}) {
 }
 
 /**
- * Slim inventory: Item Code, Description, Unit, Total Received, Total Issued, Current Balance
+ * Slim inventory: Item Code, Description, Unit,
+ * Opening + Inward − Outward = Current Balance.
+ *
+ * Opening covers seed / ledger stock that never had an INCOMING movement.
  */
 async function getSlimInventory({ siteId } = {}) {
   const mongoose = require('mongoose');
@@ -186,16 +189,20 @@ async function getSlimInventory({ siteId } = {}) {
     .filter((l) => l.materialId)
     .map((l) => {
       const key = `${l.siteId}:${l.materialId._id}`;
-      const totalReceived = recvMap.get(key) || 0;
-      const totalIssued = issMap.get(key) || 0;
+      const totalReceived = Number(recvMap.get(key) || 0);
+      const totalIssued = Number(issMap.get(key) || 0);
+      const currentBalance = Number(l.quantityOnHand || 0);
+      // Ledger may include opening stock with no movement rows.
+      const openingBalance = Math.round((currentBalance - totalReceived + totalIssued) * 1000) / 1000;
       return {
         id: l._id.toString(),
         itemCode: l.materialId.code || '',
         itemDescription: l.materialId.name || '',
         unit: l.materialId.unit || '',
+        openingBalance,
         totalReceived,
         totalIssued,
-        currentBalance: l.quantityOnHand,
+        currentBalance,
       };
     });
 }
