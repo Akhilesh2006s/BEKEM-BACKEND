@@ -224,7 +224,7 @@ router.post(
       );
       if (!mr) return res.status(404).json({ statusCode: 404, message: 'Indent not found' });
 
-      const issueable = ['MATERIAL_RECEIVED', 'CHAIRMAN_APPROVED', 'ALLOCATED', 'ISSUED'];
+      const issueable = ['MATERIAL_RECEIVED', 'CHAIRMAN_APPROVED', 'ALLOCATED', 'ISSUED', 'PARTIALLY_ISSUED'];
       if (!issueable.includes(mr.status)) {
         return res.status(400).json({
           statusCode: 400,
@@ -342,8 +342,11 @@ router.post(
       }
 
       const fromStatus = mr.status;
-      mr.status = 'ISSUED';
-      mr.pendingWithRole = 'SITE_INCHARGE';
+      const fullyIssued = getIndentLineItems(mr).every(
+        (line) => Number(line.quantityIssued || 0) >= Number(line.quantityRequested || 0)
+      );
+      mr.status = fullyIssued ? 'ISSUED' : 'PARTIALLY_ISSUED';
+      mr.pendingWithRole = fullyIssued ? 'SITE_INCHARGE' : 'STORE_INCHARGE';
       await mr.save();
 
       const reasonLabel = reason === 'other' ? req.body.reasonOtherText : reason.replace(/_/g, ' ');
@@ -351,9 +354,9 @@ router.post(
         'MaterialRequest',
         mr._id,
         fromStatus,
-        'ISSUED',
+        mr.status,
         req.user._id,
-        `Materials issued — ${issueNumber}. Reason: ${reasonLabel}`
+        `Materials issued — ${issueNumber}${fullyIssued ? '' : ' (partial)'}. Reason: ${reasonLabel}`
       );
 
       await notificationService.notifyUser(mr.requestedByUserId, {

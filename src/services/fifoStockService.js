@@ -3,44 +3,67 @@ const { StockBatch, StockLedger, StockMovement } = require('../models');
 /**
  * Create FIFO batches from a GRN and sync StockLedger.
  */
-async function createBatchesFromGrn(grn, actorUserId, materialRequestId = null) {
+async function createBatchesFromGrn(grn, actorUserId, materialRequestId = null, options = {}) {
+  const skipLedger = options.skipLedger === true;
+  const sess = options.session || null;
+  const writeOpts = sess ? { session: sess } : undefined;
   const receivedAt = grn.receivedAt || grn.deliveryDate || new Date();
 
   for (const item of grn.items || []) {
     const qty = Number(item.quantityReceived) || 0;
     if (qty <= 0) continue;
 
-    await StockBatch.create({
-      siteId: grn.siteId,
-      materialId: item.materialId,
-      grnId: grn._id,
-      grnNumber: grn.grnNumber || '',
-      receivedAt,
-      qtyReceived: qty,
-      qtyRemaining: qty,
-    });
+    await StockBatch.create(
+      [
+        {
+          siteId: grn.siteId,
+          materialId: item.materialId,
+          grnId: grn._id,
+          grnNumber: grn.grnNumber || '',
+          receivedAt,
+          qtyReceived: qty,
+          qtyRemaining: qty,
+        },
+      ],
+      writeOpts
+    );
 
-    let ledger = await StockLedger.findOne({ siteId: grn.siteId, materialId: item.materialId });
+    if (skipLedger) continue;
+
+    let ledger = await StockLedger.findOne({ siteId: grn.siteId, materialId: item.materialId }).session(
+      sess || null
+    );
     if (!ledger) {
-      ledger = await StockLedger.create({
-        siteId: grn.siteId,
-        materialId: item.materialId,
-        quantityOnHand: 0,
-        lowStockThreshold: 10,
-      });
+      const created = await StockLedger.create(
+        [
+          {
+            siteId: grn.siteId,
+            materialId: item.materialId,
+            quantityOnHand: 0,
+            lowStockThreshold: 10,
+          },
+        ],
+        writeOpts
+      );
+      ledger = created[0];
     }
     ledger.quantityOnHand += qty;
     ledger.lastMovementAt = new Date();
-    await ledger.save();
+    await ledger.save(writeOpts);
 
-    await StockMovement.create({
-      siteId: grn.siteId,
-      materialId: item.materialId,
-      materialRequestId,
-      quantityDelta: qty,
-      type: 'INCOMING',
-      actorUserId,
-    });
+    await StockMovement.create(
+      [
+        {
+          siteId: grn.siteId,
+          materialId: item.materialId,
+          materialRequestId,
+          quantityDelta: qty,
+          type: 'INCOMING',
+          actorUserId,
+        },
+      ],
+      writeOpts
+    );
   }
 }
 
@@ -121,9 +144,14 @@ async function consumeFifo({ siteId, materialId, quantity, actorUserId, material
 /**
  * Aging rows: Item / Batch / GRN / Received Date / Available Qty / Aging Days
  */
-async function getStockAging({ siteId } = {}) {
-  const filter = { qtyRemaining: { $gt: 0 } };
-  if (siteId) filter.siteId = siteId;
+function siteMatch(siteId, siteIds) {
+  if (siteId) return { siteId };
+  if (siteIds?.length) return { siteId: { $in: siteIds } };
+  return {};
+}
+
+async function getStockAging({ siteId, siteIds } = {}) {
+  const filter = { qtyRemaining: { $gt: 0 }, ...siteMatch(siteId, siteIds) };
 
   const batches = await StockBatch.find(filter)
     .sort({ receivedAt: 1 })
@@ -132,7 +160,7 @@ async function getStockAging({ siteId } = {}) {
     .lean();
 
   const now = Date.now();
-  return batches.map((b) => {
+  const rows = batches.map((b) => {
     const receivedAt = b.receivedAt ? new Date(b.receivedAt) : null;
     const agingDays = receivedAt
       ? Math.max(0, Math.floor((now - receivedAt.getTime()) / (24 * 60 * 60 * 1000)))
@@ -147,8 +175,45 @@ async function getStockAging({ siteId } = {}) {
       receivedAt: receivedAt?.toISOString?.() || null,
       availableQuantity: b.qtyRemaining,
       agingDays,
+      source: 'FIFO',
     };
   });
+
+  const ledgerFilter = siteMatch(siteId, siteIds);
+  const [ledgers, batchSums] = await Promise.all([
+    StockLedger.find(ledgerFilter).populate('materialId', 'code name unit').lean(),
+    StockBatch.aggregate([
+      { $match: { qtyRemaining: { $gt: 0 }, ...siteMatch(siteId, siteIds) } },
+      {
+        $group: {
+          _id: { siteId: '$siteId', materialId: '$materialId' },
+          qty: { $sum: '$qtyRemaining' },
+        },
+      },
+    ]),
+  ]);
+  const batchQty = new Map(
+    batchSums.map((r) => [`${r._id.siteId}:${r._id.materialId}`, r.qty])
+  );
+  for (const l of ledgers) {
+    if (!l.materialId) continue;
+    const key = `${l.siteId}:${l.materialId._id}`;
+    const remainder = Math.round((Number(l.quantityOnHand || 0) - (batchQty.get(key) || 0)) * 1000) / 1000;
+    if (remainder <= 0.0001) continue;
+    rows.push({
+      id: `opening-${l._id}`,
+      itemCode: l.materialId.code || '',
+      itemDescription: l.materialId.name || '',
+      unit: l.materialId.unit || '',
+      batchId: '',
+      grnNumber: 'OPENING / NON-FIFO',
+      receivedAt: null,
+      availableQuantity: remainder,
+      agingDays: 0,
+      source: 'OPENING',
+    });
+  }
+  return rows;
 }
 
 /**
@@ -157,9 +222,13 @@ async function getStockAging({ siteId } = {}) {
  *
  * Opening covers seed / ledger stock that never had an INCOMING movement.
  */
-async function getSlimInventory({ siteId } = {}) {
+async function getSlimInventory({ siteId, siteIds } = {}) {
   const mongoose = require('mongoose');
-  const match = siteId ? { siteId: new mongoose.Types.ObjectId(String(siteId)) } : {};
+  const match = siteId
+    ? { siteId: new mongoose.Types.ObjectId(String(siteId)) }
+    : siteIds?.length
+      ? { siteId: { $in: siteIds.map((id) => new mongoose.Types.ObjectId(String(id))) } }
+      : {};
 
   const received = await StockMovement.aggregate([
     { $match: { ...match, type: 'INCOMING', quantityDelta: { $gt: 0 } } },
@@ -188,7 +257,7 @@ async function getSlimInventory({ siteId } = {}) {
     },
   ]);
 
-  const ledgerFilter = siteId ? { siteId } : {};
+  const ledgerFilter = siteId ? { siteId } : siteIds?.length ? { siteId: { $in: siteIds } } : {};
   const ledgers = await StockLedger.find(ledgerFilter).populate('materialId', 'code name unit').lean();
 
   const recvMap = new Map(

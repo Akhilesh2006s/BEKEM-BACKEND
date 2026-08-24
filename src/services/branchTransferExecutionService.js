@@ -276,6 +276,13 @@ async function receiveBranchTransfer(transfer, actorUserId, receipt = {}) {
     }
 
     await transfer.save(sess ? { session: sess } : undefined);
+
+    const { createBatchesFromGrn } = require('./fifoStockService');
+    await createBatchesFromGrn(grn, actorUserId, transfer.materialRequestId || null, {
+      skipLedger: true,
+      session: sess,
+    });
+
     return { transfer, grn };
   };
 

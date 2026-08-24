@@ -23,6 +23,7 @@ const {
 } = require('../services/inventoryAccessService');
 
 const { getStockAging, getSlimInventory } = require('../services/fifoStockService');
+const { resolveRegisterSiteFilter, siteIdsFromScope } = require('../services/registerScopeService');
 
 const router = express.Router();
 
@@ -31,11 +32,14 @@ router.use(authenticate);
 /** Req 57 — Stock aging report */
 router.get('/aging', async (req, res, next) => {
   try {
-    const siteId = req.query.siteId || req.user.assignedSiteId;
-    if (siteId && !userCanAccessSite(req.user, String(siteId))) {
-      return res.status(403).json({ statusCode: 403, message: 'Forbidden' });
+    const scope = await resolveRegisterSiteFilter(req.user, req.query.siteId);
+    const siteIds = siteIdsFromScope(scope);
+    if (Array.isArray(siteIds) && siteIds.length === 0) {
+      return res.json({ data: [] });
     }
-    const data = await getStockAging({ siteId: siteId ? String(siteId) : undefined });
+    const data = await getStockAging(
+      siteIds ? { siteIds } : {}
+    );
     res.json({ data });
   } catch (err) {
     next(err);
@@ -45,11 +49,12 @@ router.get('/aging', async (req, res, next) => {
 /** Req 54 — Slim inventory balance view */
 router.get('/balance', async (req, res, next) => {
   try {
-    const siteId = req.query.siteId || req.user.assignedSiteId;
-    if (siteId && !userCanAccessSite(req.user, String(siteId))) {
-      return res.status(403).json({ statusCode: 403, message: 'Forbidden' });
+    const scope = await resolveRegisterSiteFilter(req.user, req.query.siteId);
+    const siteIds = siteIdsFromScope(scope);
+    if (Array.isArray(siteIds) && siteIds.length === 0) {
+      return res.json({ data: [] });
     }
-    const data = await getSlimInventory({ siteId: siteId ? String(siteId) : undefined });
+    const data = await getSlimInventory(siteIds ? { siteIds } : {});
     res.json({ data });
   } catch (err) {
     next(err);
@@ -348,22 +353,6 @@ router.get('/cross-project', async (req, res, next) => {
         };
       }),
     });
-  } catch (err) {
-    next(err);
-  }
-});
-
-router.get('/cross-project/all', async (req, res, next) => {
-  try {
-    if (req.user.role !== UserRole.PROJECT_MANAGER) {
-      return res.status(403).json({ statusCode: 403, message: 'Forbidden' });
-    }
-    const { excludeProjectId } = req.query;
-    const { getAllCrossProjectStock } = require('../services/pmCrossProjectStockService');
-    const data = await getAllCrossProjectStock(req.user, {
-      excludeProjectId: excludeProjectId ? String(excludeProjectId) : undefined,
-    });
-    res.json({ data });
   } catch (err) {
     next(err);
   }

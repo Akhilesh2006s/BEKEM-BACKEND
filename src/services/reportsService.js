@@ -9,6 +9,7 @@ const {
   PurchaseRequest,
   AuditLog,
   StockLedger,
+  StockMovement,
   BranchTransfer,
   RFQ,
   WorkOrder,
@@ -39,7 +40,11 @@ function parseDateRange(query) {
 }
 
 async function indentAgingReport(user, query = {}) {
+  const { resolveRegisterSiteFilter, applySiteFilterToQuery } = require('./registerScopeService');
+  const scope = await resolveRegisterSiteFilter(user, query.siteId);
   const filter = {};
+  if (!applySiteFilterToQuery(filter, scope)) return [];
+
   if (query.status) filter.status = query.status;
   if (user.role === UserRole.SITE_INCHARGE || query.mine === '1' || query.mine === 'true') {
     filter.requestedByUserId = user._id;
@@ -233,7 +238,11 @@ async function issueRegisterReport(user, query = {}) {
 }
 
 async function projectMaterialCostReport(user, query = {}) {
-  const projects = await Project.find({})
+  const projectFilter = {};
+  if (user.role === UserRole.PROJECT_MANAGER && user.assignedProjectIds?.length) {
+    projectFilter._id = { $in: user.assignedProjectIds };
+  }
+  const projects = await Project.find(projectFilter)
     .select('code name budgetTotal')
     .sort({ code: 1 })
     .lean();
@@ -400,7 +409,6 @@ async function pipelineMisReport(user) {
     pendingHo,
     purchaseRequested,
     openPos,
-    pendingGrn,
     onHoldGrn,
     coordinatorPo,
     chairmanPo,
@@ -414,10 +422,6 @@ async function pipelineMisReport(user) {
     }),
     MaterialRequest.countDocuments({
       status: { $in: ['PURCHASE_REQUESTED', 'RFQ_OPEN', 'QUOTED', 'VENDOR_SELECTED', 'PO_CREATED'] },
-    }),
-    PurchaseOrder.countDocuments({
-      status: 'APPROVED',
-      fulfillmentStatus: { $ne: 'closed_complete' },
     }),
     PurchaseOrder.countDocuments({
       status: 'APPROVED',
@@ -456,7 +460,6 @@ async function pipelineMisReport(user) {
     { stage: 'PO awaiting Chairman', count: chairmanPo, value: null },
     { stage: 'Open PO (pending GRN)', count: openPos, value: openPoValue[0]?.total || 0 },
     { stage: 'GRN on hold', count: onHoldGrn, value: null },
-    { stage: 'Pending material receipt POs', count: pendingGrn, value: null },
     {
       stage: 'Vendor AP outstanding',
       count: null,
@@ -494,29 +497,43 @@ async function approvalTrailReport(user, query = {}) {
 }
 
 async function shortageReport(user, query = {}) {
-  const ledgers = await StockLedger.find({})
+  const { resolveRegisterSiteFilter, applySiteFilterToQuery } = require('./registerScopeService');
+  const scope = await resolveRegisterSiteFilter(user, query.siteId);
+  const ledgerFilter = {};
+  if (!applySiteFilterToQuery(ledgerFilter, scope)) return [];
+
+  const ledgers = await StockLedger.find(ledgerFilter)
     .populate('materialId', 'name code unit')
     .populate('siteId', 'name chainageLabel')
     .limit(1000)
     .lean();
 
-  const openIndents = await MaterialRequest.find({
+  const indentFilter = {
     status: { $nin: ['COMPLETED', 'CLOSED', 'REJECTED', 'CANCELLED', 'ISSUED'] },
-  })
-    .select('items materialId quantityRequested')
+  };
+  applySiteFilterToQuery(indentFilter, scope);
+
+  const openIndents = await MaterialRequest.find(indentFilter)
+    .select('items materialId quantityRequested siteId')
     .lean();
 
   const openIndentQty = new Map();
   for (const mr of openIndents) {
+    const siteKey = (mr.siteId?._id || mr.siteId)?.toString?.() || '';
     const items = mr.items?.length
       ? mr.items
       : mr.materialId
         ? [{ materialId: mr.materialId, quantityRequested: mr.quantityRequested }]
         : [];
     for (const item of items) {
-      const key = (item.materialId?._id || item.materialId)?.toString?.();
-      if (!key) continue;
-      openIndentQty.set(key, (openIndentQty.get(key) || 0) + Number(item.quantityRequested || 0));
+      const materialId = (item.materialId?._id || item.materialId)?.toString?.();
+      if (!materialId) continue;
+      const key = `${siteKey}:${materialId}`;
+      const remaining = Math.max(
+        0,
+        Number(item.quantityRequested || 0) - Number(item.quantityIssued || 0)
+      );
+      openIndentQty.set(key, (openIndentQty.get(key) || 0) + remaining);
     }
   }
 
@@ -553,7 +570,7 @@ async function shortageReport(user, query = {}) {
         availableQty: available,
         lowStockThreshold: threshold,
         shortfall,
-        openIndentQty: openIndentQty.get(materialId) || 0,
+        openIndentQty: openIndentQty.get(`${(l.siteId?._id || l.siteId)?.toString?.() || ''}:${materialId}`) || 0,
         openPoQty: openPoQty.get(materialId) || 0,
         isLowStock: available <= threshold,
       };
@@ -958,60 +975,39 @@ async function workOrderCostReport(user, query = {}) {
 }
 
 async function stockMovementReport(user, query = {}) {
+  const { resolveRegisterSiteFilter, applySiteFilterToQuery } = require('./registerScopeService');
+  const scope = await resolveRegisterSiteFilter(user, query.siteId);
+  const filter = {};
+  if (!applySiteFilterToQuery(filter, scope)) return [];
+
   const dateRange = parseDateRange(query);
-  const grnFilter = { status: { $nin: ['DRAFT', 'REJECTED'] } };
-  const issueFilter = {};
-  if (dateRange) {
-    grnFilter.receivedAt = dateRange;
-    issueFilter.issuedAt = dateRange;
-  }
+  if (dateRange) filter.timestamp = dateRange;
 
-  const [grns, issues] = await Promise.all([
-    GoodsReceiptNote.find(grnFilter)
-      .sort({ receivedAt: -1 })
-      .limit(250)
-      .populate('items.materialId', 'name unit')
-      .lean(),
-    MaterialIssue.find(issueFilter)
-      .sort({ issuedAt: -1 })
-      .limit(250)
-      .populate('items.materialId', 'name unit')
-      .populate('materialRequestId', 'indentNumber')
-      .lean(),
-  ]);
+  const movements = await StockMovement.find(filter)
+    .sort({ timestamp: -1 })
+    .limit(500)
+    .populate('materialId', 'name unit code')
+    .lean();
 
-  const rows = [];
-  for (const g of grns) {
-    for (const item of g.items || []) {
-      rows.push({
-        id: `in-${g._id}-${item._id || item.materialId}`,
-        movementType: 'IN — GRN',
-        docNumber: g.grnNumber,
-        ref: g.poNumber || '',
-        materialName: item.materialId?.name || 'Material',
-        quantity: item.quantityReceived || 0,
-        unit: item.materialId?.unit || '',
-        party: g.vendorName || '',
-        movedAt: g.receivedAt || g.createdAt,
-      });
-    }
-  }
-  for (const issue of issues) {
-    for (const item of issue.items || []) {
-      rows.push({
-        id: `out-${issue._id}-${item._id || item.materialId}`,
-        movementType: 'OUT — Issue',
-        docNumber: issue.issueNumber,
-        ref: issue.materialRequestId?.indentNumber || '',
-        materialName: item.materialId?.name || 'Material',
-        quantity: item.quantity || 0,
-        unit: item.materialId?.unit || '',
-        party: issue.issuedToName || '',
-        movedAt: issue.issuedAt || issue.createdAt,
-      });
-    }
-  }
-  return rows.sort((a, b) => new Date(b.movedAt) - new Date(a.movedAt)).slice(0, 500);
+  return movements.map((m) => {
+    const qty = Number(m.quantityDelta || 0);
+    const isIn = qty > 0;
+    let movementType = isIn ? 'IN — Adjustment' : 'OUT — Adjustment';
+    if (m.type === 'INCOMING') movementType = 'IN — GRN / transfer';
+    else if (m.type === 'ALLOCATION') movementType = 'OUT — Issue';
+    else if (m.type === 'ADJUSTMENT' && !isIn) movementType = 'OUT — Transfer / adj.';
+    return {
+      id: m._id.toString(),
+      movementType,
+      docNumber: m.type,
+      ref: m.materialRequestId?.toString?.() || '',
+      materialName: m.materialId?.name || 'Material',
+      quantity: Math.abs(qty),
+      unit: m.materialId?.unit || '',
+      party: '',
+      movedAt: m.timestamp || m.createdAt,
+    };
+  });
 }
 
 module.exports = {

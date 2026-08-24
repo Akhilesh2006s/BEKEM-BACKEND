@@ -19,6 +19,7 @@ const STATUSES = [
   'CHAIRMAN_APPROVED',
   'MATERIAL_RECEIVED',
   'ISSUED',
+  'PARTIALLY_ISSUED',
   'COMPLETED',
   'REJECTED',
   'CANCELLED',
@@ -61,42 +62,13 @@ const materialRequestSchema = new mongoose.Schema(
     requestedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     status: { type: String, enum: STATUSES, default: 'PENDING_STORE' },
     pendingWithRole: { type: String, default: 'STORE_INCHARGE' },
-    /** Role that transitioned this indent to ALLOCATED — distinguishes Store's normal
-     *  issue-ready allocation from a PM/Coordinator closing it locally. */
-    allocatedByRole: { type: String, default: null },
     /** Estimated indent value (INR) for PM daily cap tracking. */
     estimatedValue: { type: Number, default: 0 },
     escalatedToHo: { type: Boolean, default: false },
     escalatedAt: { type: Date },
-    /** Coordinator daily cap overflow — sent to Chairman / MD instead of local close. */
-    escalatedToChairman: { type: Boolean, default: false },
-    escalatedToChairmanAt: { type: Date },
     pmForwardRemark: { type: String, default: '' },
-    /** Sequential allocation review: Executive → PM → Store → Indent Raiser. */
-    allocationReviewStage: {
-      type: String,
-      enum: ['EXECUTIVE', 'PROJECT_MANAGER', 'STORE_INCHARGE', 'SITE_INCHARGE', null],
-      default: null,
-    },
-    /** PM selected Proceed with Allocation after Executive / Chairman PO approval. */
-    pmProceededAllocation: { type: Boolean, default: false },
     /** Store confirmed stock is available before PM approval (no direct issue). */
     storeStockVerified: { type: Boolean, default: false },
-    /** Store Incharge Material GRN — physical stock received against this indent. */
-    storeStockReceivedAt: { type: Date, default: null },
-    storeStockReceivedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
-    storeStockReceivedRemark: { type: String, default: '' },
-    storeStockReceivedAttachments: {
-      type: [
-        {
-          name: { type: String, default: '' },
-          fileType: { type: String, default: '' },
-          category: { type: String, enum: ['INVOICE', 'CHALLAN', 'PHOTO'], default: 'PHOTO' },
-          url: { type: String, default: '' },
-        },
-      ],
-      default: [],
-    },
     executiveProcurementMethod: {
       type: String,
       enum: ['PURCHASE_ORDER', 'BRANCH_TRANSFER', null],
