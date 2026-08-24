@@ -162,11 +162,24 @@ async function getSlimInventory({ siteId } = {}) {
   const match = siteId ? { siteId: new mongoose.Types.ObjectId(String(siteId)) } : {};
 
   const received = await StockMovement.aggregate([
-    { $match: { ...match, quantityDelta: { $gt: 0 } } },
-    { $group: { _id: { siteId: '$siteId', materialId: '$materialId' }, totalReceived: { $sum: '$quantityDelta' } } },
+    { $match: { ...match, type: 'INCOMING', quantityDelta: { $gt: 0 } } },
+    {
+      $group: {
+        _id: { siteId: '$siteId', materialId: '$materialId' },
+        totalReceived: { $sum: '$quantityDelta' },
+      },
+    },
   ]);
   const issued = await StockMovement.aggregate([
-    { $match: { ...match, quantityDelta: { $lt: 0 } } },
+    {
+      $match: {
+        ...match,
+        $or: [
+          { type: 'ALLOCATION', quantityDelta: { $lt: 0 } },
+          { type: 'ADJUSTMENT', quantityDelta: { $lt: 0 } },
+        ],
+      },
+    },
     {
       $group: {
         _id: { siteId: '$siteId', materialId: '$materialId' },

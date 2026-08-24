@@ -270,7 +270,14 @@ function serializeGrnListItem(g, receiptSummary = null) {
 
 router.get('/', async (req, res, next) => {
   try {
-    const receipts = await GoodsReceiptNote.find()
+    const { resolveRegisterSiteFilter, applySiteFilterToQuery } = require('../services/registerScopeService');
+    const scope = await resolveRegisterSiteFilter(req.user, req.query.siteId);
+    const filter = {};
+    if (!applySiteFilterToQuery(filter, scope)) {
+      return res.json({ data: [] });
+    }
+
+    const receipts = await GoodsReceiptNote.find(filter)
       .sort({ createdAt: -1 })
       .populate({
         path: 'purchaseOrderId',

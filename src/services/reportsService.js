@@ -129,7 +129,11 @@ async function openPoReport(user, query = {}) {
 }
 
 async function grnRegisterReport(user, query = {}) {
+  const { resolveRegisterSiteFilter, applySiteFilterToQuery } = require('./registerScopeService');
+  const scope = await resolveRegisterSiteFilter(user, query.siteId);
   const filter = {};
+  if (!applySiteFilterToQuery(filter, scope)) return [];
+
   const dateRange = parseDateRange(query);
   if (dateRange) filter.receivedAt = dateRange;
   if (query.status) filter.status = query.status;
@@ -182,7 +186,11 @@ async function grnRegisterReport(user, query = {}) {
 }
 
 async function issueRegisterReport(user, query = {}) {
+  const { resolveRegisterSiteFilter, applySiteFilterToQuery } = require('./registerScopeService');
+  const scope = await resolveRegisterSiteFilter(user, query.siteId);
   const filter = {};
+  if (!applySiteFilterToQuery(filter, scope)) return [];
+
   const dateRange = parseDateRange(query);
   if (dateRange) filter.issuedAt = dateRange;
 

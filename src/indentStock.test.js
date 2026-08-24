@@ -55,4 +55,13 @@ describe('indent stock comparison', () => {
     assert.strictEqual(fields.availableToIssueQty, 2);
     assert.strictEqual(fields.pendingReceiptQty, 5);
   });
+
+  it('allocated balance counts toward ready-to-issue after store allocation', () => {
+    const fields = computeLineStockFields(
+      { quantityRequested: 10, quantityAllocated: 10, quantityIssued: 0 },
+      { quantityOnHand: 0, quantityReserved: 0 },
+      0
+    );
+    assert.strictEqual(fields.availableToIssueQty, 10);
+  });
 });

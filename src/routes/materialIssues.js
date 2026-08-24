@@ -95,8 +95,13 @@ function serializeIssue(issue) {
 
 router.get('/', async (req, res, next) => {
   try {
+    const { resolveRegisterSiteFilter, applySiteFilterToQuery } = require('../services/registerScopeService');
+    const scope = await resolveRegisterSiteFilter(req.user, req.query.siteId);
     const filter = {};
-    if (req.query.siteId) filter.siteId = req.query.siteId;
+    if (!applySiteFilterToQuery(filter, scope)) {
+      return res.json({ data: [] });
+    }
+
     const issues = await MaterialIssue.find(filter)
       .sort({ issuedAt: -1, createdAt: -1 })
       .populate(issuePopulate)
