@@ -1,7 +1,7 @@
 const express = require('express');
 const { body, param } = require('express-validator');
 const { UserRole } = require('@afios/shared');
-const { BranchTransfer, Site, MaterialRequest, Project } = require('../models');
+const { BranchTransfer, Site, MaterialRequest, Project, User } = require('../models');
 const { authenticate } = require('../middleware/auth');
 const { requireCapability } = require('../middleware/rbac');
 const { validate } = require('../middleware/validate');
@@ -664,6 +664,8 @@ router.post(
       );
 
       const fromProjectId = transfer.fromProjectId?._id || transfer.fromProjectId;
+      const toProjectId = transfer.toProjectId?._id || transfer.toProjectId;
+      const toSiteId = transfer.toSiteId?._id || transfer.toSiteId;
       const sourcePms = await getProjectManagers(fromProjectId);
       for (const pm of sourcePms) {
         await notificationService.notifyUser(pm._id, {
@@ -671,6 +673,24 @@ router.post(
           body: `${transfer.transferNumber}: GRN ${result.grn.grnNumber} created at destination.`,
           relatedEntityType: 'BranchTransfer',
           relatedEntityId: transfer._id,
+        });
+      }
+
+      // Destination Store Incharge gets the GRN for this transfer (order name = BT number).
+      const storeFilter = {
+        role: UserRole.STORE_INCHARGE,
+        $or: [{ assignedProjectIds: toProjectId }],
+      };
+      if (toSiteId) storeFilter.$or.push({ assignedSiteId: toSiteId });
+      const storeUsers = await User.find(storeFilter).select('_id');
+      const fromCode =
+        transfer.fromProjectId?.code || transfer.fromProjectId?.toString?.() || 'source';
+      for (const store of storeUsers) {
+        await notificationService.notifyUser(store._id, {
+          title: `GRN ${result.grn.grnNumber} — ${transfer.transferNumber}`,
+          body: `Branch transfer receipt posted by PM. Order: ${transfer.transferNumber} (from ${fromCode}). Open Material receipt (GRN).`,
+          relatedEntityType: 'GoodsReceiptNote',
+          relatedEntityId: result.grn._id,
         });
       }
 

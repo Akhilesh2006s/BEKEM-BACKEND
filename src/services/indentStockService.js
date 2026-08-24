@@ -19,8 +19,16 @@ function computeLineStockFields(item, ledger, receivedQty = 0, receipts = []) {
   const availableQty = Math.max(0, onHand - reserved);
   const requiredQty = computeRequiredQty(requestedQty, availableQty);
   const quantityReceived = Math.max(0, Number(receivedQty) || 0);
-  const availableToIssueQty = Math.max(0, quantityReceived - issuedQty);
-  const pendingReceiptQty = Math.max(0, requestedQty - quantityReceived);
+  const remainingRequest = Math.max(0, requestedQty - issuedQty);
+  // Ready to issue against this indent: remaining request capped by site stock
+  // and/or indent-linked GRN balance (ledger already includes GRN stock).
+  const receiptBalance = Math.max(0, quantityReceived - issuedQty);
+  const availableToIssueQty = Math.min(
+    remainingRequest,
+    Math.max(availableQty, receiptBalance)
+  );
+  // Still need inbound receipt only for shortfall not covered by site stock or prior issues.
+  const pendingReceiptQty = Math.max(0, remainingRequest - availableQty);
   return {
     requestedQty,
     availableQty,

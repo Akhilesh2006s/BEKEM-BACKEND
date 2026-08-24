@@ -397,9 +397,9 @@ export interface IndentLineItemDto {
   requiredQty?: number;
   /** Quantity received through GRNs for this indent line. */
   quantityReceived?: number;
-  /** Received quantity still available to issue for this indent line. */
+  /** Qty that can be issued now against this indent (remaining request ∩ site stock / GRN). */
   availableToIssueQty?: number;
-  /** Requested quantity not yet received through GRN. */
+  /** Qty still needing inbound receipt after site stock and prior issues. */
   pendingReceiptQty?: number;
   /** Individual GRN receipt quantities and dates for this indent line. */
   receipts?: Array<{

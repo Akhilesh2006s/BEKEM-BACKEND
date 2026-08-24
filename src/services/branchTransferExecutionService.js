@@ -197,6 +197,7 @@ async function receiveBranchTransfer(transfer, actorUserId, receipt = {}) {
             quantityDelta: qty,
             type: 'INCOMING',
             actorUserId,
+            materialRequestId: transfer.materialRequestId || undefined,
           },
         ],
         sess ? { session: sess } : undefined
@@ -350,7 +351,14 @@ async function executeBranchTransfer(transfer, actorUserId) {
       await StockMovement.create(
         [
           { siteId: fromSiteId, materialId, quantityDelta: -qty, type: 'ADJUSTMENT', actorUserId },
-          { siteId: toSiteId, materialId, quantityDelta: qty, type: 'INCOMING', actorUserId },
+          {
+            siteId: toSiteId,
+            materialId,
+            quantityDelta: qty,
+            type: 'INCOMING',
+            actorUserId,
+            materialRequestId: transfer.materialRequestId || undefined,
+          },
         ],
         { session }
       );

@@ -210,16 +210,34 @@ function serializeGrnListItem(g, receiptSummary = null) {
     id: g._id.toString(),
     grnNumber: g.grnNumber,
     purchaseOrderId: po?._id?.toString() || po?.toString?.() || null,
+    branchTransferId:
+      g.branchTransferId?._id?.toString?.() || g.branchTransferId?.toString?.() || null,
+    transferNumber:
+      g.transferNumber ||
+      g.branchTransferId?.transferNumber ||
+      '',
+    /** Display name for Store listing — PO or Branch Transfer. */
+    orderName: po
+      ? g.poNumber || po?.poNumber || po?.displayPoNumber || po?.draftRef || ''
+      : g.transferNumber || g.branchTransferId?.transferNumber
+        ? `BT ${g.transferNumber || g.branchTransferId?.transferNumber}`
+        : '',
     poNumber: g.poNumber || po?.poNumber || po?.displayPoNumber || po?.draftRef || '',
     indentNumber: g.indentNumber || '',
-    projectCode: po?.purchaseRequestId?.projectId?.code || '',
-    projectName: po?.purchaseRequestId?.projectId?.name || '',
+    projectCode:
+      po?.purchaseRequestId?.projectId?.code ||
+      g.branchTransferId?.toProjectId?.code ||
+      '',
+    projectName:
+      po?.purchaseRequestId?.projectId?.name ||
+      g.branchTransferId?.toProjectId?.name ||
+      '',
     vendorId:
       g.vendorId?._id?.toString?.() ||
       g.vendorId?.toString?.() ||
       vendor?._id?.toString?.() ||
       null,
-    vendorName,
+    vendorName: vendorName || (g.branchTransferId ? 'Inter-project transfer' : ''),
     vendorGstNumber,
     status: g.status,
     invoiceNo: g.invoiceNo || '',
@@ -243,10 +261,10 @@ function serializeGrnListItem(g, receiptSummary = null) {
       category: a.category || 'PHOTO',
       url: a.url || '',
     })),
-    quantityOrdered: summary.orderedQty,
+    quantityOrdered: summary.orderedQty || items.reduce((s, i) => s + (Number(i.quantityOrdered) || 0), 0),
     quantityReceivedThisGrn: thisGrnReceivedQty,
-    quantityReceived: summary.receivedQty,
-    quantityRemaining: summary.remainingQty,
+    quantityReceived: summary.receivedQty || thisGrnReceivedQty,
+    quantityRemaining: summary.remainingQty ?? 0,
   };
 }
 
@@ -259,6 +277,14 @@ router.get('/', async (req, res, next) => {
         populate: [
           { path: 'vendorId', select: 'name gstNumber' },
           { path: 'purchaseRequestId', populate: { path: 'projectId', select: 'code name' } },
+        ],
+      })
+      .populate({
+        path: 'branchTransferId',
+        select: 'transferNumber toProjectId fromProjectId',
+        populate: [
+          { path: 'toProjectId', select: 'code name' },
+          { path: 'fromProjectId', select: 'code name' },
         ],
       })
       .populate('vendorId', 'name gstNumber')
@@ -295,6 +321,14 @@ router.get('/:id', param('id').isMongoId(), validate, async (req, res, next) => 
         populate: [
           { path: 'vendorId', select: 'name gstNumber' },
           { path: 'purchaseRequestId', populate: { path: 'projectId', select: 'code name' } },
+        ],
+      })
+      .populate({
+        path: 'branchTransferId',
+        select: 'transferNumber toProjectId fromProjectId',
+        populate: [
+          { path: 'toProjectId', select: 'code name' },
+          { path: 'fromProjectId', select: 'code name' },
         ],
       })
       .populate('vendorId', 'name gstNumber')

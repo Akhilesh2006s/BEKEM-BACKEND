@@ -12,37 +12,20 @@ const { getIndentLineItems } = require('../services/materialRequestHelpers');
 const statusHistoryService = require('../services/statusHistoryService');
 const notificationService = require('../services/notificationService');
 const { ISSUE_REASONS } = require('../constants/indentPolicy');
-const { serializeMaterialRequestEnriched, serializeMaterial } = require('../utils/serialize');
+const { serializeMaterialRequestEnriched } = require('../utils/serialize');
 const { consumeFifo } = require('../services/fifoStockService');
-const { attachResolvedUnitPrices } = require('../services/materialPricingService');
 
 const router = express.Router();
 router.use(authenticate);
 
 const issuePopulate = [
   { path: 'items.materialId' },
-  { path: 'siteId', populate: { path: 'projectId', select: 'code name' } },
+  { path: 'siteId' },
   { path: 'materialRequestId', select: 'indentNumber purpose' },
   { path: 'issuedByUserId', select: 'name' },
 ];
 
-function roundMoney(n) {
-  return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
-}
-
-async function serializeIssue(issue) {
-  const materialPayloads = (issue.items || [])
-    .map((item) => {
-      const mat = item.materialId;
-      if (!mat || typeof mat !== 'object') return null;
-      return serializeMaterial(mat);
-    })
-    .filter(Boolean);
-  const priced = await attachResolvedUnitPrices(materialPayloads);
-  const rateByMaterial = new Map(
-    priced.map((m) => [m.id, m.unitPrice ?? m.referenceUnitPrice ?? null])
-  );
-
+function serializeIssue(issue) {
   return {
     id: issue._id.toString(),
     issueNumber: issue.issueNumber,
@@ -60,34 +43,33 @@ async function serializeIssue(issue) {
           id: issue.siteId._id.toString(),
           name: issue.siteId.name,
           chainageLabel: issue.siteId.chainageLabel,
-          project: issue.siteId.projectId?.name || issue.siteId.projectId?.code
-            ? {
-                id: issue.siteId.projectId._id?.toString?.() || issue.siteId.projectId.toString(),
-                code: issue.siteId.projectId.code || '',
-                name: issue.siteId.projectId.name || '',
-              }
-            : undefined,
         }
       : undefined,
-    items: (issue.items || []).map((item) => {
+    items: issue.items.map((item) => {
       const mat = item.materialId;
-      const materialId = mat?._id?.toString?.() || mat?.toString?.() || '';
       const quantity = Number(item.quantity) || 0;
-      const rate = Number(rateByMaterial.get(materialId) ?? mat?.referenceUnitPrice ?? 0) || 0;
-      const amount = roundMoney(quantity * rate);
+      const rate = Number(mat?.referenceUnitPrice ?? mat?.unitPrice ?? 0);
+      const gstPercent = Number(mat?.gstRate ?? 18);
+      const taxable = Math.round((quantity * rate + Number.EPSILON) * 100) / 100;
+      const gstAmount = Math.round((taxable * (gstPercent / 100) + Number.EPSILON) * 100) / 100;
+      const grossAmount = Math.round((taxable + gstAmount + Number.EPSILON) * 100) / 100;
       return {
-        materialId,
+        materialId: mat?._id?.toString() || mat?.toString(),
         quantity,
         rate,
-        amount,
+        gstPercent,
+        gstAmount,
+        taxableAmount: taxable,
+        grossAmount,
         unit: mat?.unit || '',
-        materialName: mat?.name || 'Material',
         material: mat?.name
           ? {
-              id: materialId,
+              id: mat._id.toString(),
               name: mat.name,
               unit: mat.unit,
               hsnCode: mat.hsnCode,
+              gstRate: mat.gstRate,
+              referenceUnitPrice: mat.referenceUnitPrice,
             }
           : undefined,
       };
@@ -97,7 +79,6 @@ async function serializeIssue(issue) {
       : undefined,
     issuedToType: issue.issuedToType,
     issuedToName: issue.issuedToName || '',
-    contractorName: issue.issueType === 'CONTRACT_ISSUE' ? issue.issuedToName || '' : '',
     note: issue.note,
     issueReason: issue.issueReason,
     issueReasonOtherText: issue.issueReasonOtherText || '',
@@ -120,7 +101,72 @@ router.get('/', async (req, res, next) => {
       .sort({ issuedAt: -1, createdAt: -1 })
       .populate(issuePopulate)
       .limit(100);
-    res.json({ data: await Promise.all(issues.map((issue) => serializeIssue(issue))) });
+
+    const { StockBatch, GoodsReceiptNote } = require('../models');
+    const siteIds = [...new Set(issues.map((i) => i.siteId?._id || i.siteId).filter(Boolean))];
+    const materialIds = [
+      ...new Set(
+        issues.flatMap((i) => i.items.map((it) => it.materialId?._id || it.materialId).filter(Boolean))
+      ),
+    ];
+
+    const batches =
+      siteIds.length && materialIds.length
+        ? await StockBatch.find({
+            siteId: { $in: siteIds },
+            materialId: { $in: materialIds },
+            grnId: { $ne: null },
+          })
+            .sort({ receivedAt: -1 })
+            .select('siteId materialId grnId')
+            .lean()
+        : [];
+
+    const grnIds = [...new Set(batches.map((b) => b.grnId).filter(Boolean))];
+    const grns = grnIds.length
+      ? await GoodsReceiptNote.find({ _id: { $in: grnIds } })
+          .select('invoiceNo invoiceDate items')
+          .lean()
+      : [];
+    const grnById = new Map(grns.map((g) => [g._id.toString(), g]));
+
+    const latestGrnBySiteMaterial = new Map();
+    for (const batch of batches) {
+      const key = `${batch.siteId.toString()}::${batch.materialId.toString()}`;
+      if (!latestGrnBySiteMaterial.has(key)) {
+        latestGrnBySiteMaterial.set(key, grnById.get(batch.grnId?.toString?.() || ''));
+      }
+    }
+
+    const data = issues.map((issue) => {
+      const serialized = serializeIssue(issue);
+      const siteId = (issue.siteId?._id || issue.siteId)?.toString?.() || '';
+      serialized.items = serialized.items.map((item) => {
+        const grn = latestGrnBySiteMaterial.get(`${siteId}::${item.materialId}`);
+        const grnLine = (grn?.items || []).find(
+          (line) => (line.materialId?._id || line.materialId)?.toString?.() === item.materialId
+        );
+        const rateFromGrn = Number(grnLine?.invoiceUnitPrice || grnLine?.orderedUnitPrice || 0);
+        const rate = rateFromGrn > 0 ? rateFromGrn : item.rate;
+        const quantity = Number(item.quantity) || 0;
+        const gstPercent = Number(item.gstPercent ?? 18);
+        const taxable = Math.round((quantity * rate + Number.EPSILON) * 100) / 100;
+        const gstAmount = Math.round((taxable * (gstPercent / 100) + Number.EPSILON) * 100) / 100;
+        const grossAmount = Math.round((taxable + gstAmount + Number.EPSILON) * 100) / 100;
+        return {
+          ...item,
+          rate,
+          gstAmount,
+          taxableAmount: taxable,
+          grossAmount,
+          invoiceNo: grn?.invoiceNo || '',
+          invoiceDate: grn?.invoiceDate?.toISOString?.() || null,
+        };
+      });
+      return serialized;
+    });
+
+    res.json({ data });
   } catch (err) {
     next(err);
   }
@@ -130,7 +176,7 @@ router.get('/:id', param('id').isMongoId(), validate, async (req, res, next) => 
   try {
     const issue = await MaterialIssue.findById(req.params.id).populate(issuePopulate);
     if (!issue) return res.status(404).json({ statusCode: 404, message: 'Not found' });
-    res.json({ data: await serializeIssue(issue) });
+    res.json({ data: serializeIssue(issue) });
   } catch (err) {
     next(err);
   }
@@ -173,7 +219,7 @@ router.post(
       );
       if (!mr) return res.status(404).json({ statusCode: 404, message: 'Indent not found' });
 
-      const issueable = ['MATERIAL_RECEIVED', 'CHAIRMAN_APPROVED', 'ALLOCATED'];
+      const issueable = ['MATERIAL_RECEIVED', 'CHAIRMAN_APPROVED', 'ALLOCATED', 'ISSUED'];
       if (!issueable.includes(mr.status)) {
         return res.status(400).json({
           statusCode: 400,
@@ -212,6 +258,36 @@ router.post(
           materialId: line.materialId._id || line.materialId,
           quantity: line.quantityAllocated || line.quantityRequested,
         }));
+      }
+
+      for (const item of issueItems) {
+        const qty = Number(item.quantity) || 0;
+        if (qty <= 0) {
+          return res.status(400).json({
+            statusCode: 400,
+            message: 'Issue quantity must be greater than zero',
+          });
+        }
+        const line = getIndentLineItems(mr).find((li) => {
+          const mid = li.materialId._id?.toString?.() || li.materialId.toString();
+          return mid === String(item.materialId);
+        });
+        if (!line) {
+          return res.status(400).json({
+            statusCode: 400,
+            message: 'Issue item is not part of this indent',
+          });
+        }
+        const remaining = Math.max(
+          0,
+          Number(line.quantityRequested || 0) - Number(line.quantityIssued || 0)
+        );
+        if (qty > remaining + 1e-9) {
+          return res.status(400).json({
+            statusCode: 400,
+            message: `Cannot issue more than remaining request (${remaining}) for this material`,
+          });
+        }
       }
 
       const alreadyAllocated = mr.status === 'ALLOCATED';

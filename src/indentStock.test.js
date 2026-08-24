@@ -30,5 +30,29 @@ describe('indent stock comparison', () => {
     );
     assert.strictEqual(fields.availableQty, 5);
     assert.strictEqual(fields.requiredQty, 5);
+    assert.strictEqual(fields.availableToIssueQty, 5);
+    assert.strictEqual(fields.pendingReceiptQty, 5);
+  });
+
+  it('local stock covering request clears pending receipt and caps ready-to-issue', () => {
+    const fields = computeLineStockFields(
+      { quantityRequested: 10, quantityIssued: 0 },
+      { quantityOnHand: 11, quantityReserved: 0 },
+      0
+    );
+    assert.strictEqual(fields.availableQty, 11);
+    assert.strictEqual(fields.requiredQty, 0);
+    assert.strictEqual(fields.availableToIssueQty, 10);
+    assert.strictEqual(fields.pendingReceiptQty, 0);
+  });
+
+  it('pending receipt shrinks after issue and GRN against shortfall', () => {
+    const fields = computeLineStockFields(
+      { quantityRequested: 10, quantityIssued: 3 },
+      { quantityOnHand: 2, quantityReserved: 0 },
+      4
+    );
+    assert.strictEqual(fields.availableToIssueQty, 2);
+    assert.strictEqual(fields.pendingReceiptQty, 5);
   });
 });
