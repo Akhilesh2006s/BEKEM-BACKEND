@@ -386,7 +386,7 @@ async function getTodayActions(user) {
       actions.push({
         id: 'pm-wo-approve',
         title: `Approve ${pmWoPending} work order${pmWoPending > 1 ? 's' : ''}`,
-        subtitle: 'Review and send to Executive',
+        subtitle: 'Proceed with allocation at store',
         href: '/pm/approve-wos',
         priority: 'high',
         count: pmWoPending,
