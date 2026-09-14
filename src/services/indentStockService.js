@@ -11,7 +11,7 @@ async function getLedgerMap(siteId) {
   return map;
 }
 
-function computeLineStockFields(item, ledger, receivedQty = 0, receipts = []) {
+function computeLineStockFields(item, ledger, receivedQty = 0, receipts = [], indentStatus = '') {
   const requestedQty = item.quantityRequested || 0;
   const issuedQty = item.quantityIssued || 0;
   const onHand = ledger?.quantityOnHand || 0;
@@ -21,7 +21,18 @@ function computeLineStockFields(item, ledger, receivedQty = 0, receipts = []) {
   const quantityReceived = Math.max(0, Number(receivedQty) || 0);
   const remainingRequest = Math.max(0, requestedQty - issuedQty);
   const receiptBalance = Math.max(0, quantityReceived - issuedQty);
-  const allocatedBalance = Math.max(0, (item.quantityAllocated || 0) - issuedQty);
+  let allocatedQty = Math.max(0, Number(item.quantityAllocated || 0));
+  // ALLOCATED (and post-allocation statuses) must remain issuable even if line
+  // quantityAllocated failed to persist — stock was already reserved/moved.
+  if (
+    allocatedQty <= 0 &&
+    ['ALLOCATED', 'PARTIALLY_ISSUED', 'ISSUED', 'MATERIAL_RECEIVED', 'CHAIRMAN_APPROVED'].includes(
+      indentStatus
+    )
+  ) {
+    allocatedQty = requestedQty;
+  }
+  const allocatedBalance = Math.max(0, allocatedQty - issuedQty);
   const availableToIssueQty = Math.min(
     remainingRequest,
     Math.max(availableQty, receiptBalance, allocatedBalance)
@@ -42,6 +53,7 @@ function computeLineStockFields(item, ledger, receivedQty = 0, receipts = []) {
 async function enrichIndentWithStock(mr) {
   const siteId = mr.siteId?._id || mr.siteId;
   const lineItems = getIndentLineItems(mr);
+  const indentStatus = mr.status || '';
   const [ledgerMap, movements] = await Promise.all([
     getLedgerMap(siteId),
     StockMovement.find({ materialRequestId: mr._id, type: 'INCOMING' }).sort({ timestamp: 1 }).lean(),
@@ -76,7 +88,8 @@ async function enrichIndentWithStock(mr) {
         item,
         ledger,
         receivedByMaterialId.get(materialId) || 0,
-        receiptsByMaterialId.get(materialId) || []
+        receiptsByMaterialId.get(materialId) || [],
+        indentStatus
       ),
     };
   });

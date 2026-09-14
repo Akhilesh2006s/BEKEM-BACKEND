@@ -37,6 +37,12 @@ async function allocateIndentStock(mr, actorUserId) {
     });
   }
 
+  if (typeof mr.markModified === 'function') {
+    mr.markModified('items');
+  }
+  if (lineItems[0] && mr.materialId) {
+    mr.quantityAllocated = lineItems[0].quantityAllocated;
+  }
   await mr.save();
   return mr;
 }
