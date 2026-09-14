@@ -51,7 +51,7 @@ describe('Work order approval workflow', () => {
     await teardownTestDb();
   });
 
-  it('walks create → PM → Executive return → PM → Coordinator → Chairman → accept → progress → close', async () => {
+  it('walks Executive create → PM proceed allocation → accept → progress → close', async () => {
     const createRes = await postJson(app, execToken, '/api/work-orders', {
       purchaseOrderId: po._id.toString(),
       scope: 'Install solar rooftop package',
@@ -73,56 +73,7 @@ describe('Work order approval workflow', () => {
       note: 'PM approved',
     });
     assert.strictEqual(pmApprove.status, 200, JSON.stringify(pmApprove.body));
-    assert.strictEqual(pmApprove.body.data.status, 'EXECUTIVE_PENDING');
-
-    const execQueue = await request(app)
-      .get('/api/work-orders')
-      .query({ queue: 'executive' })
-      .set('Authorization', `Bearer ${execToken}`);
-    assert.ok((execQueue.body.data || []).some((row) => row.id === woId));
-
-    const returned = await postJson(app, execToken, `/api/work-orders/${woId}/executive-review`, {
-      action: 'RETURN',
-      note: 'Need PM to recheck quantity',
-    });
-    assert.strictEqual(returned.status, 200, JSON.stringify(returned.body));
-    assert.strictEqual(returned.body.data.status, 'PM_PENDING');
-
-    const pmAgain = await postJson(app, pmToken, `/api/work-orders/${woId}/pm-approve`, {
-      note: 'Quantity confirmed',
-    });
-    assert.strictEqual(pmAgain.status, 200, JSON.stringify(pmAgain.body));
-    assert.strictEqual(pmAgain.body.data.status, 'EXECUTIVE_PENDING');
-
-    const execApprove = await postJson(app, execToken, `/api/work-orders/${woId}/executive-review`, {
-      action: 'APPROVE',
-    });
-    assert.strictEqual(execApprove.status, 200, JSON.stringify(execApprove.body));
-    assert.strictEqual(execApprove.body.data.status, 'COORDINATOR_PENDING');
-
-    const coordQueue = await request(app)
-      .get('/api/work-orders')
-      .query({ queue: 'coordinator' })
-      .set('Authorization', `Bearer ${coordToken}`);
-    assert.ok((coordQueue.body.data || []).some((row) => row.id === woId));
-
-    const coordVerify = await postJson(app, coordToken, `/api/work-orders/${woId}/verify`, {
-      action: 'APPROVE',
-    });
-    assert.strictEqual(coordVerify.status, 200, JSON.stringify(coordVerify.body));
-    assert.strictEqual(coordVerify.body.data.status, 'CHAIRMAN_PENDING');
-
-    const chairmanQueue = await request(app)
-      .get('/api/work-orders')
-      .query({ queue: 'chairman' })
-      .set('Authorization', `Bearer ${chairmanToken}`);
-    assert.ok((chairmanQueue.body.data || []).some((row) => row.id === woId));
-
-    const chairmanApprove = await postJson(app, chairmanToken, `/api/work-orders/${woId}/approve`, {
-      note: 'Final approval',
-    });
-    assert.strictEqual(chairmanApprove.status, 200, JSON.stringify(chairmanApprove.body));
-    assert.strictEqual(chairmanApprove.body.data.status, 'PENDING_ACCEPTANCE');
+    assert.strictEqual(pmApprove.body.data.status, 'PENDING_ACCEPTANCE');
 
     const accept = await postJson(app, execToken, `/api/work-orders/${woId}/accept`, {});
     assert.strictEqual(accept.status, 200, JSON.stringify(accept.body));

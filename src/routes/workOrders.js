@@ -169,7 +169,9 @@ router.post(
       }
 
       const fromStatus = wo.status;
-      wo.status = 'EXECUTIVE_PENDING';
+      // Executive already generated the WO from an HO-approved PO — do not send it
+      // back to Executive. PM confirms site allocation → contractor acceptance / store issue.
+      wo.status = 'PENDING_ACCEPTANCE';
       wo.pmApprovedByUserId = req.user._id;
       wo.pmApprovedAt = new Date();
       await wo.save();
@@ -180,17 +182,32 @@ router.post(
         fromStatus,
         wo.status,
         req.user._id,
-        req.body.note || 'PM approved work order'
+        req.body.note || 'PM proceeded with allocation at store'
       );
 
       const executives = await User.find({ role: UserRole.EXECUTIVE });
       for (const e of executives) {
         await notificationService.notifyUser(e._id, {
-          title: 'Work order pending executive review',
-          body: `${wo.woNumber} requires executive review.`,
+          title: 'Work order ready for contractor acceptance',
+          body: `${wo.woNumber} — PM proceeded with allocation. Record contractor acceptance.`,
           relatedEntityType: 'WorkOrder',
           relatedEntityId: wo._id,
         });
+      }
+
+      if (wo.siteId) {
+        const storeUsers = await User.find({
+          role: UserRole.STORE_INCHARGE,
+          assignedSiteId: wo.siteId,
+        });
+        for (const store of storeUsers) {
+          await notificationService.notifyUser(store._id, {
+            title: 'Work order — proceed allocation at store',
+            body: `${wo.woNumber} — PM proceeded with allocation. Issue materials after contractor acceptance.`,
+            relatedEntityType: 'WorkOrder',
+            relatedEntityId: wo._id,
+          });
+        }
       }
 
       return woResponse(wo._id);
