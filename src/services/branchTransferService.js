@@ -172,7 +172,7 @@ async function notifyBranchTransferRequested(transfer, toProjectId) {
 }
 
 async function createIndentLinkedTransfers(user, { materialRequestId, note, sources }) {
-  const { BranchTransfer, Site, MaterialRequest, StockLedger } = require('../models');
+  const { BranchTransfer, Site, MaterialRequest, StockLedger, Project } = require('../models');
   const { generateTransferNumber } = require('./documentNumberService');
   const statusHistoryService = require('./statusHistoryService');
   const { getIndentLineItems } = require('./materialRequestHelpers');
