@@ -1499,6 +1499,9 @@ router.post(
 
       const fromStatus = mr.status;
       try {
+        if (!mr.estimatedValue) {
+          mr.estimatedValue = await estimateIndentAmount(mr);
+        }
         await allocateIndentStock(mr, req.user._id);
         mr.status = 'ALLOCATED';
         mr.pendingWithRole = 'STORE_INCHARGE';
@@ -1974,7 +1977,7 @@ router.post(
     try {
       const mr = await MaterialRequest.findById(req.params.id);
       if (!mr) return res.status(404).json({ statusCode: 404, message: 'Request not found' });
-      if (mr.status !== 'ISSUED') {
+      if (!['ISSUED', 'PARTIALLY_ISSUED'].includes(mr.status)) {
         return res.status(400).json({ statusCode: 400, message: 'Materials not yet issued' });
       }
       if (mr.requestedByUserId.toString() !== req.user._id.toString()) {

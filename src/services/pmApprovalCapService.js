@@ -75,12 +75,6 @@ function getDayBounds(date = new Date(), timeZone = appTimezone()) {
   };
 }
 
-async function indentCountsTowardPmDailyCap(mr) {
-  if (!mr) return false;
-  if (mr.indentRequestType === 'BELOW_5000') return false;
-  return true;
-}
-
 async function sumApprovalValues(entries) {
   const seen = new Set();
   let total = 0;
@@ -91,16 +85,20 @@ async function sumApprovalValues(entries) {
     const mr = await MaterialRequest.findById(entry.entityId).select(
       'estimatedValue items quantityRequested materialId indentRequestType'
     );
-    if (!(await indentCountsTowardPmDailyCap(mr))) continue;
-    total += mr.estimatedValue ?? (await estimateIndentAmount(mr));
+    if (!mr) continue;
+    // Recompute when estimatedValue was never stored (0 / null).
+    const stored = Number(mr.estimatedValue);
+    total += stored > 0 ? stored : await estimateIndentAmount(mr);
   }
   return Math.round(total);
 }
 
+/**
+ * Sum of PM local approvals today (fills the ₹5,000 bar).
+ * Includes Below ₹5,000 local closes — those go FORWARDED_TO_PM → ALLOCATED, not PM_APPROVED.
+ */
 async function getPmDailyApprovedTotal(pmUserId, date = new Date()) {
   const { start, endExclusive } = getDayBounds(date);
-  // Local PM close records ALLOCATED (from FORWARDED_TO_PM), not PM_APPROVED.
-  // Only this calendar day's events count — yesterday's usage must not carry over.
   const approvals = await StatusHistory.find({
     entityType: 'MaterialRequest',
     actorUserId: pmUserId,
@@ -121,11 +119,7 @@ function wouldExceedPmDailyCap(currentTotal, requestValue) {
 async function checkPmCanApprove(pmUserId, mr, date = new Date()) {
   const requestValue = mr.estimatedValue ?? (await estimateIndentAmount(mr));
   const dailyApprovedTotal = await getPmDailyApprovedTotal(pmUserId, date);
-  // Below ₹5,000 indents stay with PM → Store; never count against HO daily-cap escalation.
-  const isBelowCap = mr.indentRequestType === 'BELOW_5000';
-  const wouldExceed = isBelowCap
-    ? false
-    : wouldExceedPmDailyCap(dailyApprovedTotal, requestValue);
+  const wouldExceed = wouldExceedPmDailyCap(dailyApprovedTotal, requestValue);
   const { dayStr } = getDayBounds(date);
   return {
     dailyApprovedTotal,
@@ -133,7 +127,7 @@ async function checkPmCanApprove(pmUserId, mr, date = new Date()) {
     dailyCap: dailyCap(),
     wouldExceed,
     remaining: Math.max(0, dailyCap() - dailyApprovedTotal),
-    skippedCap: isBelowCap,
+    skippedCap: false,
     day: dayStr,
   };
 }
