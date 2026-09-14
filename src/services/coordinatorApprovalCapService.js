@@ -36,7 +36,9 @@ async function getCoordinatorDailyApprovedTotal(coordinatorUserId, date = new Da
       'estimatedValue items quantityRequested materialId'
     );
     if (!mr) continue;
-    total += mr.estimatedValue ?? (await estimateIndentAmount(mr));
+    let value = Number(mr.estimatedValue);
+    if (!(value > 0)) value = await estimateIndentAmount(mr);
+    total += value;
   }
   return Math.round(total);
 }
@@ -46,7 +48,10 @@ function wouldExceedCoordinatorDailyCap(currentTotal, requestValue) {
 }
 
 async function checkCoordinatorCanApprove(coordinatorUserId, mr) {
-  const requestValue = mr.estimatedValue ?? (await estimateIndentAmount(mr));
+  let requestValue = Number(mr.estimatedValue);
+  if (!(requestValue > 0)) {
+    requestValue = await estimateIndentAmount(mr);
+  }
   const dailyApprovedTotal = await getCoordinatorDailyApprovedTotal(coordinatorUserId);
   const wouldExceed = wouldExceedCoordinatorDailyCap(dailyApprovedTotal, requestValue);
   return {
@@ -56,6 +61,13 @@ async function checkCoordinatorCanApprove(coordinatorUserId, mr) {
     wouldExceed,
     remaining: Math.max(0, dailyCap() - dailyApprovedTotal),
   };
+}
+
+/** Suggestion line for Coordinator notifications / UI when within ₹10,000/day. */
+function coordinatorLocalApproveHint(capCheck) {
+  if (!capCheck || capCheck.wouldExceed) return '';
+  const capLabel = `₹${Number(capCheck.dailyCap || dailyCap()).toLocaleString('en-IN')}`;
+  return `\nCan locally approve and close (within ${capLabel}/day). No need to escalate to MD / Chairman.`;
 }
 
 function canCoordinatorLocalCloseStatus(status) {
@@ -71,4 +83,5 @@ module.exports = {
   wouldExceedCoordinatorDailyCap,
   checkCoordinatorCanApprove,
   canCoordinatorLocalCloseStatus,
+  coordinatorLocalApproveHint,
 };

@@ -168,6 +168,8 @@ export interface ProcurementDecisionDto {
   coordinatorProcurementRemark: string;
   canExecutiveDecide: boolean;
   canCoordinatorReview: boolean;
+  /** Status allows Coordinator local close (within ₹10,000/day remaining). */
+  canCoordinatorLocalClose?: boolean;
   canFullyIssue?: boolean;
   hasAvailableStock?: boolean;
   redirect?: { type: string; path: string };
@@ -476,6 +478,8 @@ export interface MaterialRequestDto {
   materialId?: string;
   quantityRequested?: number;
   quantityAllocated?: number;
+  /** Legacy single-line issued qty (prefer items[].quantityIssued). */
+  quantityIssued?: number;
   purpose?: string;
   requestedByName?: string;
   location?: string;

@@ -274,13 +274,11 @@ async function notifyCoordinatorsForIndent(mr, { title, body }) {
   await Promise.all(
     coordinators.map(async (coord) => {
       const capCheck = await checkCoordinatorCanApprove(coord._id, mr);
-      const hint = capCheck.wouldExceed
-        ? ''
-        : '\nCan locally approve and close. No need to reach out to MD/Coordinator level.';
+      const hint = coordinatorApprovalCapService.coordinatorLocalApproveHint(capCheck);
       return notificationService.notifyUser(coord._id, {
         title,
         body: `${body}${hint}`,
-        relatedEntityType: 'MaterialRequest',
+        relatedEntityType: 'ProcurementDecision',
         relatedEntityId: mr._id,
       });
     })
@@ -1751,7 +1749,7 @@ router.post(
         };
       }
 
-      if (!mr.estimatedValue) mr.estimatedValue = await estimateIndentAmount(mr);
+      if (!(Number(mr.estimatedValue) > 0)) mr.estimatedValue = await estimateIndentAmount(mr);
       const capCheck = await checkCoordinatorCanApprove(req.user._id, mr);
       const capLabel = `₹${coordinatorApprovalCapService.MR_COORDINATOR_DAILY_MAX_INR.toLocaleString('en-IN')}`;
 

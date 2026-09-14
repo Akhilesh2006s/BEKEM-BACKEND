@@ -485,7 +485,7 @@ async function getTodayActions(user) {
 
   if (role === UserRole.COORDINATOR) {
     const { countCoordinatorVerifyPos } = require('./coordinatorPoQueueService');
-    const { COORDINATOR_QUEUE_STATUSES } = require('./procurementDecisionService');
+    const { coordinatorVisibleStatuses } = require('./procurementDecisionService');
     const pending = await countCoordinatorVerifyPos();
     actions.push({
       id: 'coord-verify',
@@ -496,13 +496,13 @@ async function getTodayActions(user) {
       count: pending,
     });
     const decisionPending = await MaterialRequest.countDocuments({
-      status: { $in: COORDINATOR_QUEUE_STATUSES },
+      status: { $in: coordinatorVisibleStatuses() },
     });
     if (decisionPending > 0) {
       actions.push({
         id: 'coord-procurement-decisions',
         title: `Review ${decisionPending} procurement decision${decisionPending > 1 ? 's' : ''}`,
-        subtitle: 'Executive recommended PO / branch transfer — awaiting Coordinator',
+        subtitle: 'Local approve within ₹10,000/day or complete Executive recommendations',
         href: '/coordinator/procurement-decisions',
         priority: 'high',
         count: decisionPending,

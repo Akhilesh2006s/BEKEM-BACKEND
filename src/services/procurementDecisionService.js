@@ -24,6 +24,13 @@ const COORDINATOR_QUEUE_STATUSES = [
   'EXECUTIVE_DECISION_BRANCH_TRANSFER',
 ];
 
+function coordinatorVisibleStatuses() {
+  const {
+    COORDINATOR_LOCAL_CLOSE_STATUSES,
+  } = require('./coordinatorApprovalCapService');
+  return [...new Set([...COORDINATOR_QUEUE_STATUSES, ...COORDINATOR_LOCAL_CLOSE_STATUSES])];
+}
+
 function executiveDecisionStatus(method) {
   return method === 'BRANCH_TRANSFER'
     ? 'EXECUTIVE_DECISION_BRANCH_TRANSFER'
@@ -149,6 +156,10 @@ async function buildProcurementDecisionDto(mr) {
     coordinatorProcurementRemark: mr.coordinatorProcurementRemark || '',
     canExecutiveDecide: EXECUTIVE_QUEUE_STATUSES.includes(mr.status),
     canCoordinatorReview: COORDINATOR_QUEUE_STATUSES.includes(mr.status),
+    /** Within Coordinator local-close statuses (₹10,000/day) — FE shows Approve & close. */
+    canCoordinatorLocalClose:
+      require('./coordinatorApprovalCapService').canCoordinatorLocalCloseStatus(mr.status) &&
+      !mr.escalatedToChairman,
     canFullyIssue: !!stockContext.canFullyIssue,
     hasAvailableStock: (stockContext.stockByLine || []).some((s) => (s.availableQty || 0) > 0),
     linkedBranchTransfers: linkedTransfers.map(serializeTransferRow),
@@ -161,7 +172,7 @@ async function listProcurementDecisions(user) {
     filter.status = { $in: EXECUTIVE_QUEUE_STATUSES };
     Object.assign(filter, buildExecutiveIndentCategoryFilter(user));
   } else if (user.role === UserRole.COORDINATOR) {
-    filter.status = { $in: COORDINATOR_QUEUE_STATUSES };
+    filter.status = { $in: coordinatorVisibleStatuses() };
   } else if (user.role === UserRole.CHAIRMAN) {
     filter.status = {
       $in: [...EXECUTIVE_QUEUE_STATUSES, ...COORDINATOR_QUEUE_STATUSES, 'PURCHASE_REQUESTED'],
@@ -290,18 +301,19 @@ async function executiveAcceptStock(mr, user, remark) {
       : 'Executive accepted against site stock — sent to Coordinator procurement requests'
   );
 
-  const { checkCoordinatorCanApprove } = require('./coordinatorApprovalCapService');
+  const {
+    checkCoordinatorCanApprove,
+    coordinatorLocalApproveHint,
+  } = require('./coordinatorApprovalCapService');
   const coordinators = await User.find({ role: UserRole.COORDINATOR });
   await Promise.all(
     coordinators.map(async (coord) => {
       const capCheck = await checkCoordinatorCanApprove(coord._id, mr);
-      const hint = capCheck.wouldExceed
-        ? ''
-        : '\nCan locally approve and close. No need to reach out to MD/Coordinator level.';
+      const hint = coordinatorLocalApproveHint(capCheck);
       return notificationService.notifyUser(coord._id, {
         title: 'Procurement request pending local approval',
         body: `${mr.indentNumber} (${pr.prNumber}) — Executive accepted against site stock.${hint}`,
-        relatedEntityType: 'MaterialRequest',
+        relatedEntityType: 'ProcurementDecision',
         relatedEntityId: mr._id,
       });
     })
@@ -368,13 +380,14 @@ async function executiveDecide(mr, user, { method, remark }) {
   );
 
   const coordinators = await User.find({ role: UserRole.COORDINATOR });
-  const { checkCoordinatorCanApprove } = require('./coordinatorApprovalCapService');
+  const {
+    checkCoordinatorCanApprove,
+    coordinatorLocalApproveHint,
+  } = require('./coordinatorApprovalCapService');
   await Promise.all(
     coordinators.map(async (coord) => {
       const capCheck = await checkCoordinatorCanApprove(coord._id, mr);
-      const hint = capCheck.wouldExceed
-        ? ''
-        : '\nCan locally approve and close. No need to reach out to MD/Coordinator level.';
+      const hint = coordinatorLocalApproveHint(capCheck);
       return notificationService.notifyUser(coord._id, {
         title: 'Procurement Decision Waiting for Approval',
         body: `${mr.indentNumber} — executive recommended branch transfer.${hint}`,
@@ -612,6 +625,7 @@ async function countPendingProcurementDecisions(user) {
 module.exports = {
   EXECUTIVE_QUEUE_STATUSES,
   COORDINATOR_QUEUE_STATUSES,
+  coordinatorVisibleStatuses,
   listProcurementDecisions,
   buildProcurementDecisionDto,
   loadDecisionIndent,
