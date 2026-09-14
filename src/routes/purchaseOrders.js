@@ -134,12 +134,21 @@ router.get('/:id/grn-counter', param('id').isMongoId(), validate, async (req, re
     const { peekNextPoGrnNumber } = require('../services/grnCounterService');
     const { getPoGrnReceiptLines } = require('../services/grnFulfillmentService');
     const preview = await peekNextPoGrnNumber(po._id);
-    const lines = await getPoGrnReceiptLines(po);
+    const receiptContext = await getPoGrnReceiptLines(po);
+    const lines = Array.isArray(receiptContext) ? receiptContext : receiptContext.lines;
+    const remainingQty = Array.isArray(receiptContext)
+      ? lines.reduce((sum, line) => sum + (line.remainingQty || 0), 0)
+      : receiptContext.remainingQty;
     res.json({
       data: {
         purchaseOrderId: po._id.toString(),
         nextNumber: preview.nextNumber,
         grnNumber: preview.grnNumber,
+        /** Sequential GRN-002+ only after a prior GRN on this PO (typical partial flow). */
+        showSequentialNumber: preview.nextNumber > 1,
+        remainingQty,
+        hasPendingApproval: !Array.isArray(receiptContext) && !!receiptContext.hasPendingApproval,
+        pendingGrns: Array.isArray(receiptContext) ? [] : receiptContext.pendingGrns || [],
         lines,
       },
     });

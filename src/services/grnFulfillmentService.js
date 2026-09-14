@@ -8,6 +8,11 @@ const { recordPoReceived, hasReachedStage } = require('./poTimelineService');
 
 const VARIANCE_ROLES = new Set(['STORE', 'PM', 'EXECUTIVE', 'COORDINATOR', 'CHAIRMAN']);
 
+/** Posted to stock / closed qty — exclude drafts, rejects, and awaiting-approval holds. */
+const POSTED_EXCLUDE_STATUSES = ['DRAFT', 'ON_HOLD', 'REJECTED'];
+/** Qty already claimed on the PO (includes ON_HOLD awaiting Coordinator) — blocks duplicate full GRNs. */
+const COMMITTED_EXCLUDE_STATUSES = ['DRAFT', 'REJECTED'];
+
 function canViewGrnVariance(role) {
   return VARIANCE_ROLES.has(role);
 }
@@ -16,7 +21,10 @@ function buildLineKey(line, index) {
   return line._id?.toString() || `idx-${index}`;
 }
 
-async function getCumulativeReceivedByLine(poId, { excludeStatuses = ['DRAFT', 'ON_HOLD', 'REJECTED'] } = {}) {
+async function getCumulativeReceivedByLine(
+  poId,
+  { excludeStatuses = POSTED_EXCLUDE_STATUSES } = {}
+) {
   const grns = await GoodsReceiptNote.find({
     purchaseOrderId: poId,
     status: { $nin: excludeStatuses },
@@ -31,6 +39,11 @@ async function getCumulativeReceivedByLine(poId, { excludeStatuses = ['DRAFT', '
     }
   }
   return cumulative;
+}
+
+/** Received + pending ON_HOLD — used for remaining qty / allowing another GRN. */
+async function getCommittedReceivedByLine(poId) {
+  return getCumulativeReceivedByLine(poId, { excludeStatuses: COMMITTED_EXCLUDE_STATUSES });
 }
 
 /** Ordered / received / remaining totals across PO lines (for GRN list UIs). */
@@ -58,9 +71,10 @@ function summarizePoReceiptQuantities(po, cumulativeByLine = {}) {
 async function summarizePurchaseOrdersReceipts(orders) {
   if (!orders?.length) return new Map();
   const poIds = orders.map((po) => po._id || po.id).filter(Boolean);
+  // Include ON_HOLD so fully submitted (awaiting approval) POs leave the receive queue.
   const grns = await GoodsReceiptNote.find({
     purchaseOrderId: { $in: poIds },
-    status: { $nin: ['DRAFT', 'ON_HOLD', 'REJECTED'] },
+    status: { $nin: COMMITTED_EXCLUDE_STATUSES },
   })
     .select('purchaseOrderId items')
     .lean();
@@ -267,12 +281,24 @@ function stripVarianceForRole(grnPayload, role) {
 }
 
 async function getPoGrnReceiptLines(po) {
-  const cumulative = await getCumulativeReceivedByLine(po._id);
-  return (po.lineItems || []).map((line, index) => {
+  const [posted, committed] = await Promise.all([
+    getCumulativeReceivedByLine(po._id),
+    getCommittedReceivedByLine(po._id),
+  ]);
+  const pendingHoldGrns = await GoodsReceiptNote.find({
+    purchaseOrderId: po._id,
+    status: 'ON_HOLD',
+  })
+    .select('grnNumber receiveType status createdAt')
+    .sort({ createdAt: -1 })
+    .lean();
+
+  const lines = (po.lineItems || []).map((line, index) => {
     const key = buildLineKey(line, index);
     const orderedQty = Number(line.quantity);
+    const postedReceived = posted[key] || posted[line.materialId?.toString()] || 0;
     const previouslyReceived =
-      cumulative[key] || cumulative[line.materialId?.toString()] || 0;
+      committed[key] || committed[line.materialId?.toString()] || 0;
     const remainingQty = Math.max(0, orderedQty - previouslyReceived);
     return {
       lineIndex: index,
@@ -281,16 +307,31 @@ async function getPoGrnReceiptLines(po) {
       unit: line.unit || '',
       orderedQty,
       previouslyReceived,
+      postedReceived,
       remainingQty,
       poRate: Number(line.rate),
     };
   });
+
+  const remainingQty = lines.reduce((sum, line) => sum + line.remainingQty, 0);
+  return {
+    lines,
+    remainingQty,
+    hasPendingApproval: pendingHoldGrns.length > 0,
+    pendingGrns: pendingHoldGrns.map((g) => ({
+      id: g._id.toString(),
+      grnNumber: g.grnNumber,
+      receiveType: g.receiveType || '',
+      status: g.status,
+    })),
+  };
 }
 
 module.exports = {
   canViewGrnVariance,
   buildLineKey,
   getCumulativeReceivedByLine,
+  getCommittedReceivedByLine,
   summarizePoReceiptQuantities,
   summarizePurchaseOrdersReceipts,
   computeLineVariances,
@@ -298,4 +339,6 @@ module.exports = {
   listPoGrns,
   stripVarianceForRole,
   getPoGrnReceiptLines,
+  POSTED_EXCLUDE_STATUSES,
+  COMMITTED_EXCLUDE_STATUSES,
 };

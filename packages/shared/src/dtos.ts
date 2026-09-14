@@ -354,6 +354,11 @@ export interface ProjectGrnCounterDto {
   purchaseOrderId?: string;
   nextNumber: number;
   grnNumber: string;
+  /** True when GRN-002+ applies because prior receipts left remaining qty. */
+  showSequentialNumber?: boolean;
+  remainingQty?: number;
+  hasPendingApproval?: boolean;
+  pendingGrns?: Array<{ id: string; grnNumber: string; receiveType?: string; status: string }>;
   lines?: PoGrnReceiptLineDto[];
 }
 

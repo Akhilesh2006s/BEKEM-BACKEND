@@ -15,6 +15,7 @@ const { validate } = require('../middleware/validate');
 const {
   computeLineVariances,
   getCumulativeReceivedByLine,
+  getCommittedReceivedByLine,
   canViewGrnVariance,
   summarizePurchaseOrdersReceipts,
   summarizePoReceiptQuantities,
@@ -75,16 +76,19 @@ router.get('/pending-purchase-orders', async (req, res, next) => {
     const { serializePurchaseOrder } = require('../utils/serializeProcurement');
     const receiptByPo = await summarizePurchaseOrdersReceipts(orders);
     res.json({
-      data: orders.map((po) => {
-        const row = serializePurchaseOrder(po);
-        row.receiptSummary = receiptByPo.get(po._id.toString()) || {
-          orderedQty: 0,
-          receivedQty: 0,
-          remainingQty: 0,
-          lineCount: (po.lineItems || []).length,
-        };
-        return row;
-      }),
+      data: orders
+        .map((po) => {
+          const row = serializePurchaseOrder(po);
+          row.receiptSummary = receiptByPo.get(po._id.toString()) || {
+            orderedQty: 0,
+            receivedQty: 0,
+            remainingQty: 0,
+            lineCount: (po.lineItems || []).length,
+          };
+          return row;
+        })
+        // Hide POs whose ordered qty is already fully covered by posted or pending ON_HOLD GRNs.
+        .filter((row) => Number(row.receiptSummary?.remainingQty || 0) > 1e-9),
     });
   } catch (err) {
     next(err);
@@ -412,7 +416,7 @@ router.post(
         };
       }
 
-      const cumulativeBefore = await getCumulativeReceivedByLine(po._id);
+      const cumulativeBefore = await getCommittedReceivedByLine(po._id);
       const linePayloads = req.body.items.map((i, idx) => ({
         lineIndex: i.lineIndex != null ? Number(i.lineIndex) : idx,
         quantityReceived: i.quantityReceived,
@@ -425,6 +429,30 @@ router.post(
       );
 
       const totalReceived = items.reduce((s, i) => s + i.quantityReceived, 0);
+      if (totalReceived <= 0) {
+        return {
+          statusCode: 400,
+          body: { statusCode: 400, message: 'Enter a receive quantity greater than zero' },
+        };
+      }
+
+      const remainingBefore = (po.lineItems || []).reduce((sum, line, index) => {
+        const key = line._id?.toString() || `idx-${index}`;
+        const ordered = Number(line.quantity) || 0;
+        const already =
+          Number(cumulativeBefore[key] || cumulativeBefore[line.materialId?.toString()] || 0) || 0;
+        return sum + Math.max(0, ordered - already);
+      }, 0);
+      if (remainingBefore <= 1e-9) {
+        return {
+          statusCode: 400,
+          body: {
+            statusCode: 400,
+            message:
+              'This PO is already fully covered by earlier GRNs (including any awaiting Coordinator approval)',
+          },
+        };
+      }
       const saveDraft = req.body.saveDraft === true;
       const rawAttachments = Array.isArray(req.body.attachments)
         ? req.body.attachments.filter((a) => a?.name)
@@ -465,7 +493,27 @@ router.post(
           : [];
 
       const receiveType =
-        req.body.receiveType || (isPartial || status === 'PARTIALLY_RECEIVED' ? 'PARTIAL' : 'FULL');
+        req.body.receiveType === 'FULL' || req.body.receiveType === 'PARTIAL'
+          ? req.body.receiveType
+          : isPartial
+            ? 'PARTIAL'
+            : 'FULL';
+      // Quantity-partial only — Coordinator hold must not force another GRN sequence.
+      const remainingAfterThis = (po.lineItems || []).reduce((sum, line, index) => {
+        const key = line._id?.toString() || `idx-${index}`;
+        const mid = line.materialId?.toString();
+        const ordered = Number(line.quantity) || 0;
+        const already =
+          Number(cumulativeBefore[key] || cumulativeBefore[mid] || 0) || 0;
+        const matched = items.find(
+          (item) =>
+            (item.poLineId && item.poLineId.toString() === line._id?.toString()) ||
+            (item.materialId && item.materialId.toString() === mid)
+        );
+        const after = already + Number(matched?.quantityReceived || 0);
+        return sum + Math.max(0, ordered - after);
+      }, 0);
+      const isPartialGrn = remainingAfterThis > 1e-9 || receiveType === 'PARTIAL';
       const remarks = req.body.remarks || req.body.note || '';
 
       const pr = await PurchaseRequest.findById(po.purchaseRequestId);
@@ -528,7 +576,7 @@ router.post(
         requiresChairmanApproval: hold.requiresChairmanApproval,
         holdReasons,
         receiveType,
-        isPartialGrn: isPartial || hold.requiresHold || needsCoordinatorReview,
+        isPartialGrn,
         varianceDetails:
           isPartial || hold.requiresHold || needsCoordinatorReview ? { lines: varianceLines } : null,
         invoiceNo: req.body.invoiceNo || '',
