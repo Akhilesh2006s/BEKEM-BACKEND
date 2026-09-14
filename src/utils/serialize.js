@@ -121,7 +121,6 @@ function serializeLineItem(item, stockFields, pricingFields) {
 }
 
 const STORE_APPROVAL_STATUSES = new Set([
-  'ALLOCATED',
   'FORWARDED_TO_PM',
   'BRANCH_TRANSFER_REQUESTED',
 ]);
@@ -151,13 +150,50 @@ const COORDINATOR_APPROVAL_STATUSES = new Set([
 
 const CHAIRMAN_APPROVAL_STATUSES = new Set(['CHAIRMAN_APPROVED']);
 
+/** Infer who allocated when schema field is missing (pre-field PM/Coordinator local closes). */
+function deriveAllocatedByRoleFromHistory(history) {
+  const entries = history || [];
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i];
+    if (entry?.toStatus !== 'ALLOCATED') continue;
+    const remark = String(entry.note || entry.remark || entry.notes || '');
+    if (/coordinator closed/i.test(remark)) return UserRole.COORDINATOR;
+    if (/pm closed|closed at pm/i.test(remark)) return UserRole.PROJECT_MANAGER;
+    if (
+      entry.fromStatus === 'FORWARDED_TO_PM' ||
+      entry.fromStatus === 'PM_APPROVED' ||
+      entry.fromStatus === 'PENDING_HO' ||
+      entry.fromStatus === 'PENDING_EXECUTIVE_DECISION'
+    ) {
+      return UserRole.PROJECT_MANAGER;
+    }
+    if (entry.fromStatus === 'PENDING_STORE') return UserRole.STORE_INCHARGE;
+    return UserRole.STORE_INCHARGE;
+  }
+  return null;
+}
+
 function deriveApproverNamesFromHistory(history) {
   const approverNames = {};
   for (const entry of history || []) {
     const name = entry?.actorUserId?.name?.trim();
     if (!name) continue;
     const toStatus = entry?.toStatus;
-    if (STORE_APPROVAL_STATUSES.has(toStatus)) {
+    const fromStatus = entry?.fromStatus;
+    const remark = String(entry?.note || entry?.remark || entry?.notes || '');
+    if (toStatus === 'ALLOCATED') {
+      if (/coordinator closed/i.test(remark)) {
+        approverNames.coordinator = name;
+      } else if (
+        /pm closed|closed at pm/i.test(remark) ||
+        fromStatus === 'FORWARDED_TO_PM' ||
+        fromStatus === 'PM_APPROVED'
+      ) {
+        approverNames.pm = name;
+      } else {
+        approverNames.store = name;
+      }
+    } else if (STORE_APPROVAL_STATUSES.has(toStatus)) {
       approverNames.store = name;
     } else if (PM_APPROVAL_STATUSES.has(toStatus)) {
       approverNames.pm = name;
@@ -204,6 +240,7 @@ function serializeMaterialRequest(mr, stockContext, pricingContext) {
     requestedByUserId: resolveId(mr.requestedByUserId),
     status: mr.status,
     pendingWith: mr.pendingWithRole || pendingWithLabel(mr.status),
+    allocatedByRole: mr.allocatedByRole || null,
     estimatedValue: (pricingContext?.totalEstimatedValue ?? mr.estimatedValue) || 0,
     escalatedToHo: !!mr.escalatedToHo,
     storeStockVerified: !!mr.storeStockVerified,
@@ -283,6 +320,9 @@ async function serializeMaterialRequestEnriched(mr, viewerRole, options = {}) {
     .sort({ timestamp: 1 })
     .populate('actorUserId', 'name');
   data.approverNames = deriveApproverNamesFromHistory(history);
+  if (!data.allocatedByRole) {
+    data.allocatedByRole = deriveAllocatedByRoleFromHistory(history);
+  }
 
   if (options.includeGrns) {
     const { GoodsReceiptNote, PurchaseRequest, PurchaseOrder, MaterialIssue } = require('../models');
