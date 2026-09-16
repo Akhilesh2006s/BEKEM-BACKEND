@@ -12,7 +12,40 @@ async function estimateIndentAmount(mr) {
 
 async function createPurchaseRequestForIndent(mr, actorUserId, amountEstimate, historyNote) {
   const existing = await PurchaseRequest.findOne({ materialRequestId: mr._id });
-  if (existing) return existing;
+  if (existing) {
+    // Coordinator local-close (and similar) must still move the indent + write history
+    // so the daily approval bar / cap consume this action even when a PR already exists.
+    const terminalMr = new Set([
+      'PURCHASE_REQUESTED',
+      'PO_CREATED',
+      'ALLOCATED',
+      'PARTIALLY_ISSUED',
+      'ISSUED',
+      'COMPLETED',
+      'CLOSED',
+      'CANCELLED',
+      'REJECTED',
+    ]);
+    if (!terminalMr.has(mr.status)) {
+      const fromStatus = mr.status;
+      mr.status = 'PURCHASE_REQUESTED';
+      mr.pendingWithRole = 'EXECUTIVE';
+      await mr.save();
+      await statusHistoryService.record(
+        'MaterialRequest',
+        mr._id,
+        fromStatus,
+        'PURCHASE_REQUESTED',
+        actorUserId,
+        historyNote || `PR ${existing.prNumber} confirmed`
+      );
+    }
+    if (!['PO_CREATED', 'CANCELLED', 'CLOSED'].includes(existing.status) && existing.status !== 'OPEN') {
+      existing.status = 'OPEN';
+      await existing.save();
+    }
+    return existing;
+  }
 
   const project = mr.projectId?._id ? mr.projectId : await require('../models').Project.findById(mr.projectId);
   const projectCode = project?.code || 'PRJ';
