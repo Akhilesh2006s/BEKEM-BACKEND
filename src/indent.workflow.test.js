@@ -8,7 +8,7 @@ const {
   getSeedContext,
   getApp,
 } = require('./test/helpers');
-const { MaterialRequest, Material } = require('./models');
+const { MaterialRequest, Material, StockLedger } = require('./models');
 
 const GRN_RECEIPT_ATTACHMENTS = [
   {
@@ -452,6 +452,58 @@ describe('Indent workflow v2', () => {
     const beforeIssue = await MaterialRequest.findById(mrId);
     assert.notEqual(beforeIssue.status, 'ISSUED');
     assert.strictEqual(beforeIssue.allocationReviewStage, 'STORE_INCHARGE');
+  });
+
+  it('hands an approved, out-of-stock procurement to Store without inventing stock or returning to PM', async () => {
+    const created = await request(app).post('/api/material-requests').set('Authorization', `Bearer ${siteToken}`).send({
+      indentRequestType: 'ABOVE_5000', requestedByName: 'Test Requester', indentCategoryId,
+      purpose: 'Procurement handoff with no stock',
+      items: [{ materialId: material._id.toString(), quantityRequested: 999999 }],
+    });
+    assert.equal(created.status, 201);
+    const id = created.body.data.id;
+    await MaterialRequest.findByIdAndUpdate(id, { status: 'CHAIRMAN_APPROVED', allocationReviewStage: 'PROJECT_MANAGER', pendingWithRole: 'PROJECT_MANAGER', pmProceededAllocation: false });
+    const before = await request(app).get(`/api/material-requests/${id}`).set('Authorization', `Bearer ${pmToken}`);
+    assert.equal(before.body.data.canFullyIssue, false);
+    const proceed = await request(app).post(`/api/material-requests/${id}/proceed-allocation`).set('Authorization', `Bearer ${pmToken}`).send({ remark: 'Forward procurement to Store' });
+    assert.equal(proceed.status, 200, JSON.stringify(proceed.body));
+    assert.equal(proceed.body.data.allocationReviewStage, 'STORE_INCHARGE');
+    assert.equal(proceed.body.data.pendingWith, 'STORE_INCHARGE');
+    assert.equal(proceed.body.data.items[0].quantityAllocated, 0);
+    await MaterialRequest.findByIdAndUpdate(id, { status: 'ALLOCATED' });
+    const back = await request(app).post(`/api/material-requests/${id}/forward`).set('Authorization', `Bearer ${storeToken}`).send({ remark: 'Should not return to PM' });
+    assert.equal(back.status, 409, JSON.stringify(back.body));
+    const saved = await MaterialRequest.findById(id).lean();
+    assert.equal(saved.allocationReviewStage, 'STORE_INCHARGE');
+    assert.equal(saved.pendingWithRole, 'STORE_INCHARGE');
+  });
+
+  it('lets Store issue after PM handoff and shows the indent to Site for receipt confirmation', async () => {
+    const created = await request(app).post('/api/material-requests').set('Authorization', `Bearer ${siteToken}`).send({
+      indentRequestType: 'ABOVE_5000', requestedByName: 'Test Requester', indentCategoryId,
+      purpose: 'PM Store Site allocation handoff', items: [{ materialId: material._id.toString(), quantityRequested: 2 }],
+    });
+    assert.equal(created.status, 201);
+    const id = created.body.data.id;
+    const mr = await MaterialRequest.findById(id);
+    await StockLedger.updateOne({ siteId: mr.siteId, materialId: material._id }, { $set: { quantityOnHand: 0, quantityReserved: 0 } }, { upsert: true });
+    await MaterialRequest.findByIdAndUpdate(id, { status: 'CHAIRMAN_APPROVED', allocationReviewStage: 'PROJECT_MANAGER', pendingWithRole: 'PROJECT_MANAGER', pmProceededAllocation: false });
+    const issueBody = { materialRequestId: id, items: [{ materialId: material._id.toString(), quantity: 2 }], reason: 'already_approved', issueType: 'WORK_ISSUE', issuedToName: 'Synthetic site recipient' };
+    const early = await request(app).post('/api/material-issues').set('Authorization', `Bearer ${storeToken}`).send(issueBody);
+    assert.equal(early.status, 409, JSON.stringify(early.body));
+    const proceed = await request(app).post(`/api/material-requests/${id}/proceed-allocation`).set('Authorization', `Bearer ${pmToken}`).send({ remark: 'Send to Store' });
+    assert.equal(proceed.status, 200, JSON.stringify(proceed.body));
+    // Simulate already received stock; this test does not bypass receipt in the application.
+    await StockLedger.updateOne({ siteId: mr.siteId, materialId: material._id }, { $set: { quantityOnHand: 2 } });
+    const issue = await request(app).post('/api/material-issues').set('Authorization', `Bearer ${storeToken}`).send(issueBody);
+    assert.equal(issue.status, 201, JSON.stringify(issue.body));
+    assert.equal(issue.body.data.indent.status, 'ISSUED');
+    assert.equal(issue.body.data.indent.allocationReviewStage, 'SITE_INCHARGE');
+    const site = await request(app).get('/api/material-requests').set('Authorization', `Bearer ${siteToken}`);
+    assert.ok(site.body.data.some((row) => row.id === id && row.status === 'ISSUED'));
+    const confirm = await request(app).post(`/api/material-requests/${id}/confirm-receipt`).set('Authorization', `Bearer ${siteToken}`).send({});
+    assert.equal(confirm.status, 200, JSON.stringify(confirm.body));
+    assert.equal(confirm.body.data.status, 'COMPLETED');
   });
 
   it('stock-received is store-only and requires an approved indent', async () => {

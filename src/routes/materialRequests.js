@@ -1044,6 +1044,10 @@ router.post(
         return { statusCode: 200, body: { ...(await mrEnrichedBody(mr._id, req.user.role)), message: 'Already forwarded to PM' } };
       }
 
+      if (mr.pmProceededAllocation || mr.allocationReviewStage) {
+        return { statusCode: 409, body: { statusCode: 409, message: 'This indent has already entered the allocation handoff and cannot be forwarded back to PM.' } };
+      }
+
       if (!['ALLOCATED', 'PENDING_STORE'].includes(mr.status)) {
         return {
           statusCode: 400,

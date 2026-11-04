@@ -244,6 +244,10 @@ router.post(
         });
       }
 
+      if (['EXECUTIVE', 'PROJECT_MANAGER'].includes(mr.allocationReviewStage)) {
+        return res.status(409).json({ statusCode: 409, message: 'Wait until the allocation review reaches Store before issuing material.' });
+      }
+
       const reason = req.body.reason;
       if (reason === 'other') {
         const otherText = String(req.body.reasonOtherText || '').trim();
@@ -336,7 +340,7 @@ router.post(
       try {
         await session.withTransaction(async () => {
           const current = await MaterialRequest.findById(mr._id).session(session).populate('items.materialId');
-          if (!current || !issueable.includes(current.status)) {
+          if (!current || !issueable.includes(current.status) || ['EXECUTIVE', 'PROJECT_MANAGER'].includes(current.allocationReviewStage)) {
             const err = new Error('Indent is no longer ready for issue'); err.statusCode = 400; throw err;
           }
           const quantities = new Map();
@@ -361,6 +365,9 @@ router.post(
           const fullyIssued = getIndentLineItems(current).every((line) => Number(line.quantityIssued || 0) >= Number(line.quantityRequested || 0));
           current.status = fullyIssued ? 'ISSUED' : 'PARTIALLY_ISSUED';
           current.pendingWithRole = fullyIssued ? 'SITE_INCHARGE' : 'STORE_INCHARGE';
+          if (current.allocationReviewStage || current.pmProceededAllocation) {
+            current.allocationReviewStage = fullyIssued ? 'SITE_INCHARGE' : 'STORE_INCHARGE';
+          }
           await current.save({ session });
           [issue] = await MaterialIssue.create([issuePayload], { session });
           const reasonLabel = reason === 'other' ? req.body.reasonOtherText : reason.replace(/_/g, ' ');

@@ -1,6 +1,5 @@
 const { UserRole } = require('@afios/shared');
 const { User } = require('../models');
-const { getIndentLineItems } = require('./materialRequestHelpers');
 const { enrichIndentWithStock } = require('./indentStockService');
 const { allocateIndentStock } = require('./indentAllocationService');
 const statusHistoryService = require('./statusHistoryService');
@@ -145,13 +144,9 @@ async function proceedWithAllocation(mr, actor, remark, poStatus) {
 
   if (role === UserRole.PROJECT_MANAGER) {
     const stockContext = await enrichIndentWithStock(mr);
-    if (stockContext.canFullyIssue) {
+    if (stockContext.stockByLine.every((line) => line.availableQty >= line.remainingToIssueQty)) {
       await allocateIndentStock(mr, actor._id);
       mr.status = 'ALLOCATED';
-    } else {
-      for (const item of getIndentLineItems(mr)) {
-        item.quantityAllocated = item.quantityRequested;
-      }
     }
     mr.pmProceededAllocation = true;
     mr.pmForwardRemark = remark;

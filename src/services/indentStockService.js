@@ -26,7 +26,7 @@ function computeLineStockFields(item, ledger, receivedQty = 0, receipts = [], in
   // quantityAllocated failed to persist — stock was already reserved/moved.
   if (
     allocatedQty <= 0 &&
-    ['ALLOCATED', 'PARTIALLY_ISSUED', 'ISSUED', 'MATERIAL_RECEIVED', 'CHAIRMAN_APPROVED'].includes(
+    ['ALLOCATED', 'PARTIALLY_ISSUED', 'ISSUED', 'MATERIAL_RECEIVED'].includes(
       indentStatus
     )
   ) {
