@@ -86,7 +86,7 @@ async function consumeFifo({ siteId, materialId, quantity, actorUserId, material
   }).sort({ receivedAt: 1, createdAt: 1 }).session(session);
 
   const ledger = await StockLedger.findOne({ siteId, materialId }).session(session);
-  const ledgerAvailable = ledger?.quantityOnHand ?? 0;
+  const ledgerAvailable = Math.max(0, Number(ledger?.quantityOnHand || 0) - Number(ledger?.quantityReserved || 0));
 
   if (ledgerAvailable < qtyNeeded) {
     const err = new Error('Insufficient stock to issue');

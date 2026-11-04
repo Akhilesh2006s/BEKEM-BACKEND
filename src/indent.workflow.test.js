@@ -506,6 +506,25 @@ describe('Indent workflow v2', () => {
     assert.equal(confirm.body.data.status, 'COMPLETED');
   });
 
+  it('does not issue stock reserved for another request', async () => {
+    const created = await request(app).post('/api/material-requests').set('Authorization', `Bearer ${siteToken}`).send({
+      indentRequestType: 'ABOVE_5000', requestedByName: 'Test Requester', indentCategoryId,
+      purpose: 'Reserved stock cannot be issued to another indent', items: [{ materialId: material._id.toString(), quantityRequested: 2 }],
+    });
+    assert.equal(created.status, 201);
+    const id = created.body.data.id;
+    const mr = await MaterialRequest.findById(id);
+    await MaterialRequest.findByIdAndUpdate(id, { status: 'MATERIAL_RECEIVED', pendingWithRole: 'STORE_INCHARGE' });
+    await StockLedger.updateOne({ siteId: mr.siteId, materialId: material._id }, { $set: { quantityOnHand: 2, quantityReserved: 2 } }, { upsert: true });
+    const res = await request(app).post('/api/material-issues').set('Authorization', `Bearer ${storeToken}`).send({
+      materialRequestId: id, items: [{ materialId: material._id.toString(), quantity: 2 }], reason: 'already_approved', issueType: 'WORK_ISSUE', issuedToName: 'Synthetic recipient',
+    });
+    assert.equal(res.status, 400, JSON.stringify(res.body));
+    const ledger = await StockLedger.findOne({ siteId: mr.siteId, materialId: material._id }).lean();
+    assert.equal(ledger.quantityOnHand, 2);
+    assert.equal((await MaterialRequest.findById(id)).status, 'MATERIAL_RECEIVED');
+  });
+
   it('stock-received is store-only and requires an approved indent', async () => {
     const coordinatorToken = await loginAs('coordinator@bekem.com');
     const createRes = await request(app)
