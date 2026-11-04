@@ -125,6 +125,19 @@ describe('Branch transfer workflow', () => {
     });
     assert.strictEqual(sourceMid.quantityOnHand, sourceReady.quantityOnHand);
 
+    const prematureDispatch = await request(app)
+      .post(`/api/branch-transfers/${transferId}/dispatch`)
+      .set('Authorization', `Bearer ${pmToken}`)
+      .send({ challanNo: 'CH/TEST/001', expectedArrivalDate: new Date(Date.now() + 86400000).toISOString() });
+    assert.strictEqual(prematureDispatch.status, 400);
+
+    const coordinatorReview = await request(app)
+      .post(`/api/branch-transfers/${transferId}/coordinator-decide`)
+      .set('Authorization', `Bearer ${coordinatorToken}`)
+      .send({ decision: 'transfer', note: 'Coordinator verified' });
+    assert.strictEqual(coordinatorReview.status, 200, JSON.stringify(coordinatorReview.body));
+    assert.strictEqual(coordinatorReview.body.data.status, 'COORDINATOR_DECIDED');
+
     const dispatchRes = await request(app)
       .post(`/api/branch-transfers/${transferId}/dispatch`)
       .set('Authorization', `Bearer ${pmToken}`)
@@ -222,7 +235,7 @@ describe('Branch transfer workflow', () => {
     assert.strictEqual(rejectRes.body.data.status, 'REJECTED');
   });
 
-  it('PM branch-transfer target search lists only supervised projects', async () => {
+  it('PM branch-transfer target search can find company projects', async () => {
     const extra = await Project.create({
       code: 'PRJ-099',
       name: 'UNSUPPORTED DEMO PROJECT',
@@ -245,11 +258,9 @@ describe('Branch transfer workflow', () => {
 
     assert.strictEqual(pmRes.status, 200);
     assert.strictEqual(execRes.status, 200);
-    assert.ok(!pmRes.body.data.some((p) => p.id === extra._id.toString()));
+    assert.ok(pmRes.body.data.some((p) => p.id === extra._id.toString()));
     assert.ok(execRes.body.data.some((p) => p.id === extra._id.toString()));
-    for (const row of pmRes.body.data) {
-      assert.ok(['PRJ-001', 'PRJ-002', 'PRJ-003'].includes(row.code));
-    }
+    assert.ok(pmRes.body.data.some((p) => p.code === 'PRJ-001'));
   });
 
   it('PM can take from multiple sites and forward remaining to HO', async () => {

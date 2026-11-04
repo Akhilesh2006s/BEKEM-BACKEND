@@ -17,14 +17,15 @@ function dailyCap() {
   return getSettings().mrCoordinatorDailyMaxInr;
 }
 
-async function getCoordinatorDailyApprovedTotal(coordinatorUserId, date = new Date()) {
+async function getCoordinatorDailyApprovedTotal(coordinatorUserId, date = new Date(), session = null) {
   const { start, endExclusive } = getDayBounds(date);
   const approvals = await StatusHistory.find({
     entityType: 'MaterialRequest',
     actorUserId: coordinatorUserId,
     toStatus: { $in: COORDINATOR_CAP_STATUSES },
+    note: { $not: /Chairman authorized/i },
     timestamp: { $gte: start, $lt: endExclusive },
-  }).select('entityId');
+  }).session(session).select('entityId');
 
   const seen = new Set();
   let total = 0;
@@ -32,7 +33,7 @@ async function getCoordinatorDailyApprovedTotal(coordinatorUserId, date = new Da
     const id = entry.entityId?.toString();
     if (!id || seen.has(id)) continue;
     seen.add(id);
-    const mr = await MaterialRequest.findById(entry.entityId).select(
+    const mr = await MaterialRequest.findById(entry.entityId).session(session).select(
       'estimatedValue items quantityRequested materialId'
     );
     if (!mr) continue;
@@ -40,19 +41,19 @@ async function getCoordinatorDailyApprovedTotal(coordinatorUserId, date = new Da
     if (!(value > 0)) value = await estimateIndentAmount(mr);
     total += value;
   }
-  return Math.round(total);
+  return Math.round(total * 100) / 100;
 }
 
 function wouldExceedCoordinatorDailyCap(currentTotal, requestValue) {
-  return currentTotal + requestValue > dailyCap();
+  return Math.round(currentTotal * 100) + Math.round(requestValue * 100) > Math.round(dailyCap() * 100);
 }
 
-async function checkCoordinatorCanApprove(coordinatorUserId, mr) {
+async function checkCoordinatorCanApprove(coordinatorUserId, mr, session = null) {
   let requestValue = Number(mr.estimatedValue);
   if (!(requestValue > 0)) {
     requestValue = await estimateIndentAmount(mr);
   }
-  const dailyApprovedTotal = await getCoordinatorDailyApprovedTotal(coordinatorUserId);
+  const dailyApprovedTotal = await getCoordinatorDailyApprovedTotal(coordinatorUserId, new Date(), session);
   const wouldExceed = wouldExceedCoordinatorDailyCap(dailyApprovedTotal, requestValue);
   return {
     dailyApprovedTotal,

@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const UPLOAD_ROOT = path.join(__dirname, '..', '..', 'uploads', 'grn');
+const UPLOAD_ROOT = path.join(process.env.DOCUMENT_STORAGE_PATH || path.join(__dirname, '..', '..', 'uploads'), 'grn');
 const ALLOWED_MIME = new Set([
   'application/pdf',
   'image/jpeg',

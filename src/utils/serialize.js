@@ -240,6 +240,14 @@ function serializeMaterialRequest(mr, stockContext, pricingContext) {
     requestedByUserId: resolveId(mr.requestedByUserId),
     status: mr.status,
     pendingWith: mr.pendingWithRole || pendingWithLabel(mr.status),
+    allocationReviewStage: mr.allocationReviewStage || null,
+    pmProceededAllocation: Boolean(mr.pmProceededAllocation),
+    storeStockReceivedAt: mr.storeStockReceivedAt || null,
+    storeStockReceivedAttachments: (mr.storeStockReceivedAttachments || []).map((attachment) => ({
+      name: attachment.name, fileType: attachment.fileType, category: attachment.category, url: attachment.url,
+    })),
+    escalatedToChairman: Boolean(mr.escalatedToChairman),
+    chairmanIndentApprovedAt: mr.chairmanIndentApprovedAt || null,
     allocatedByRole: mr.allocatedByRole || null,
     estimatedValue: (pricingContext?.totalEstimatedValue ?? mr.estimatedValue) || 0,
     escalatedToHo: !!mr.escalatedToHo,
@@ -384,6 +392,7 @@ async function serializeMaterialRequestEnriched(mr, viewerRole, options = {}) {
       issuedAt: issue.issuedAt?.toISOString?.() || issue.createdAt?.toISOString?.() || null,
       issuedToName: issue.issuedToName || '',
       issuedByName: issue.issuedByUserId?.name || '',
+      attachments: (issue.attachments || []).map((a) => ({ name: a.name, fileType: a.fileType, category: a.category, url: a.url || '' })),
       items: (issue.items || []).map((item) => ({
         materialId: resolveId(item.materialId),
         materialName: item.materialId?.name || 'Material',

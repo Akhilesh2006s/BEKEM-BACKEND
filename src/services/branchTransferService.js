@@ -92,6 +92,10 @@ function transferActionFlags(t, user) {
     flags.canExecutiveReject = true;
   }
 
+  if (user.role === UserRole.COORDINATOR && t.status === 'EXECUTIVE_APPROVED') {
+    flags.canCoordinatorDecide = true;
+  }
+
   if (user.role === UserRole.COORDINATOR && t.status === 'REQUESTED') {
     flags.canCoordinatorReject = true;
   }
@@ -107,7 +111,7 @@ function transferActionFlags(t, user) {
 
   if (
     user.role === UserRole.PROJECT_MANAGER &&
-    t.status === 'EXECUTIVE_APPROVED' &&
+    t.status === 'COORDINATOR_DECIDED' && t.coordinatorDecision === 'transfer' &&
     userManagesProject(user, t.fromProjectId?._id || t.fromProjectId)
   ) {
     flags.canSourceDispatch = true;

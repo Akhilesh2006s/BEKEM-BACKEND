@@ -7,7 +7,7 @@ require('dotenv').config();
 const path = require('path');
 const fs = require('fs');
 const mongoose = require('mongoose');
-const XLSX = require('xlsx');
+const { readSheet } = require('read-excel-file/node');
 const { connectMongo } = require('../db/connectMongo');
 const { StockInventoryRecord } = require('../models');
 const { syncMasterDataFromInventory } = require('../services/syncMasterDataFromInventory');
@@ -79,6 +79,11 @@ function parseRow(row) {
   };
 }
 
+async function readInventoryRows(filePath) {
+  const rows = await readSheet(filePath, 'Stock Inventory');
+  return rows.slice(2).map(parseRow).filter(Boolean);
+}
+
 async function importAndSyncPoIndex(filePath = DEFAULT_PATH) {
   if (!fs.existsSync(filePath)) {
     throw new Error(`PO INDEX file not found: ${filePath}`);
@@ -86,14 +91,7 @@ async function importAndSyncPoIndex(filePath = DEFAULT_PATH) {
 
   console.log('Reading:', filePath);
 
-  const wb = XLSX.readFile(filePath, { cellDates: true });
-  const sheet = wb.Sheets['Stock Inventory'];
-  if (!sheet) {
-    throw new Error('Sheet "Stock Inventory" not found');
-  }
-
-  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-  const dataRows = rows.slice(2).map(parseRow).filter(Boolean);
+  const dataRows = await readInventoryRows(filePath);
 
   console.log(`Parsed ${dataRows.length} inventory rows`);
 
@@ -135,4 +133,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { importAndSyncPoIndex, DEFAULT_PATH };
+module.exports = { importAndSyncPoIndex, readInventoryRows, DEFAULT_PATH };

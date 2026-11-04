@@ -53,7 +53,7 @@ async function evaluatePmLocalApproval(pmUserId, mr, pmUser) {
     }
     return { decision: 'FORWARDED_STOCK', stockContext, capCheck, pmStockDecision };
   }
-  if (mr.indentRequestType !== 'BELOW_5000' && capCheck.wouldExceed) {
+  if (capCheck.wouldExceed) {
     return { decision: 'FORWARDED_DAILY_CAP', stockContext, capCheck };
   }
   return { decision: 'CLOSED_LOCAL', stockContext, capCheck };

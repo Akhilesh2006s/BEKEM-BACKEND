@@ -12,6 +12,7 @@ const attachmentSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
     fileType: { type: String, default: 'application/octet-stream' },
+    url: { type: String, default: '' },
     category: {
       type: String,
       enum: ['ISSUE_SLIP', 'CONTRACTOR_ACK', 'OTHER'],

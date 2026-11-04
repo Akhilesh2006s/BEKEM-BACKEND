@@ -80,6 +80,7 @@ describe('Race & idempotency', () => {
       ],
       receiveType: 'PARTIAL',
       remarks: 'Idempotency test partial GRN',
+      invoiceNo: `TEST-IDEMPOTENT-${po.id}`,
       invoiceDate: new Date().toISOString(),
       attachments: mandatoryAttachments,
     };

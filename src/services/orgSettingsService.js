@@ -53,8 +53,7 @@ function fmtInr(n) {
 }
 
 function buildApprovalRoutingNote(settings) {
-  const coord = settings.poCoordinatorMaxInr;
-  return `Up to ${fmtInr(coord)} → Coordinator final approval · Above ${fmtInr(coord)} → Chairman final approval (Coordinator may approve with written reason if Chairman is not on premises).`;
+  return 'Every purchase order requires Coordinator verification followed by Chairman approval.';
 }
 
 function serialize(doc) {

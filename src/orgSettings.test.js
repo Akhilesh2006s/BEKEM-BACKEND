@@ -62,7 +62,7 @@ describe('Org settings & configurable approval limits', () => {
     assert.strictEqual(res.body.data.poCoordinatorMaxInr, 12000);
 
     const { requiresPmApproval } = require('./constants/approvalPolicy');
-    assert.strictEqual(requiresPmApproval(5999), true);
+    assert.strictEqual(requiresPmApproval(5999), false);
     assert.strictEqual(requiresPmApproval(6000), false);
   });
 

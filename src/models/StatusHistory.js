@@ -6,6 +6,7 @@ const statusHistorySchema = new mongoose.Schema({
   fromStatus: { type: String, default: null },
   toStatus: { type: String, required: true },
   actorUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  approvalPrincipalUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   note: { type: String, default: '' },
   timestamp: { type: Date, default: Date.now },
 });

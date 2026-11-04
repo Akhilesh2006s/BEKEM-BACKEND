@@ -1,4 +1,5 @@
 const { UserRole } = require('@afios/shared');
+const mongoose = require('mongoose');
 const { RFQ, Quotation, PurchaseRequest, MaterialRequest, Material, Vendor } = require('../models');
 const { HO_ROLES } = require('./executiveIndentService');
 const { getIndentLineItems } = require('./materialRequestHelpers');
@@ -399,6 +400,37 @@ async function saveRfqQuotations(rfqId, user, { quotations: rows }) {
   return getRfqComparison(rfqId, user);
 }
 
+async function saveQuotationRateOverrides(rfqId, user, rates) {
+  assertRfqAccess(user);
+  const { rfq, lineItems } = await loadRfqContext(rfqId, {
+    includeMaterialIds: (await RFQ.findById(rfqId).select('procurementMaterialIds').lean())?.procurementMaterialIds?.map(String),
+  });
+  const lineMap = new Map(lineItems.map((line) => [String(line.materialId?._id || line.materialId), Number(line.quantityRequested || line.quantity || 0)]));
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      await RFQ.updateOne({ _id: rfq._id }, { $inc: { __v: 1 } }, { session });
+      const quotes = await Quotation.find({ rfqId: rfq._id }).session(session);
+      for (const update of rates) {
+        const q = quotes.find((quote) => String(quote.vendorId) === String(update.vendorId));
+        const item = q?.itemQuotes?.find((entry) => String(entry.materialId) === String(update.materialId));
+        if (!q || !item || !lineMap.has(String(update.materialId))) {
+          const err = new Error('The vendor or material is not assigned to this RFQ'); err.statusCode = 400; throw err;
+        }
+        item.rate = Number(update.rate); item.gstPercent = Number(update.gstPercent);
+        item.amount = computeFinalCost(item.rate, lineMap.get(String(update.materialId)), item.gstPercent);
+      }
+      for (const q of quotes) {
+        if (!rates.some((entry) => String(entry.vendorId) === String(q.vendorId))) continue;
+        q.amount = q.itemQuotes.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+        if (q.itemQuotes.length === 1) { q.rate = q.itemQuotes[0].rate; q.gstPercent = q.itemQuotes[0].gstPercent; }
+        await q.save({ session });
+      }
+    });
+  } finally { await session.endSession(); }
+  return getRfqComparison(rfqId, user);
+}
+
 async function addRfqVendorQuotation(rfqId, user, body) {
   assertRfqAccess(user);
   const { rfq, quantity, lineItems } = await loadRfqContext(rfqId);
@@ -723,6 +755,7 @@ module.exports = {
   getRfqComparison,
   getRfqByPurchaseRequest,
   saveRfqQuotations,
+  saveQuotationRateOverrides,
   addRfqVendorQuotation,
   finalizeRfq,
   markQuotesObtained,

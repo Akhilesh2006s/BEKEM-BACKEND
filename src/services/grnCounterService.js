@@ -1,6 +1,9 @@
 const { PurchaseOrderGrnCounter } = require('../models');
 
 const GRN_NUMBER_PREFIX = 'GRN-';
+// A reserved counter key makes numbers unique across purchase orders without
+// changing or deleting the existing per-order counters.
+const GLOBAL_COUNTER_KEY = '000000000000000000000000';
 
 function formatGrnNumber(seq) {
   return `${GRN_NUMBER_PREFIX}${String(seq).padStart(3, '0')}`;
@@ -13,12 +16,13 @@ function parseGrnSequence(grnNumber) {
 }
 
 /**
- * Atomically allocate the next PO-scoped GRN number (resets per purchase order).
+ * Atomically allocate the next globally unique GRN number.
  */
 async function allocatePoGrnNumber(purchaseOrderId) {
-  await syncPoGrnCounterFromExisting(purchaseOrderId);
+  void purchaseOrderId;
+  await syncGlobalCounter();
   const counter = await PurchaseOrderGrnCounter.findOneAndUpdate(
-    { purchaseOrderId },
+    { purchaseOrderId: GLOBAL_COUNTER_KEY },
     { $inc: { lastGrnNumber: 1 } },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
@@ -26,10 +30,29 @@ async function allocatePoGrnNumber(purchaseOrderId) {
 }
 
 async function peekNextPoGrnNumber(purchaseOrderId) {
-  await syncPoGrnCounterFromExisting(purchaseOrderId);
-  const counter = await PurchaseOrderGrnCounter.findOne({ purchaseOrderId }).lean();
+  void purchaseOrderId;
+  await syncGlobalCounter();
+  const counter = await PurchaseOrderGrnCounter.findOne({ purchaseOrderId: GLOBAL_COUNTER_KEY }).lean();
   const next = (counter?.lastGrnNumber || 0) + 1;
   return { nextNumber: next, grnNumber: formatGrnNumber(next) };
+}
+
+async function syncGlobalCounter() {
+  const { GoodsReceiptNote } = require('../models');
+  const numbers = await GoodsReceiptNote.find({ grnNumber: /^GRN-\d+$/i }).select('grnNumber').lean();
+  const max = numbers.reduce((value, row) => Math.max(value, parseGrnSequence(row.grnNumber)), 0);
+  try {
+    await PurchaseOrderGrnCounter.findOneAndUpdate(
+      { purchaseOrderId: GLOBAL_COUNTER_KEY }, { $max: { lastGrnNumber: max } },
+      { upsert: true, setDefaultsOnInsert: true }
+    );
+  } catch (err) {
+    // Two first receipts may race to create the reserved counter.
+    if (err.code !== 11000) throw err;
+    await PurchaseOrderGrnCounter.updateOne(
+      { purchaseOrderId: GLOBAL_COUNTER_KEY }, { $max: { lastGrnNumber: max } }
+    );
+  }
 }
 
 async function syncPoGrnCounterFromExisting(purchaseOrderId) {

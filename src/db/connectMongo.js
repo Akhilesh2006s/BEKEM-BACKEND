@@ -1,25 +1,24 @@
 const dns = require('dns');
 const mongoose = require('mongoose');
 
-// Windows often fails Atlas SRV lookups with the system DNS resolver
-dns.setServers(['8.8.8.8', '1.1.1.1']);
 dns.setDefaultResultOrder('ipv4first');
 
 async function connectMongo() {
   const uris = [process.env.MONGO_URI, process.env.MONGO_URI_DIRECT].filter(Boolean);
+  if (!uris.length) throw new Error('MongoDB connection is not configured');
   let lastError;
   for (const uri of uris) {
     try {
-      await mongoose.connect(uri, { serverSelectionTimeoutMS: 15000 });
-      await repairPurchaseOrderIndexes();
-      await backfillPurchaseRequestsForApprovedIndents();
-      const { dedupeProjects } = require('../services/projectDeduplicationService');
-      await dedupeProjects();
-      await migrateBranchTransferStatuses();
-      await enforceUserProjectAssignmentRules();
-      await refreshSiteFiscalYearLabels();
+      await mongoose.connect(uri, { serverSelectionTimeoutMS: 15000, autoIndex: process.env.NODE_ENV !== 'production' });
+      if (process.env.NODE_ENV === 'production') {
+        const hello = await mongoose.connection.db.admin().command({ hello: 1 });
+        if ((!hello.setName && hello.msg !== 'isdbgrid') || hello.logicalSessionTimeoutMinutes == null) {
+          throw new Error('Production MongoDB must support transactions through a replica set or sharded cluster');
+        }
+      }
       return;
     } catch (err) {
+      if (mongoose.connection.readyState !== 0) await mongoose.disconnect();
       lastError = err;
       console.warn(
         `MongoDB connect failed (${uri.startsWith('mongodb+srv') ? 'SRV' : 'direct'}):`,

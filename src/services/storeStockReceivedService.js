@@ -3,6 +3,7 @@ const statusHistoryService = require('./statusHistoryService');
 const { getIndentLineItems } = require('./materialRequestHelpers');
 
 const { persistGrnAttachments } = require('./grnFileService');
+const { PurchaseRequest, PurchaseOrder } = require('../models');
 
 const RECEIVABLE_STATUSES = new Set(['CHAIRMAN_APPROVED', 'ALLOCATED']);
 const REQUIRED_RECEIPT_CATEGORIES = ['INVOICE', 'CHALLAN'];
@@ -68,6 +69,12 @@ async function recordStoreStockReceived(mr, actor, { remark, receivedAt, items, 
   assertStoreCanRecordStockReceived(mr, actor);
   if (mr.status === 'MATERIAL_RECEIVED') {
     return mr;
+  }
+  const requests = await PurchaseRequest.find({ materialRequestId: mr._id }).select('_id').lean();
+  if (requests.length && await PurchaseOrder.exists({ purchaseRequestId: { $in: requests.map((request) => request._id) }, status: 'APPROVED' })) {
+    const err = new Error('Record this purchase order through Material receipt (GRN); stock becomes available after the required review.');
+    err.statusCode = 409;
+    throw err;
   }
   assertRequiredReceiptDocuments(attachments);
 

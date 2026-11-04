@@ -112,13 +112,12 @@ describe('Stock inventory RBAC', () => {
       }
     }
     assert.strictEqual(res.body.meta.inventoryScope, 'assigned');
-    assert.ok(pm.assignedProjectIds.length >= 2 && pm.assignedProjectIds.length <= 4);
+    assert.ok(pm.assignedProjectIds.length >= 1 && pm.assignedProjectIds.length <= 4);
     assert.strictEqual(res.body.meta.assignedProjects.length, pm.assignedProjectIds.length);
   });
 
-  it('PM cross-project stock returns assigned project availability', async () => {
-    const pm = await User.findOne({ email: 'pm@bekem.com' }).populate('assignedProjectIds');
-    const assignedNames = new Set(pm.assignedProjectIds.map((p) => p.name));
+  it('PM cross-project stock includes company-wide availability for transfer decisions', async () => {
+    const companyNames = new Set([projectA.name, projectB.name, projectC.name]);
 
     const res = await request(app)
       .get('/api/stock/cross-project')
@@ -128,14 +127,14 @@ describe('Stock inventory RBAC', () => {
     assert.strictEqual(res.status, 200);
     assert.ok(res.body.data.length >= 1);
     const row = res.body.data[0];
-    assert.strictEqual(row.projects.length, pm.assignedProjectIds.length);
+    assert.strictEqual(row.projects.length, companyNames.size);
     for (const p of row.projects) {
-      assert.ok(assignedNames.has(p.projectName));
+      assert.ok(companyNames.has(p.projectName));
     }
     const byName = Object.fromEntries(row.projects.map((p) => [p.projectName, p.availableQty]));
-    if (assignedNames.has('AMR POWER')) assert.strictEqual(byName['AMR POWER'], 0);
-    if (assignedNames.has('CHITRAVATHI')) assert.strictEqual(byName.CHITRAVATHI, 50);
-    if (assignedNames.has('KAIGA PROJECT')) assert.strictEqual(byName['KAIGA PROJECT'], 120);
+    assert.strictEqual(byName['AMR POWER'], 0);
+    assert.strictEqual(byName['CHITRAVATHI'], 50);
+    assert.strictEqual(byName['KAIGA PROJECT'], 120);
     for (const p of row.projects) {
       assert.ok(Array.isArray(p.sites));
       if (p.sites.length) {

@@ -1,4 +1,5 @@
 const { UserRole } = require('@afios/shared');
+const mongoose = require('mongoose');
 const {
   GoodsReceiptNote,
   PurchaseOrder,
@@ -65,23 +66,26 @@ function validateMandatoryAttachments(attachments = [], { saveDraft = false } = 
   return null;
 }
 
-async function applyGrnStockAndSideEffects(grn, actorUserId) {
-  const po = await PurchaseOrder.findById(grn.purchaseOrderId);
+async function applyGrnStockAndSideEffects(grn, actorUserId, options = {}) {
+  const session = options.session || null;
+  const po = await PurchaseOrder.findById(grn.purchaseOrderId).session(session);
   if (!po) {
     const err = new Error('Purchase order not found');
     err.statusCode = 404;
     throw err;
   }
 
-  const pr = await PurchaseRequest.findById(po.purchaseRequestId);
+  const pr = await PurchaseRequest.findById(po.purchaseRequestId).session(session);
   const projectId = pr?.projectId?._id || pr?.projectId;
 
-  await createBatchesFromGrn(grn, actorUserId, pr?.materialRequestId || null);
+  await createBatchesFromGrn(grn, actorUserId, pr?.materialRequestId || null, { session });
 
-  const fulfillment = await syncPoFulfillment(po, actorUserId);
+  const fulfillment = await syncPoFulfillment(po, actorUserId, { session });
+
+  let storeNotification = null;
 
   if (pr?.materialRequestId) {
-    const mr = await MaterialRequest.findById(pr.materialRequestId);
+    const mr = await MaterialRequest.findById(pr.materialRequestId).session(session);
     if (
       mr &&
       fulfillment.fulfillmentStatus === 'closed_complete' &&
@@ -92,48 +96,67 @@ async function applyGrnStockAndSideEffects(grn, actorUserId) {
       const fromStatus = mr.status;
       mr.status = 'MATERIAL_RECEIVED';
       mr.pendingWithRole = 'STORE_INCHARGE';
-      await mr.save();
+      await mr.save(session ? { session } : undefined);
       await statusHistoryService.record(
         'MaterialRequest',
         mr._id,
         fromStatus,
         'MATERIAL_RECEIVED',
         actorUserId,
-        `GRN ${grn.grnNumber} — material received at store`
+        `GRN ${grn.grnNumber} — material received at store`,
+        { session }
       );
-      const storeUsers = await User.find({
-        role: UserRole.STORE_INCHARGE,
-        assignedSiteId: grn.siteId,
-      });
-      await notificationService.notifyUsers(
-        storeUsers.map((u) => u._id),
-        {
-          title: 'Material received — ready to issue',
-          body: `Indent ${mr.indentNumber} stock received. Issue to site when ready.`,
-          relatedEntityType: 'MaterialRequest',
-          relatedEntityId: mr._id,
-        }
-      );
+      storeNotification = { siteId: grn.siteId, materialRequestId: mr._id, indentNumber: mr.indentNumber };
     }
   }
 
-  const populatedPo = await PurchaseOrder.findById(po._id).populate('vendorId');
+  const populatedPo = await PurchaseOrder.findById(po._id).session(session).populate('vendorId');
   const { createBillFromGrn } = require('./financeService');
-  await createBillFromGrn(grn, populatedPo, populatedPo?.vendorId, projectId, actorUserId);
+  await createBillFromGrn(grn, populatedPo, populatedPo?.vendorId, projectId, actorUserId, { session });
 
-  return { fulfillment, po };
+  if (!session && storeNotification) await notifyStoreOfReceipt(storeNotification);
+  return { fulfillment, po, storeNotification };
+}
+
+async function notifyStoreOfReceipt({ siteId, materialRequestId, indentNumber }) {
+  const storeUsers = await User.find({ role: UserRole.STORE_INCHARGE, assignedSiteId: siteId });
+  await notificationService.notifyUsers(storeUsers.map((u) => u._id), {
+    title: 'Material received — ready to issue',
+    body: `Indent ${indentNumber} stock received. Issue to site when ready.`,
+    relatedEntityType: 'MaterialRequest', relatedEntityId: materialRequestId,
+  });
 }
 
 async function finalizeApprovedGrn(grn, actorUserId) {
-  const receiptStatus = resolveReceiptStatus(grn.items);
-  grn.status = receiptStatus;
-  grn.approvalStage = 'APPROVED';
-  grn.approvedAt = new Date();
-  grn.approvedByUserId = actorUserId;
-  await grn.save();
-
-  const { fulfillment } = await applyGrnStockAndSideEffects(grn, actorUserId);
-  return { grn, fulfillment };
+  const session = await mongoose.startSession();
+  let finalized, result;
+  try {
+    await session.withTransaction(async () => {
+      const current = await GoodsReceiptNote.findById(grn._id).session(session);
+      if (!current || current.status !== 'ON_HOLD' || current.approvalStage !== grn.approvalStage) {
+        const err = new Error('GRN is no longer awaiting this approval'); err.statusCode = 409; throw err;
+      }
+      current.coordinatorApprovedAt = grn.coordinatorApprovedAt;
+      current.coordinatorApprovedByUserId = grn.coordinatorApprovedByUserId;
+      current.chairmanApprovedAt = grn.chairmanApprovedAt;
+      current.chairmanApprovedByUserId = grn.chairmanApprovedByUserId;
+      current.note = grn.note;
+      current.status = resolveReceiptStatus(current.items);
+      current.approvalStage = 'APPROVED';
+      current.approvedAt = new Date();
+      current.approvedByUserId = actorUserId;
+      await current.save({ session });
+      result = await applyGrnStockAndSideEffects(current, actorUserId, { session });
+      finalized = current;
+    });
+  } finally {
+    await session.endSession();
+  }
+  if (result.storeNotification) {
+    try { await notifyStoreOfReceipt(result.storeNotification); }
+    catch (err) { console.error('GRN approved; notification could not be sent:', err.message); }
+  }
+  return { grn: finalized, fulfillment: result.fulfillment };
 }
 
 async function notifyGrnHoldApprovers(grn, po, { requiresChairmanApproval }) {

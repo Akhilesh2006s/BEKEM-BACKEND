@@ -1,4 +1,5 @@
 const { UserRole } = require('@afios/shared');
+const mongoose = require('mongoose');
 const { computeRequiredQty } = require('@afios/shared');
 const {
   MaterialRequest,
@@ -154,6 +155,7 @@ async function buildProcurementDecisionDto(mr) {
     executiveDecidedAt: mr.executiveDecidedAt?.toISOString?.() || null,
     coordinatorProcurementMethod: mr.coordinatorProcurementMethod || null,
     coordinatorProcurementRemark: mr.coordinatorProcurementRemark || '',
+    chairmanIndentApprovedAt: mr.chairmanIndentApprovedAt || null,
     canExecutiveDecide: EXECUTIVE_QUEUE_STATUSES.includes(mr.status),
     canCoordinatorReview: COORDINATOR_QUEUE_STATUSES.includes(mr.status),
     /** Within Coordinator local-close statuses (₹10,000/day) — FE shows Approve & close. */
@@ -445,127 +447,78 @@ async function coordinatorReview(mr, user, { action, method, remark, fromProject
   }
 
   const { checkCoordinatorCanApprove, MR_COORDINATOR_DAILY_MAX_INR } = require('./coordinatorApprovalCapService');
-  if (!mr.estimatedValue) {
-    const { estimateIndentAmount } = require('./purchaseRequestService');
-    mr.estimatedValue = await estimateIndentAmount(mr);
-  }
-  const capCheck = await checkCoordinatorCanApprove(user._id, mr);
-  if (capCheck.wouldExceed) {
-    const fromStatusOverflow = mr.status;
-    mr.escalatedToChairman = true;
-    mr.escalatedToChairmanAt = new Date();
-    mr.pendingWithRole = 'CHAIRMAN';
-    mr.coordinatorProcurementRemark = remark;
-    mr.coordinatorProcurementDecidedByUserId = user._id;
-    mr.coordinatorProcurementDecidedAt = new Date();
-    await mr.save();
-    const capLabel = `₹${MR_COORDINATOR_DAILY_MAX_INR.toLocaleString('en-IN')}`;
-    await statusHistoryService.record(
-      'MaterialRequest',
-      mr._id,
-      fromStatusOverflow,
-      mr.status,
-      user._id,
-      `Escalated to Chairman / MD: exceeds ${capLabel} Coordinator daily limit`
-    );
-    const chairmen = await User.find({ role: UserRole.CHAIRMAN });
-    await notificationService.notifyUsers(
-      chairmen.map((u) => u._id),
-      {
-        title: 'Indent exceeds Coordinator daily cap',
-        body: `${mr.indentNumber} exceeds the Coordinator ${capLabel}/day limit and needs MD / Chairman review.`,
-        relatedEntityType: 'MaterialRequest',
-        relatedEntityId: mr._id,
+  const capLabel = `₹${MR_COORDINATOR_DAILY_MAX_INR.toLocaleString('en-IN')}`;
+  const session = await mongoose.startSession();
+  let overflow = false;
+  let purchaseRequest = null;
+  try {
+    await session.withTransaction(async () => {
+      overflow = false;
+      purchaseRequest = null;
+      // The same principal lock is used by the Coordinator local-close endpoint.
+      await User.updateOne({ _id: user._id }, { $inc: { __v: 1 } }, { session });
+      const current = await MaterialRequest.findById(mr._id).session(session);
+      if (!current || !COORDINATOR_QUEUE_STATUSES.includes(current.status) || current.escalatedToChairman) {
+        const err = new Error('Indent is no longer awaiting Coordinator review'); err.statusCode = 409; throw err;
       }
-    );
-    const err = new Error(`Escalated: exceeds ${capLabel} daily limit`);
-    err.statusCode = 409;
-    throw err;
-  }
-
-  const fromStatus = mr.status;
-  mr.coordinatorProcurementMethod = finalMethod;
-  mr.coordinatorProcurementRemark = remark;
-  mr.coordinatorProcurementDecidedByUserId = user._id;
-  mr.coordinatorProcurementDecidedAt = new Date();
-
-  const executiveMethod = mr.executiveProcurementMethod;
-  const modified =
-    executiveMethod && executiveMethod !== finalMethod
-      ? `Coordinator modified executive recommendation (${executiveMethod} → ${finalMethod})`
-      : 'Coordinator approved executive recommendation';
-
-  if (finalMethod === 'PURCHASE_ORDER') {
-    await mr.save();
-    const populated = await MaterialRequest.findById(mr._id)
-      .populate('projectId')
-      .populate('items.materialId');
-    await createPurchaseRequestForIndent(
-      populated,
-      user._id,
-      undefined,
-      `${modified}: ${remark}`
-    );
-    await statusHistoryService.record(
-      'MaterialRequest',
-      mr._id,
-      fromStatus,
-      'PURCHASE_REQUESTED',
-      user._id,
-      `${modified}: ${remark}`
-    );
-  } else {
-    if (!fromProjectId) {
-      const err = new Error('Source project is required for branch transfer');
-      err.statusCode = 400;
-      throw err;
-    }
-
-    const destProjectId = (mr.projectId?._id || mr.projectId).toString();
-    if (fromProjectId === destProjectId) {
-      const err = new Error('Source and destination projects must differ');
-      err.statusCode = 400;
-      throw err;
-    }
-
-    const lineItems = getIndentLineItems(mr);
-    const items = lineItems.map((item) => ({
-      materialId: item.materialId?._id || item.materialId,
-      quantity: item.quantityRequested,
-    }));
-
-    const transferNumber = await generateTransferNumber();
-    const transfer = await BranchTransfer.create({
-      transferNumber,
-      fromProjectId,
-      toProjectId: destProjectId,
-      items,
-      note: remark,
-      materialRequestId: mr._id,
-      requestedByUserId: user._id,
-      status: 'REQUESTED',
+      if (!current.estimatedValue) current.estimatedValue = await estimateIndentAmount(current);
+      const capCheck = await checkCoordinatorCanApprove(user._id, current, session);
+      const fromStatus = current.status;
+      current.coordinatorProcurementRemark = remark;
+      current.coordinatorProcurementDecidedByUserId = user._id;
+      current.coordinatorProcurementDecidedAt = new Date();
+      if (capCheck.wouldExceed && !current.chairmanIndentApprovedAt) {
+        overflow = true;
+        current.escalatedToChairman = true;
+        current.escalatedToChairmanAt = new Date();
+        current.pendingWithRole = 'CHAIRMAN';
+        await current.save({ session });
+        await statusHistoryService.record('MaterialRequest', current._id, fromStatus, current.status, user._id,
+          `Escalated to Chairman / MD: exceeds ${capLabel} Coordinator daily limit`, { session });
+        return;
+      }
+      current.coordinatorProcurementMethod = finalMethod;
+      const executiveMethod = current.executiveProcurementMethod;
+      const modified = (current.chairmanIndentApprovedAt ? 'Chairman authorized; ' : '') + (
+        executiveMethod && executiveMethod !== finalMethod
+          ? `Coordinator modified executive recommendation (${executiveMethod} → ${finalMethod})`
+          : 'Coordinator approved executive recommendation');
+      if (finalMethod === 'PURCHASE_ORDER') {
+        await current.save({ session });
+        purchaseRequest = await createPurchaseRequestForIndent(current, user._id, undefined,
+          `${modified}: ${remark}`, { session, deferNotification: true });
+      } else {
+        if (!fromProjectId) { const err = new Error('Source project is required for branch transfer'); err.statusCode = 400; throw err; }
+        const destProjectId = (current.projectId?._id || current.projectId).toString();
+        if (fromProjectId === destProjectId) { const err = new Error('Source and destination projects must differ'); err.statusCode = 400; throw err; }
+        const items = getIndentLineItems(current).map((item) => ({ materialId: item.materialId?._id || item.materialId, quantity: item.quantityRequested }));
+        const transferNumber = await generateTransferNumber(session);
+        const [transfer] = await BranchTransfer.create([{ transferNumber, fromProjectId, toProjectId: destProjectId,
+          items, note: remark, materialRequestId: current._id, requestedByUserId: user._id, status: 'REQUESTED' }], { session });
+        current.status = 'BRANCH_TRANSFER_REQUESTED';
+        current.pendingWithRole = 'COORDINATOR';
+        await current.save({ session });
+        await statusHistoryService.record('MaterialRequest', current._id, fromStatus, current.status, user._id, `${modified}: ${remark}`, { session });
+        await statusHistoryService.record('BranchTransfer', transfer._id, null, 'REQUESTED', user._id, `Created from procurement decision ${transferNumber}`, { session });
+      }
     });
-
-    mr.status = 'BRANCH_TRANSFER_REQUESTED';
-    mr.pendingWithRole = 'COORDINATOR';
-    await mr.save();
-
-    await statusHistoryService.record(
-      'MaterialRequest',
-      mr._id,
-      fromStatus,
-      'BRANCH_TRANSFER_REQUESTED',
-      user._id,
-      `${modified}: ${remark}`
-    );
-    await statusHistoryService.record(
-      'BranchTransfer',
-      transfer._id,
-      null,
-      'REQUESTED',
-      user._id,
-      `Created from procurement decision ${transferNumber}`
-    );
+  } finally {
+    await session.endSession();
+  }
+  if (overflow) {
+    const chairmen = await User.find({ role: UserRole.CHAIRMAN });
+    await notificationService.notifyUsers(chairmen.map((u) => u._id), {
+      title: 'Indent exceeds Coordinator daily cap',
+      body: `${mr.indentNumber} exceeds the Coordinator ${capLabel}/day limit and needs MD / Chairman review.`,
+      relatedEntityType: 'MaterialRequest', relatedEntityId: mr._id,
+    });
+    const err = new Error(`Escalated: exceeds ${capLabel} daily limit`); err.statusCode = 409; throw err;
+  }
+  if (purchaseRequest) {
+    await notifyExecutivesForIndent(mr.indentCategoryId, notificationService, {
+      title: 'New purchase request', body: `${purchaseRequest.prNumber} is in your Pending Purchase Requests queue.`,
+      relatedEntityType: 'PurchaseRequest', relatedEntityId: purchaseRequest._id,
+    });
   }
 
   return buildProcurementDecisionDto(await loadDecisionIndent(mr._id));

@@ -71,7 +71,7 @@ async function createBatchesFromGrn(grn, actorUserId, materialRequestId = null, 
  * Consume stock FIFO across oldest batches. Updates ledger + movements.
  * @returns {{ consumed: Array<{ batchId, grnNumber, qty }> }}
  */
-async function consumeFifo({ siteId, materialId, quantity, actorUserId, materialRequestId }) {
+async function consumeFifo({ siteId, materialId, quantity, actorUserId, materialRequestId, session = null }) {
   const qtyNeeded = Number(quantity);
   if (qtyNeeded <= 0) {
     const err = new Error('Issue quantity must be greater than zero');
@@ -83,13 +83,12 @@ async function consumeFifo({ siteId, materialId, quantity, actorUserId, material
     siteId,
     materialId,
     qtyRemaining: { $gt: 0 },
-  }).sort({ receivedAt: 1, createdAt: 1 });
+  }).sort({ receivedAt: 1, createdAt: 1 }).session(session);
 
-  const totalAvailable = batches.reduce((s, b) => s + b.qtyRemaining, 0);
-  const ledger = await StockLedger.findOne({ siteId, materialId });
+  const ledger = await StockLedger.findOne({ siteId, materialId }).session(session);
   const ledgerAvailable = ledger?.quantityOnHand ?? 0;
 
-  if (totalAvailable < qtyNeeded && ledgerAvailable < qtyNeeded) {
+  if (ledgerAvailable < qtyNeeded) {
     const err = new Error('Insufficient stock to issue');
     err.statusCode = 400;
     throw err;
@@ -102,7 +101,7 @@ async function consumeFifo({ siteId, materialId, quantity, actorUserId, material
     if (remaining <= 0) break;
     const take = Math.min(batch.qtyRemaining, remaining);
     batch.qtyRemaining -= take;
-    await batch.save();
+    await batch.save(session ? { session } : undefined);
     consumed.push({
       batchId: batch._id.toString(),
       grnNumber: batch.grnNumber,
@@ -126,19 +125,35 @@ async function consumeFifo({ siteId, materialId, quantity, actorUserId, material
   if (ledger) {
     ledger.quantityOnHand -= qtyNeeded;
     ledger.lastMovementAt = new Date();
-    await ledger.save();
+    await ledger.save(session ? { session } : undefined);
   }
 
-  await StockMovement.create({
+  await StockMovement.create([{
     siteId,
     materialId,
     materialRequestId: materialRequestId || null,
     quantityDelta: -qtyNeeded,
     type: 'ALLOCATION',
     actorUserId,
-  });
+  }], session ? { session } : undefined);
 
   return { consumed };
+}
+
+// Reservations already debit the ledger. Consume the matching FIFO lots at
+// issue time without recording a second ledger debit; any remainder represents
+// opening stock that has no GRN batch.
+async function consumeReservedFifo({ siteId, materialId, quantity, session = null }) {
+  let remaining = Number(quantity);
+  const batches = await StockBatch.find({ siteId, materialId, qtyRemaining: { $gt: 0 } })
+    .sort({ receivedAt: 1, createdAt: 1 }).session(session);
+  for (const batch of batches) {
+    if (remaining <= 0) break;
+    const take = Math.min(batch.qtyRemaining, remaining);
+    batch.qtyRemaining -= take;
+    await batch.save(session ? { session } : undefined);
+    remaining -= take;
+  }
 }
 
 /**
@@ -292,6 +307,7 @@ async function getSlimInventory({ siteId, siteIds } = {}) {
 module.exports = {
   createBatchesFromGrn,
   consumeFifo,
+  consumeReservedFifo,
   getStockAging,
   getSlimInventory,
 };

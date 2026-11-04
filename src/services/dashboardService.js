@@ -534,7 +534,6 @@ async function getTodayActions(user) {
   }
 
   if (role === UserRole.CHAIRMAN) {
-    const { poCoordinatorMaxInr } = require('./orgSettingsService').getSettings();
     const pending = await PurchaseOrder.countDocuments({
       status: { $in: ['PENDING_APPROVAL', 'CHAIRMAN_PENDING'] },
     });
@@ -543,7 +542,7 @@ async function getTodayActions(user) {
       title: pending > 0 ? `Final approve ${pending} PO${pending > 1 ? 's' : ''}` : 'No pending PO approvals',
       subtitle:
         pending > 0
-          ? `POs above ₹${poCoordinatorMaxInr.toLocaleString('en-IN')} awaiting Chairman`
+          ? 'Purchase orders awaiting Chairman approval'
           : 'Approval queue clear',
       href: '/chairman/procurement-requests',
       priority: pending > 0 ? 'high' : 'low',

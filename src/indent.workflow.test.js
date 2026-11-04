@@ -447,10 +447,11 @@ describe('Indent workflow v2', () => {
       .post(`/api/material-requests/${mrId}/proceed-allocation`)
       .set('Authorization', `Bearer ${storeToken}`)
       .send({ remark: 'Store proceed with allocation' });
-    assert.strictEqual(storeProceed.status, 200, JSON.stringify(storeProceed.body));
-    assert.strictEqual(storeProceed.body.data.status, 'ISSUED');
-    assert.strictEqual(storeProceed.body.data.pendingWith, 'SITE_INCHARGE');
-    assert.strictEqual(storeProceed.body.data.allocationReviewStage, 'SITE_INCHARGE');
+    assert.strictEqual(storeProceed.status, 409, JSON.stringify(storeProceed.body));
+    assert.match(storeProceed.body.message, /Issue Material/);
+    const beforeIssue = await MaterialRequest.findById(mrId);
+    assert.notEqual(beforeIssue.status, 'ISSUED');
+    assert.strictEqual(beforeIssue.allocationReviewStage, 'STORE_INCHARGE');
   });
 
   it('stock-received is store-only and requires an approved indent', async () => {
@@ -481,7 +482,7 @@ describe('Indent workflow v2', () => {
     assert.strictEqual(tooEarly.status, 400);
   });
 
-  it('store can proceed-allocation on received/allocated indent without PO review chain', async () => {
+  it('requires Store to use the material-issue flow instead of marking an indent issued', async () => {
     const createRes = await request(app)
       .post('/api/material-requests')
       .set('Authorization', `Bearer ${siteToken}`)
@@ -506,8 +507,8 @@ describe('Indent workflow v2', () => {
       .post(`/api/material-requests/${mrId}/proceed-allocation`)
       .set('Authorization', `Bearer ${storeToken}`)
       .send({ remark: 'vv' });
-    assert.strictEqual(storeProceed.status, 200, JSON.stringify(storeProceed.body));
-    assert.strictEqual(storeProceed.body.data.status, 'ISSUED');
-    assert.strictEqual(storeProceed.body.data.pendingWith, 'SITE_INCHARGE');
+    assert.strictEqual(storeProceed.status, 409, JSON.stringify(storeProceed.body));
+    assert.match(storeProceed.body.message, /Issue Material/);
+    assert.strictEqual((await MaterialRequest.findById(mrId)).status, 'MATERIAL_RECEIVED');
   });
 });

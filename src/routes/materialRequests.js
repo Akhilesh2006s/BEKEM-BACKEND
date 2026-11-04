@@ -1,4 +1,5 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const { body, param } = require('express-validator');
 const {
   UserRole,
@@ -643,6 +644,12 @@ router.get('/:id', param('id').isMongoId(), validate, async (req, res, next) => 
       data.canEdit = !!data.canEdit && requesterId === req.user._id.toString();
     }
     if (req.user.role === UserRole.PROJECT_MANAGER) {
+      const { BranchTransfer } = require('../models');
+      const { serializeTransferRow } = require('../services/branchTransferService');
+      const linkedTransfers = await BranchTransfer.find({ materialRequestId: mr._id })
+        .sort({ createdAt: 1 })
+        .populate('fromProjectId toProjectId fromSiteId toSiteId items.materialId requestedByUserId');
+      data.linkedBranchTransfers = linkedTransfers.map(serializeTransferRow);
       const cross = await enrichIndentWithCrossProjectStock(mr, req.user);
       const lineItems = data.items || [];
       data.crossProjectStock = (cross || [])
@@ -1164,52 +1171,100 @@ router.post(
           return { statusCode: 400, body: { statusCode: 400, message: 'Request not awaiting PM approval' } };
         }
 
-        if (!mr.estimatedValue) mr.estimatedValue = await estimateIndentAmount(mr);
-        const isBelowCap = mr.indentRequestType === 'BELOW_5000';
-        const capCheck = await checkPmCanApprove(pmId, mr);
+        const session = await mongoose.startSession();
+        let capCheck;
+        let outcome;
+        let createdPr;
+        try {
+          await session.withTransaction(async () => {
+            await User.updateOne({ _id: pmId }, { $inc: { __v: 1 } }, { session });
+            const current = await MaterialRequest.findById(mr._id).session(session);
+            if (!current || current.status !== 'FORWARDED_TO_PM') {
+              const error = new Error('Request no longer awaiting PM approval'); error.statusCode = 409; throw error;
+            }
+            if (!current.estimatedValue) current.estimatedValue = await estimateIndentAmount(current);
+            capCheck = await checkPmCanApprove(pmId, current, new Date(), session);
+            const note = delegationService.formatApprovalNote('Approved', req.approvalContext);
+            if (capCheck.wouldExceed) {
+              outcome = 'CAP';
+              current.status = 'PENDING_HO';
+              current.escalatedToHo = true;
+              current.escalatedAt = new Date();
+              current.pendingWithRole = 'EXECUTIVE';
+              await current.save({ session });
+              await statusHistoryService.record('MaterialRequest', current._id, 'FORWARDED_TO_PM', 'PENDING_HO',
+                req.user._id, `Escalated: exceeds ₹${capCheck.dailyCap.toLocaleString('en-IN')} daily limit`, { session });
+            } else if (current.indentRequestType === 'BELOW_5000') {
+              const stock = await enrichIndentWithStock(current, session);
+              if (stock.canFullyIssue) {
+                outcome = 'ALLOCATED';
+                await allocateIndentStock(current, req.user._id, { session });
+                current.status = 'ALLOCATED';
+                current.pendingWithRole = 'STORE_INCHARGE';
+                current.allocatedByRole = UserRole.PROJECT_MANAGER;
+                await current.save({ session });
+                await statusHistoryService.record('MaterialRequest', current._id, 'FORWARDED_TO_PM', 'ALLOCATED',
+                  req.user._id, `${note} (Below ₹5,000 — closed at PM; stock reserved for Store issue)`,
+                  { session, approvalPrincipalUserId: pmId });
+              } else {
+                const decision = await evaluateIndentBranchTransfer(current, req.user, stock);
+                if (decision.branchTransferViable) {
+                  const error = new Error(PM_USE_BRANCH_TRANSFER_MESSAGE); error.statusCode = 409; throw error;
+                }
+                outcome = 'STOCK';
+                current.status = 'PENDING_EXECUTIVE_DECISION';
+                current.pendingWithRole = 'EXECUTIVE';
+                current.escalatedToHo = true;
+                current.escalatedAt = new Date();
+                current.pmForwardRemark = 'Forwarded to Head Office after PM approval (insufficient stock)';
+                await current.save({ session });
+                await statusHistoryService.record('MaterialRequest', current._id, 'FORWARDED_TO_PM', current.status,
+                  req.user._id, 'PM approved Below ₹5,000 — insufficient stock; forwarded to Head Office', { session });
+              }
+            } else {
+              outcome = 'PROCUREMENT';
+              current.status = 'PM_APPROVED';
+              await current.save({ session });
+              await statusHistoryService.record('MaterialRequest', current._id, 'FORWARDED_TO_PM', 'PM_APPROVED',
+                req.user._id, note, { session, approvalPrincipalUserId: pmId });
+              createdPr = await createPurchaseRequestForIndent(current, req.user._id, undefined, undefined,
+                { session, deferNotification: true });
+            }
+          });
+        } catch (err) {
+          if (err.statusCode) return { statusCode: err.statusCode, body: { statusCode: err.statusCode, message: err.message } };
+          throw err;
+        } finally { await session.endSession(); }
 
-        // Above ₹5,000 only: daily-cap overflow escalates to HO.
-        if (!isBelowCap && capCheck.wouldExceed) {
-          const fromStatus = mr.status;
-          mr.status = 'PENDING_HO';
-          mr.escalatedToHo = true;
-          mr.escalatedAt = new Date();
-          mr.pendingWithRole = 'EXECUTIVE';
-          await mr.save();
-
-          await statusHistoryService.record(
-            'MaterialRequest',
-            mr._id,
-            fromStatus,
-            'PENDING_HO',
-            req.user._id,
-            `Escalated: exceeds ₹${pmApprovalCapService.MR_PM_DAILY_MAX_INR.toLocaleString('en-IN')} daily limit`
-          );
-
+        if (['CAP', 'STOCK'].includes(outcome)) {
           await notifyExecutivesForIndent(mr.indentCategoryId, notificationService, {
-            title: 'New Procurement Decision Pending',
-            body: `${mr.indentNumber} exceeds PM daily approval cap.`,
-            relatedEntityType: 'ProcurementDecision',
-            relatedEntityId: mr._id,
+            title: 'New Procurement Decision Pending', body: `${mr.indentNumber} requires Head Office review.`,
+            relatedEntityType: 'ProcurementDecision', relatedEntityId: mr._id,
           });
-          await notifyCoordinatorsForIndent(mr, {
-            title: 'Indent at Head Office',
-            body: `${mr.indentNumber} exceeds PM daily approval cap.`,
+        } else if (createdPr) {
+          await notifyExecutivesForIndent(mr.indentCategoryId, notificationService, {
+            title: 'New purchase request', body: `${createdPr.prNumber} is in your Pending Purchase Requests queue.`,
+            relatedEntityType: 'PurchaseRequest', relatedEntityId: createdPr._id,
           });
-
-          const enriched = await mrEnrichedBody(mr._id, req.user.role);
-          return {
-            statusCode: 409,
-            body: {
-              statusCode: 409,
-              message: `Escalated: exceeds ₹${pmApprovalCapService.MR_PM_DAILY_MAX_INR.toLocaleString('en-IN')} daily limit`,
-              escalated: true,
-              dailyApprovedTotal: capCheck.dailyApprovedTotal,
-              dailyCap: capCheck.dailyCap,
-              ...enriched,
-            },
-          };
         }
+        if (outcome === 'CAP') await notifyCoordinatorsForIndent(mr, { title: 'Indent at Head Office', body: `${mr.indentNumber} exceeds PM daily approval cap.` });
+        if (outcome === 'ALLOCATED') {
+          const storeUsers = await User.find({ role: UserRole.STORE_INCHARGE, assignedSiteId: mr.siteId });
+          await notificationService.notifyUsers(storeUsers.map((u) => u._id), {
+            title: 'Below ₹5,000 indent closed by PM — issue stock', body: `${mr.indentNumber} — stock reserved; issue to site.`,
+            relatedEntityType: 'MaterialRequest', relatedEntityId: mr._id,
+          });
+        }
+        if (!['CAP', 'STOCK'].includes(outcome)) await notificationService.notifyUser(mr.requestedByUserId, {
+          title: 'Request approved', body: `Your request ${mr.indentNumber} has been approved.`,
+          relatedEntityType: 'MaterialRequest', relatedEntityId: mr._id,
+        });
+        const enriched = await mrEnrichedBody(mr._id, req.user.role);
+        return { statusCode: outcome === 'CAP' ? 409 : 200, body: {
+          ...enriched, escalated: outcome === 'CAP', dailyApprovedTotal: await getPmDailyApprovedTotal(pmId),
+          dailyCap: capCheck.dailyCap,
+          ...(outcome === 'CAP' ? { statusCode: 409, message: `Escalated: exceeds ₹${capCheck.dailyCap.toLocaleString('en-IN')} daily limit` } : {}),
+        } };
       } else if ([UserRole.EXECUTIVE, UserRole.COORDINATOR].includes(actingRole)) {
         return {
           statusCode: 400,
@@ -1287,7 +1342,8 @@ router.post(
           ? belowClosedAtPm
             ? `${note} (Below ₹5,000 — closed at PM; stock reserved for Store issue)`
             : `${note} (Below ₹5,000 — stock short; forwarded to Head Office)`
-          : note
+          : note,
+        { approvalPrincipalUserId: actingRole === UserRole.PROJECT_MANAGER ? pmId : undefined }
       );
 
       await notificationService.notifyUser(mr.requestedByUserId, {
@@ -1410,7 +1466,7 @@ router.post(
   validate,
   async (req, res, next) => {
     return handleIdempotent(req, res, `mr-pm-close:${req.params.id}`, async () => {
-      const mr = req._materialRequest || (await MaterialRequest.findById(req.params.id));
+      let mr = req._materialRequest || (await MaterialRequest.findById(req.params.id));
       if (!mr) {
         return { statusCode: 404, body: { statusCode: 404, message: 'Request not found' } };
       }
@@ -1455,6 +1511,45 @@ router.post(
         };
       }
 
+      if (evaluation.decision === 'CLOSED_LOCAL') {
+        const session = await mongoose.startSession();
+        try {
+          await session.withTransaction(async () => {
+            // Serialize approvals for this principal across application instances.
+            await User.updateOne({ _id: pmId }, { $inc: { __v: 1 } }, { session });
+            const current = await MaterialRequest.findById(mr._id).session(session);
+            if (!current || current.status !== 'FORWARDED_TO_PM') {
+              const error = new Error('Indent is no longer awaiting PM review');
+              error.statusCode = 409;
+              throw error;
+            }
+            if (!current.estimatedValue) current.estimatedValue = await estimateIndentAmount(current);
+            const cap = await checkPmCanApprove(pmId, current, new Date(), session);
+            if (cap.wouldExceed) {
+              evaluation.decision = 'FORWARDED_DAILY_CAP';
+              evaluation.capCheck = cap;
+              return;
+            }
+            await allocateIndentStock(current, req.user._id, { session });
+            current.status = 'ALLOCATED';
+            current.pendingWithRole = 'STORE_INCHARGE';
+            current.allocatedByRole = UserRole.PROJECT_MANAGER;
+            current.pmForwardRemark = remark;
+            await current.save({ session });
+            await statusHistoryService.record('MaterialRequest', current._id, 'FORWARDED_TO_PM',
+              'ALLOCATED', req.user._id,
+              `PM closed at PM level (stock reserved${isBelowCap ? ' · Below ₹5,000' : ''}): ${remark}`,
+              { session, approvalPrincipalUserId: pmId });
+            mr = current;
+          });
+        } catch (err) {
+          if (err.statusCode) return { statusCode: err.statusCode, body: { statusCode: err.statusCode, message: err.message } };
+          throw err;
+        } finally {
+          await session.endSession();
+        }
+      }
+
       if (
         evaluation.decision === 'FORWARDED_STOCK' ||
         evaluation.decision === 'FORWARDED_DAILY_CAP'
@@ -1494,37 +1589,6 @@ router.post(
           },
         };
       }
-
-      const fromStatus = mr.status;
-      try {
-        if (!mr.estimatedValue) {
-          mr.estimatedValue = await estimateIndentAmount(mr);
-        }
-        await allocateIndentStock(mr, req.user._id);
-        mr.status = 'ALLOCATED';
-        mr.pendingWithRole = 'STORE_INCHARGE';
-        mr.allocatedByRole = UserRole.PROJECT_MANAGER;
-      } catch (allocErr) {
-        if (allocErr.statusCode) {
-          return {
-            statusCode: allocErr.statusCode,
-            body: { statusCode: allocErr.statusCode, message: allocErr.message },
-          };
-        }
-        throw allocErr;
-      }
-
-      mr.pmForwardRemark = remark;
-      await mr.save();
-
-      await statusHistoryService.record(
-        'MaterialRequest',
-        mr._id,
-        fromStatus,
-        mr.status,
-        req.user._id,
-        `PM closed at PM level (stock reserved${isBelowCap ? ' · Below ₹5,000' : ''}): ${remark}`
-      );
 
       const storeUsers = await User.find({
         role: UserRole.STORE_INCHARGE,
@@ -1712,6 +1776,38 @@ router.post(
 );
 
 router.post(
+  '/:id/chairman-approve-indent',
+  requireRoles(UserRole.CHAIRMAN),
+  [param('id').isMongoId(), body('remark').trim().notEmpty()],
+  validate,
+  async (req, res, next) => {
+    try {
+      const session = await mongoose.startSession();
+      try {
+        await session.withTransaction(async () => {
+          const mr = await MaterialRequest.findOneAndUpdate(
+            { _id: req.params.id, escalatedToChairman: true, pendingWithRole: 'CHAIRMAN' },
+            { $set: { escalatedToChairman: false, chairmanIndentApprovedAt: new Date(),
+              chairmanIndentApprovedByUserId: req.user._id, pendingWithRole: 'COORDINATOR' } },
+            { session, new: true }
+          );
+          if (!mr) {
+            const error = new Error('Indent is not awaiting Chairman approval');
+            error.statusCode = 409;
+            throw error;
+          }
+          await statusHistoryService.record('MaterialRequest', mr._id, mr.status, mr.status,
+            req.user._id, `Chairman approved indent and returned it to Coordinator: ${req.body.remark}`, { session });
+        });
+      } finally {
+        await session.endSession();
+      }
+      return res.json(await mrEnrichedBody(req.params.id, req.user.role));
+    } catch (err) { return next(err); }
+  }
+);
+
+router.post(
   '/:id/coordinator-local-close',
   [
     param('id').isMongoId(),
@@ -1727,7 +1823,7 @@ router.post(
         };
       }
 
-      const mr = await MaterialRequest.findById(req.params.id);
+      let mr = await MaterialRequest.findById(req.params.id);
       if (!mr) {
         return { statusCode: 404, body: { statusCode: 404, message: 'Request not found' } };
       }
@@ -1750,24 +1846,68 @@ router.post(
       }
 
       if (!(Number(mr.estimatedValue) > 0)) mr.estimatedValue = await estimateIndentAmount(mr);
-      const capCheck = await checkCoordinatorCanApprove(req.user._id, mr);
+      let capCheck = await checkCoordinatorCanApprove(req.user._id, mr);
       const capLabel = `₹${coordinatorApprovalCapService.MR_COORDINATOR_DAILY_MAX_INR.toLocaleString('en-IN')}`;
+      const remark = requireRemark(req.body.remark);
+      let closedLocally = false;
+      let newPurchaseRequest = null;
+      const session = await mongoose.startSession();
+      try {
+        await session.withTransaction(async () => {
+          await User.updateOne({ _id: req.user._id }, { $inc: { __v: 1 } }, { session });
+          const current = await MaterialRequest.findById(req.params.id).session(session);
+          if (!current || current.escalatedToChairman || !canCoordinatorLocalCloseStatus(current.status)) {
+            const error = new Error('Indent is no longer awaiting Coordinator review');
+            error.statusCode = 409;
+            throw error;
+          }
+          if (!(Number(current.estimatedValue) > 0)) current.estimatedValue = await estimateIndentAmount(current);
+          capCheck = await checkCoordinatorCanApprove(req.user._id, current, session);
+          const fromStatus = current.status;
+          if (capCheck.wouldExceed && !current.chairmanIndentApprovedAt) {
+            current.escalatedToChairman = true;
+            current.escalatedToChairmanAt = new Date();
+            current.pendingWithRole = 'CHAIRMAN';
+            await current.save({ session });
+            await statusHistoryService.record('MaterialRequest', current._id, fromStatus, current.status,
+              req.user._id, `Escalated to Chairman / MD: exceeds ${capLabel} Coordinator daily limit`, { session });
+          } else {
+            if (current.chairmanIndentApprovedAt) capCheck = { ...capCheck, wouldExceed: false };
+            const approvalNote = current.chairmanIndentApprovedAt ? 'Chairman authorized; Coordinator executed' : 'Coordinator closed locally';
+            const stock = await enrichIndentWithStock(current, session);
+            current.coordinatorProcurementRemark = remark;
+            current.coordinatorProcurementDecidedByUserId = req.user._id;
+            current.coordinatorProcurementDecidedAt = new Date();
+            closedLocally = stock.canFullyIssue;
+            if (closedLocally) {
+              await allocateIndentStock(current, req.user._id, { session });
+              current.status = 'ALLOCATED';
+              current.pendingWithRole = 'STORE_INCHARGE';
+              current.allocatedByRole = UserRole.COORDINATOR;
+              await current.save({ session });
+              await statusHistoryService.record('MaterialRequest', current._id, fromStatus, 'ALLOCATED',
+                req.user._id, `${approvalNote} (stock reserved): ${remark}`, { session });
+              const linkedPr = await PurchaseRequest.findOne({ materialRequestId: current._id }).session(session);
+              if (linkedPr && !['PO_CREATED', 'CANCELLED'].includes(linkedPr.status)) {
+                linkedPr.status = 'CLOSED';
+                await linkedPr.save({ session });
+              }
+            } else {
+              await current.save({ session });
+              newPurchaseRequest = await createPurchaseRequestForIndent(current, req.user._id, undefined,
+                `${approvalNote}: ${remark}`, { session, deferNotification: true });
+            }
+          }
+          mr = current;
+        });
+      } catch (err) {
+        if (err.statusCode) return { statusCode: err.statusCode, body: { statusCode: err.statusCode, message: err.message } };
+        throw err;
+      } finally {
+        await session.endSession();
+      }
 
       if (capCheck.wouldExceed) {
-        const fromStatus = mr.status;
-        mr.escalatedToChairman = true;
-        mr.escalatedToChairmanAt = new Date();
-        mr.pendingWithRole = 'CHAIRMAN';
-        await mr.save();
-
-        await statusHistoryService.record(
-          'MaterialRequest',
-          mr._id,
-          fromStatus,
-          mr.status,
-          req.user._id,
-          `Escalated to Chairman / MD: exceeds ${capLabel} Coordinator daily limit`
-        );
 
         const chairmen = await User.find({ role: UserRole.CHAIRMAN });
         await notificationService.notifyUsers(
@@ -1794,59 +1934,12 @@ router.post(
         };
       }
 
-      const remark = requireRemark(req.body.remark);
-      const stockContext = await enrichIndentWithStock(mr);
-      const fromStatus = mr.status;
-      let closedLocally = false;
-
-      if (stockContext.canFullyIssue) {
-        try {
-          await allocateIndentStock(mr, req.user._id);
-          mr.status = 'ALLOCATED';
-          mr.pendingWithRole = 'STORE_INCHARGE';
-          mr.allocatedByRole = UserRole.COORDINATOR;
-          closedLocally = true;
-        } catch (allocErr) {
-          if (allocErr.statusCode) {
-            return {
-              statusCode: allocErr.statusCode,
-              body: { statusCode: allocErr.statusCode, message: allocErr.message },
-            };
-          }
-          throw allocErr;
-        }
-        mr.coordinatorProcurementRemark = remark;
-        mr.coordinatorProcurementDecidedByUserId = req.user._id;
-        mr.coordinatorProcurementDecidedAt = new Date();
-        await mr.save();
-
-        await statusHistoryService.record(
-          'MaterialRequest',
-          mr._id,
-          fromStatus,
-          'ALLOCATED',
-          req.user._id,
-          `Coordinator closed locally (stock reserved): ${remark}`
-        );
-        const linkedPr = await PurchaseRequest.findOne({ materialRequestId: mr._id });
-        if (linkedPr && !['PO_CREATED', 'CANCELLED'].includes(linkedPr.status)) {
-          linkedPr.status = 'CLOSED';
-          await linkedPr.save();
-        }
-      } else {
-        mr.coordinatorProcurementRemark = remark;
-        mr.coordinatorProcurementDecidedByUserId = req.user._id;
-        mr.coordinatorProcurementDecidedAt = new Date();
-        await mr.save();
-        const populated = await MaterialRequest.findById(mr._id)
-          .populate('projectId')
-          .populate('items.materialId');
-        await createPurchaseRequestForIndent(
-          populated,
-          req.user._id,
-          undefined,
-          `Coordinator locally approved without MD: ${remark}`
-        );
+      if (newPurchaseRequest) {
+        await notifyExecutivesForIndent(mr.indentCategoryId, notificationService, {
+          title: 'New purchase request',
+          body: `${newPurchaseRequest.prNumber} is in your Pending Purchase Requests queue.`,
+          relatedEntityType: 'PurchaseRequest', relatedEntityId: newPurchaseRequest._id,
+        });
       }
 
       const storeUsers = await User.find({

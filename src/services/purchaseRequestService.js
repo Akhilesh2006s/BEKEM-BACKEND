@@ -10,8 +10,9 @@ async function estimateIndentAmount(mr) {
   return computeIndentEstimatedValue(mr);
 }
 
-async function createPurchaseRequestForIndent(mr, actorUserId, amountEstimate, historyNote) {
-  const existing = await PurchaseRequest.findOne({ materialRequestId: mr._id });
+async function createPurchaseRequestForIndent(mr, actorUserId, amountEstimate, historyNote, options = {}) {
+  const { session, deferNotification } = options;
+  const existing = await PurchaseRequest.findOne({ materialRequestId: mr._id }).session(session || null);
   if (existing) {
     // Coordinator local-close (and similar) must still move the indent + write history
     // so the daily approval bar / cap consume this action even when a PR already exists.
@@ -30,53 +31,56 @@ async function createPurchaseRequestForIndent(mr, actorUserId, amountEstimate, h
       const fromStatus = mr.status;
       mr.status = 'PURCHASE_REQUESTED';
       mr.pendingWithRole = 'EXECUTIVE';
-      await mr.save();
+      await mr.save(session ? { session } : {});
       await statusHistoryService.record(
         'MaterialRequest',
         mr._id,
         fromStatus,
         'PURCHASE_REQUESTED',
         actorUserId,
-        historyNote || `PR ${existing.prNumber} confirmed`
+        historyNote || `PR ${existing.prNumber} confirmed`,
+        { session }
       );
     }
     if (!['PO_CREATED', 'CANCELLED', 'CLOSED'].includes(existing.status) && existing.status !== 'OPEN') {
       existing.status = 'OPEN';
-      await existing.save();
+      await existing.save(session ? { session } : {});
     }
     return existing;
   }
 
-  const project = mr.projectId?._id ? mr.projectId : await require('../models').Project.findById(mr.projectId);
+  const project = mr.projectId?.code ? mr.projectId : await require('../models').Project.findById(mr.projectId?._id || mr.projectId).session(session || null);
   const projectCode = project?.code || 'PRJ';
-  const prNumber = await generatePrNumber(projectCode);
+  const prNumber = await generatePrNumber(projectCode, session);
   const estimate = amountEstimate ?? (await estimateIndentAmount(mr));
 
-  const pr = await PurchaseRequest.create({
+  const prData = {
     prNumber,
     materialRequestId: mr._id,
     projectId: project._id || mr.projectId,
     status: 'OPEN',
     createdByUserId: actorUserId,
     amountEstimate: estimate,
-  });
+  };
+  const pr = session ? (await PurchaseRequest.create([prData], { session }))[0] : await PurchaseRequest.create(prData);
 
   const fromStatus = mr.status;
   mr.status = 'PURCHASE_REQUESTED';
   mr.pendingWithRole = 'EXECUTIVE';
-  await mr.save();
+  await mr.save(session ? { session } : {});
 
-  await statusHistoryService.record('PurchaseRequest', pr._id, null, 'OPEN', actorUserId, 'PR created');
+  await statusHistoryService.record('PurchaseRequest', pr._id, null, 'OPEN', actorUserId, 'PR created', { session });
   await statusHistoryService.record(
     'MaterialRequest',
     mr._id,
     fromStatus,
     'PURCHASE_REQUESTED',
     actorUserId,
-    historyNote || `PR ${prNumber} created`
+    historyNote || `PR ${prNumber} created`,
+    { session }
   );
 
-  await notifyExecutivesForIndent(mr.indentCategoryId, notificationService, {
+  if (!deferNotification) await notifyExecutivesForIndent(mr.indentCategoryId, notificationService, {
     title: 'New purchase request',
     body: `${prNumber} is in your Pending Purchase Requests queue.`,
     relatedEntityType: 'PurchaseRequest',

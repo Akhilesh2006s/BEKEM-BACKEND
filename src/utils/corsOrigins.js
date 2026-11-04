@@ -24,7 +24,7 @@ function getAllowedOrigins() {
     .split(',')
     .map(normalizeOrigin)
     .filter(Boolean);
-  return [...new Set([...defaults, ...fromEnv])];
+  return [...new Set([...(process.env.NODE_ENV === 'production' ? [] : defaults), ...fromEnv])];
 }
 
 /** Local Vite often binds 5174+ when 5173 is taken. */
@@ -45,9 +45,9 @@ function isAllowedOrigin(origin) {
   const normalized = normalizeOrigin(origin);
   if (!normalized) return false;
   if (allowed.includes(normalized)) return true;
-  if (isLocalViteOrigin(normalized)) return true;
+  if (process.env.NODE_ENV !== 'production' && isLocalViteOrigin(normalized)) return true;
   if (
-    process.env.CORS_ALLOW_VERCEL_PREVIEWS === 'true' &&
+    process.env.NODE_ENV !== 'production' && process.env.CORS_ALLOW_VERCEL_PREVIEWS === 'true' &&
     /\.vercel\.app$/i.test(normalized)
   ) {
     return true;
@@ -64,7 +64,7 @@ function corsOriginCallback(origin, callback) {
     return callback(null, normalized);
   }
   console.warn(
-    `[CORS] blocked origin: ${origin} (allowed: ${getAllowedOrigins().join(', ')}, local Vite 5173–5199)`
+    `[CORS] blocked origin: ${origin} (allowed: ${getAllowedOrigins().join(', ')}${process.env.NODE_ENV === 'production' ? '' : ', local Vite 5173–5199'})`
   );
   return callback(null, false);
 }

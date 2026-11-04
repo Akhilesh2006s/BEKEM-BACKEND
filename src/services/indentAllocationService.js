@@ -2,9 +2,10 @@ const { StockLedger, StockMovement, Material } = require('../models');
 const { getIndentLineItems } = require('./materialRequestHelpers');
 const { enrichIndentWithStock } = require('./indentStockService');
 
-async function allocateIndentStock(mr, actorUserId) {
-  const stockContext = await enrichIndentWithStock(mr);
-  if (!stockContext.canFullyIssue) {
+async function allocateIndentStock(mr, actorUserId, options = {}) {
+  const { session } = options;
+  const stockContext = session ? null : await enrichIndentWithStock(mr);
+  if (stockContext && !stockContext.canFullyIssue) {
     const err = new Error('Insufficient stock to allocate this indent');
     err.statusCode = 400;
     throw err;
@@ -16,8 +17,8 @@ async function allocateIndentStock(mr, actorUserId) {
     item.quantityAllocated = qty;
 
     const materialId = item.materialId._id || item.materialId;
-    const ledger = await StockLedger.findOne({ siteId: mr.siteId, materialId });
-    if (!ledger || ledger.quantityOnHand < qty) {
+    const ledger = await StockLedger.findOne({ siteId: mr.siteId, materialId }).session(session || null);
+    if (!ledger || ledger.quantityOnHand - (ledger.quantityReserved || 0) < qty) {
       const mat = await Material.findById(materialId);
       const err = new Error(`Insufficient stock for ${mat?.name || 'material'}`);
       err.statusCode = 400;
@@ -26,15 +27,17 @@ async function allocateIndentStock(mr, actorUserId) {
 
     ledger.quantityOnHand -= qty;
     ledger.lastMovementAt = new Date();
-    await ledger.save();
-    await StockMovement.create({
+    await ledger.save(session ? { session } : {});
+    const movement = {
       siteId: mr.siteId,
       materialId,
       materialRequestId: mr._id,
       quantityDelta: -qty,
       type: 'ALLOCATION',
       actorUserId,
-    });
+    };
+    if (session) await StockMovement.create([movement], { session });
+    else await StockMovement.create(movement);
   }
 
   if (typeof mr.markModified === 'function') {
@@ -43,7 +46,7 @@ async function allocateIndentStock(mr, actorUserId) {
   if (lineItems[0] && mr.materialId) {
     mr.quantityAllocated = lineItems[0].quantityAllocated;
   }
-  await mr.save();
+  await mr.save(session ? { session } : {});
   return mr;
 }
 

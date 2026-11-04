@@ -1,8 +1,8 @@
-async function nextSequence(Model, field, prefix) {
+async function nextSequence(Model, field, prefix, session = null) {
   const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const last = await Model.findOne({ [field]: { $regex: `^${escaped}` } })
     .sort({ [field]: -1 })
-    .select(field);
+    .select(field).session(session);
   let seq = 1;
   if (last) {
     const parts = last[field].split('/');
@@ -11,14 +11,14 @@ async function nextSequence(Model, field, prefix) {
   return `${prefix}${String(seq).padStart(4, '0')}`;
 }
 
-async function generatePrNumber(projectCode) {
+async function generatePrNumber(projectCode, session = null) {
   const now = new Date();
   const fyStart = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
   const fyEnd = fyStart + 1;
   const fy = `${String(fyStart).slice(-2)}-${String(fyEnd).slice(-2)}`;
   const prefix = `PR/${projectCode}/FY${fy}/`;
   const { PurchaseRequest } = require('../models');
-  return nextSequence(PurchaseRequest, 'prNumber', prefix);
+  return nextSequence(PurchaseRequest, 'prNumber', prefix, session);
 }
 
 async function generateRfqNumber(projectCode) {
@@ -76,10 +76,10 @@ async function generateIssueNumber() {
   return nextSequence(MaterialIssue, 'issueNumber', prefix);
 }
 
-async function generateTransferNumber() {
+async function generateTransferNumber(session = null) {
   const prefix = `BT/${new Date().getFullYear()}/`;
   const { BranchTransfer } = require('../models');
-  return nextSequence(BranchTransfer, 'transferNumber', prefix);
+  return nextSequence(BranchTransfer, 'transferNumber', prefix, session);
 }
 
 module.exports = {

@@ -2,8 +2,8 @@ const { computeRequiredQty } = require('@afios/shared');
 const { StockLedger, StockMovement } = require('../models');
 const { getIndentLineItems } = require('./materialRequestHelpers');
 
-async function getLedgerMap(siteId) {
-  const ledgers = await StockLedger.find({ siteId }).lean();
+async function getLedgerMap(siteId, session = null) {
+  const ledgers = await StockLedger.find({ siteId }).session(session).lean();
   const map = new Map();
   for (const l of ledgers) {
     map.set(l.materialId.toString(), l);
@@ -50,14 +50,12 @@ function computeLineStockFields(item, ledger, receivedQty = 0, receipts = [], in
   };
 }
 
-async function enrichIndentWithStock(mr) {
+async function enrichIndentWithStock(mr, session = null) {
   const siteId = mr.siteId?._id || mr.siteId;
   const lineItems = getIndentLineItems(mr);
   const indentStatus = mr.status || '';
-  const [ledgerMap, movements] = await Promise.all([
-    getLedgerMap(siteId),
-    StockMovement.find({ materialRequestId: mr._id, type: 'INCOMING' }).sort({ timestamp: 1 }).lean(),
-  ]);
+  const ledgerMap = await getLedgerMap(siteId, session);
+  const movements = await StockMovement.find({ materialRequestId: mr._id, type: 'INCOMING' }).session(session).sort({ timestamp: 1 }).lean();
   const receivedByMaterialId = new Map();
   const receiptsByMaterialId = new Map();
   for (const movement of movements) {

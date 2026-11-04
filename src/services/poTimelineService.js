@@ -10,7 +10,7 @@ const STAGE_LABELS = {
   received: 'Received',
 };
 
-async function recordPoStage(purchaseOrderId, stage, { actorUserId, note, reachedAt } = {}) {
+async function recordPoStage(purchaseOrderId, stage, { actorUserId, note, reachedAt, session } = {}) {
   if (!PO_TRACKING_STAGES.includes(stage)) return null;
   try {
     return await PoStatusTimeline.findOneAndUpdate(
@@ -24,10 +24,10 @@ async function recordPoStage(purchaseOrderId, stage, { actorUserId, note, reache
           actorUserId: actorUserId || undefined,
         },
       },
-      { upsert: true, new: true }
+      { upsert: true, new: true, session }
     );
   } catch (err) {
-    if (err.code === 11000) return PoStatusTimeline.findOne({ purchaseOrderId, stage });
+    if (err.code === 11000 && !session) return PoStatusTimeline.findOne({ purchaseOrderId, stage });
     throw err;
   }
 }
@@ -46,8 +46,8 @@ async function recordPoDispatch(purchaseOrderId, actorUserId) {
   await recordPoStage(purchaseOrderId, 'transit', { actorUserId });
 }
 
-async function recordPoReceived(purchaseOrderId, actorUserId) {
-  await recordPoStage(purchaseOrderId, 'received', { actorUserId });
+async function recordPoReceived(purchaseOrderId, actorUserId, options = {}) {
+  await recordPoStage(purchaseOrderId, 'received', { actorUserId, session: options.session });
 }
 
 async function getPoTimeline(purchaseOrderId) {
@@ -71,8 +71,8 @@ async function getPoTimeline(purchaseOrderId) {
   };
 }
 
-async function hasReachedStage(purchaseOrderId, stage) {
-  const row = await PoStatusTimeline.findOne({ purchaseOrderId, stage }).lean();
+async function hasReachedStage(purchaseOrderId, stage, options = {}) {
+  const row = await PoStatusTimeline.findOne({ purchaseOrderId, stage }).session(options.session || null).lean();
   return Boolean(row);
 }
 

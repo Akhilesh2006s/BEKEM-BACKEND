@@ -78,6 +78,10 @@ async function getPoEditGrnWarnings(po, body) {
 
 async function updatePurchaseOrderDraft(po, body, { acknowledgeGrnWarnings = false, actorUserId } = {}) {
   const isApprovedCorrection = po.status === 'APPROVED';
+  const originalStatus = po.status;
+  const requiresReverification = isApprovedCorrection || ['CHAIRMAN_PENDING', 'PENDING_APPROVAL'].includes(po.status);
+  const previousOrder = isApprovedCorrection ? po.toObject() : null;
+  if (previousOrder) delete previousOrder.amendmentHistory;
   if (!EDITABLE_STATUSES.has(po.status) && !isApprovedCorrection) {
     const err = new Error('PO cannot be edited in its current status');
     err.statusCode = 400;
@@ -160,7 +164,25 @@ async function updatePurchaseOrderDraft(po, body, { acknowledgeGrnWarnings = fal
     po.amount = subtotal;
   }
 
+  if (requiresReverification) {
+    po.status = 'COORDINATOR_PENDING';
+    po.coordinatorVerifiedByUserId = undefined;
+    po.coordinatorVerifiedAt = undefined;
+    if (previousOrder) {
+      po.amendmentHistory.push({ changedByUserId: actorUserId, changedAt: new Date(), previousOrder });
+      po.approvedByUserId = undefined;
+      po.finalApprovedAt = undefined;
+      po.approvedAsChairmanOverride = false;
+      po.overrideRemark = '';
+      po.approvalDispatchedAt = undefined;
+      po.emailStatus = 'pending';
+    }
+  }
   await po.save();
+  if (requiresReverification && actorUserId) {
+    await require('./statusHistoryService').record('PurchaseOrder', po._id, originalStatus,
+        'COORDINATOR_PENDING', actorUserId, 'Purchase order amended; Coordinator and Chairman must approve again');
+  }
   return po;
 }
 

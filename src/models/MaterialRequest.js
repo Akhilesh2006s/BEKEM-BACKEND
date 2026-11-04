@@ -62,6 +62,21 @@ const materialRequestSchema = new mongoose.Schema(
     requestedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     status: { type: String, enum: STATUSES, default: 'PENDING_STORE' },
     pendingWithRole: { type: String, default: 'STORE_INCHARGE' },
+    allocationReviewStage: {
+      type: String,
+      enum: ['EXECUTIVE', 'PROJECT_MANAGER', 'STORE_INCHARGE', 'SITE_INCHARGE', null],
+      default: null,
+    },
+    pmProceededAllocation: { type: Boolean, default: false },
+    storeStockReceivedAt: { type: Date },
+    storeStockReceivedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    storeStockReceivedRemark: { type: String, default: '' },
+    storeStockReceivedAttachments: [{
+      name: String,
+      fileType: String,
+      category: String,
+      url: String,
+    }],
     /**
      * Who moved the indent to ALLOCATED (local close vs store stock approval).
      * Used by UI so PM/Coordinator local closes are not labeled "Approved by Store".
@@ -75,6 +90,10 @@ const materialRequestSchema = new mongoose.Schema(
     estimatedValue: { type: Number, default: 0 },
     escalatedToHo: { type: Boolean, default: false },
     escalatedAt: { type: Date },
+    escalatedToChairman: { type: Boolean, default: false },
+    escalatedToChairmanAt: { type: Date },
+    chairmanIndentApprovedAt: { type: Date },
+    chairmanIndentApprovedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     pmForwardRemark: { type: String, default: '' },
     /** Store confirmed stock is available before PM approval (no direct issue). */
     storeStockVerified: { type: Boolean, default: false },

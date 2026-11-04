@@ -212,7 +212,7 @@ export const ROLE_COLORS: Record<UserRole, { primary: string; accent: string }> 
 };
 
 export const ROLE_LABELS: Record<UserRole, string> = {
-  [UserRole.SITE_INCHARGE]: 'New indent',
+  [UserRole.SITE_INCHARGE]: 'Site In-Charge / Indent Raiser',
   [UserRole.STORE_INCHARGE]: 'Store Incharge',
   [UserRole.PROJECT_MANAGER]: 'Project Manager',
   [UserRole.EXECUTIVE]: 'Executive',

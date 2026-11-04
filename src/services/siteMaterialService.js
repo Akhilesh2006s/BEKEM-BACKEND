@@ -1,7 +1,7 @@
 const { Material } = require('../models');
 const { findMaterialDuplicate, normalizeName } = require('./materialDedupService');
 const { materialCodeFromItem, ensureUniqueCode } = require('./codeGenerators');
-const { mapLegacyCategory, resolveMaterialCategory, ensureMaterialCategories } = require('./materialCategoryService');
+const { mapLegacyCategory, resolveMaterialCategory } = require('./materialCategoryService');
 
 const DEFAULT_SITE_HSN = '99999999';
 const DEFAULT_GST_RATE = 18;
@@ -36,8 +36,6 @@ async function createOrResolveSiteMaterial({
   const trimmedDescription = String(description || '').trim();
   const { assertCategoryRemarks } = require('./materialCategoryService');
   assertCategoryRemarks(mappedCategory, categoryRemarks);
-
-  await ensureMaterialCategories();
 
   const duplicate = await findMaterialDuplicate({ name: trimmedName });
   if (duplicate && duplicate.isActive !== false) {

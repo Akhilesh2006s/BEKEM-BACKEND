@@ -93,39 +93,6 @@ function storeCanIssueToRaiser(mr) {
   return STORE_ISSUE_STATUSES.has(mr?.status);
 }
 
-async function issueToIndentRaiser(mr, actor, remark) {
-  const fromStatus = mr.status;
-  for (const item of getIndentLineItems(mr)) {
-    const qty = item.quantityAllocated || item.quantityRequested;
-    item.quantityAllocated = qty;
-    item.quantityIssued = qty;
-  }
-  if (mr.quantityRequested) {
-    mr.quantityAllocated = mr.quantityAllocated || mr.quantityRequested;
-    mr.quantityIssued = mr.quantityRequested;
-  }
-  mr.status = 'ISSUED';
-  mr.allocationReviewStage = STAGES.SITE_INCHARGE;
-  mr.pendingWithRole = UserRole.SITE_INCHARGE;
-  mr.pmForwardRemark = remark;
-  await mr.save();
-  await statusHistoryService.record(
-    'MaterialRequest',
-    mr._id,
-    fromStatus,
-    'ISSUED',
-    actor._id,
-    `Store proceeded with allocation — issued to indent raiser: ${remark}`
-  );
-  await notificationService.notifyUser(mr.requestedByUserId, {
-    title: 'Collect & verify materials',
-    body: `${mr.indentNumber} has been allocated. Collect and verify the materials.`,
-    relatedEntityType: 'MaterialRequest',
-    relatedEntityId: mr._id,
-  });
-  return mr;
-}
-
 async function proceedWithAllocation(mr, actor, remark, poStatus) {
   const role = actor.role;
 
@@ -137,7 +104,9 @@ async function proceedWithAllocation(mr, actor, remark, poStatus) {
       err.statusCode = 400;
       throw err;
     }
-    return issueToIndentRaiser(mr, actor, remark);
+    const err = new Error('Use Issue Material to record the recipient and stock movement for this indent.');
+    err.statusCode = 409;
+    throw err;
   }
 
   const stage = resolveAllocationReviewStage(mr, poStatus);

@@ -23,12 +23,12 @@ function buildLineKey(line, index) {
 
 async function getCumulativeReceivedByLine(
   poId,
-  { excludeStatuses = POSTED_EXCLUDE_STATUSES } = {}
+  { excludeStatuses = POSTED_EXCLUDE_STATUSES, session = null } = {}
 ) {
   const grns = await GoodsReceiptNote.find({
     purchaseOrderId: poId,
     status: { $nin: excludeStatuses },
-  }).lean();
+  }).session(session).lean();
 
   const cumulative = {};
   for (const grn of grns) {
@@ -42,8 +42,8 @@ async function getCumulativeReceivedByLine(
 }
 
 /** Received + pending ON_HOLD — used for remaining qty / allowing another GRN. */
-async function getCommittedReceivedByLine(poId) {
-  return getCumulativeReceivedByLine(poId, { excludeStatuses: COMMITTED_EXCLUDE_STATUSES });
+async function getCommittedReceivedByLine(poId, options = {}) {
+  return getCumulativeReceivedByLine(poId, { excludeStatuses: COMMITTED_EXCLUDE_STATUSES, session: options.session || null });
 }
 
 /** Ordered / received / remaining totals across PO lines (for GRN list UIs). */
@@ -164,8 +164,9 @@ function computeLineVariances(po, linePayloads, cumulativeBefore = {}) {
   return { items, isPartial, varianceLines };
 }
 
-async function syncPoFulfillment(po, actorUserId) {
-  const cumulative = await getCumulativeReceivedByLine(po._id);
+async function syncPoFulfillment(po, actorUserId, options = {}) {
+  const session = options.session || null;
+  const cumulative = await getCumulativeReceivedByLine(po._id, { session });
 
   let allComplete = true;
   const lineSummary = (po.lineItems || []).map((line, index) => {
@@ -187,15 +188,16 @@ async function syncPoFulfillment(po, actorUserId) {
   po.fulfillmentStatus = allComplete ? 'closed_complete' : 'open_partial';
   if (allComplete) {
     po.trackingReceivedAt = po.trackingReceivedAt || new Date();
-    if (!(await hasReachedStage(po._id, 'received'))) {
-      await recordPoReceived(po._id, actorUserId);
+    if (!(await hasReachedStage(po._id, 'received', { session }))) {
+      await recordPoReceived(po._id, actorUserId, { session });
     }
     await DeliveryAlert.updateMany(
       { purchaseOrderId: po._id, resolvedAt: null },
-      { $set: { resolvedAt: new Date() } }
+      { $set: { resolvedAt: new Date() } },
+      session ? { session } : undefined
     );
   }
-  await po.save();
+  await po.save(session ? { session } : undefined);
 
   return { fulfillmentStatus: po.fulfillmentStatus, lineSummary, allComplete };
 }

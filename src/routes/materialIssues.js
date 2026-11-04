@@ -1,19 +1,21 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const { body, param } = require('express-validator');
 const {
   MaterialIssue,
   MaterialRequest,
+  StatusHistory,
+  StockMovement,
 } = require('../models');
 const { authenticate } = require('../middleware/auth');
 const { requireCapability } = require('../middleware/rbac');
 const { validate } = require('../middleware/validate');
 const { generateIssueNumber } = require('../services/documentNumberService');
 const { getIndentLineItems } = require('../services/materialRequestHelpers');
-const statusHistoryService = require('../services/statusHistoryService');
 const notificationService = require('../services/notificationService');
 const { ISSUE_REASONS } = require('../constants/indentPolicy');
 const { serializeMaterialRequestEnriched } = require('../utils/serialize');
-const { consumeFifo } = require('../services/fifoStockService');
+const { consumeFifo, consumeReservedFifo } = require('../services/fifoStockService');
 
 const router = express.Router();
 router.use(authenticate);
@@ -88,6 +90,7 @@ function serializeIssue(issue) {
       name: a.name,
       fileType: a.fileType,
       category: a.category,
+      url: a.url || '',
     })),
     createdAt: issue.createdAt?.toISOString?.(),
   };
@@ -179,7 +182,11 @@ router.get('/', async (req, res, next) => {
 
 router.get('/:id', param('id').isMongoId(), validate, async (req, res, next) => {
   try {
-    const issue = await MaterialIssue.findById(req.params.id).populate(issuePopulate);
+    const { resolveRegisterSiteFilter, applySiteFilterToQuery } = require('../services/registerScopeService');
+    const filter = { _id: req.params.id };
+    const scope = await resolveRegisterSiteFilter(req.user);
+    if (!applySiteFilterToQuery(filter, scope)) return res.status(404).json({ statusCode: 404, message: 'Not found' });
+    const issue = await MaterialIssue.findOne(filter).populate(issuePopulate);
     if (!issue) return res.status(404).json({ statusCode: 404, message: 'Not found' });
     res.json({ data: serializeIssue(issue) });
   } catch (err) {
@@ -215,11 +222,16 @@ router.post(
     body('attachments.*.name').optional().isString(),
     body('attachments.*.fileType').optional().isString(),
     body('attachments.*.category').optional().isString(),
+    body('attachments.*.dataBase64').optional().isString(),
   ],
   validate,
   async (req, res, next) => {
     try {
-      const mr = await MaterialRequest.findById(req.body.materialRequestId).populate(
+      const { resolveRegisterSiteFilter, applySiteFilterToQuery } = require('../services/registerScopeService');
+      const filter = { _id: req.body.materialRequestId };
+      const scope = await resolveRegisterSiteFilter(req.user);
+      if (!applySiteFilterToQuery(filter, scope)) return res.status(404).json({ statusCode: 404, message: 'Indent not found' });
+      const mr = await MaterialRequest.findOne(filter).populate(
         'items.materialId'
       );
       if (!mr) return res.status(404).json({ statusCode: 404, message: 'Indent not found' });
@@ -295,10 +307,12 @@ router.post(
         }
       }
 
-      const alreadyAllocated = mr.status === 'ALLOCATED';
       const issueNumber = await generateIssueNumber();
       const issuedAt = req.body.issuedAt ? new Date(req.body.issuedAt) : new Date();
-      const issue = await MaterialIssue.create({
+      if ((req.body.attachments || []).some((a) => a?.category === 'CONTRACTOR_ACK' && !a.dataBase64)) {
+        return res.status(400).json({ statusCode: 400, message: 'The contractor acknowledgement file must be uploaded' });
+      }
+      const issuePayload = {
         issueNumber,
         materialRequestId: mr._id,
         siteId: mr.siteId,
@@ -311,60 +325,67 @@ router.post(
         issuedToName: req.body.issuedToName.trim(),
         issuedAt,
         note: req.body.note || req.body.remark || '',
-        attachments: Array.isArray(req.body.attachments)
-          ? req.body.attachments
-              .filter((a) => a?.name)
-              .map((a) => ({
-                name: a.name,
-                fileType: a.fileType || 'application/octet-stream',
-                category: a.category || 'ISSUE_SLIP',
-              }))
-          : [],
-      });
+        attachments: require('../services/grnFileService').persistGrnAttachments(req.body.attachments || []),
+      };
 
-      for (const item of issueItems) {
-        if (!alreadyAllocated) {
-          await consumeFifo({
-            siteId: mr.siteId,
-            materialId: item.materialId,
-            quantity: item.quantity,
-            actorUserId: req.user._id,
-            materialRequestId: mr._id,
-          });
+      // Stock, the issue slip, the indent and its history must commit together.
+      // Never fall back to non-transactional writes: a failed issue must not
+      // leave a slip or consume only part of a multi-line request.
+      const session = await mongoose.startSession();
+      let issue;
+      try {
+        await session.withTransaction(async () => {
+          const current = await MaterialRequest.findById(mr._id).session(session).populate('items.materialId');
+          if (!current || !issueable.includes(current.status)) {
+            const err = new Error('Indent is no longer ready for issue'); err.statusCode = 400; throw err;
+          }
+          const quantities = new Map();
+          for (const item of issueItems) {
+            const key = String(item.materialId);
+            quantities.set(key, (quantities.get(key) || 0) + Number(item.quantity));
+          }
+          for (const [materialId, quantity] of quantities) {
+            const line = getIndentLineItems(current).find((li) => String(li.materialId?._id || li.materialId) === materialId);
+            if (!line || quantity > Number(line.quantityRequested || 0) - Number(line.quantityIssued || 0) + 1e-9) {
+              const err = new Error('Cannot issue more than the remaining request'); err.statusCode = 400; throw err;
+            }
+            const debits = await StockMovement.find({ siteId: current.siteId, materialId, materialRequestId: current._id, type: 'ALLOCATION', quantityDelta: { $lt: 0 } }).session(session).lean();
+            const alreadyDebited = debits.reduce((sum, entry) => sum - Number(entry.quantityDelta || 0), 0);
+            const reserved = Math.min(quantity, Math.max(0, alreadyDebited - Number(line.quantityIssued || 0)));
+            if (reserved > 0) await consumeReservedFifo({ siteId: current.siteId, materialId, quantity: reserved, session });
+            if (quantity > reserved) await consumeFifo({ siteId: current.siteId, materialId, quantity: quantity - reserved, actorUserId: req.user._id, materialRequestId: current._id, session });
+            line.quantityIssued = Number(line.quantityIssued || 0) + quantity;
+            line.quantityAllocated = Math.max(Number(line.quantityAllocated || 0), line.quantityIssued);
+          }
+          const fromStatus = current.status;
+          const fullyIssued = getIndentLineItems(current).every((line) => Number(line.quantityIssued || 0) >= Number(line.quantityRequested || 0));
+          current.status = fullyIssued ? 'ISSUED' : 'PARTIALLY_ISSUED';
+          current.pendingWithRole = fullyIssued ? 'SITE_INCHARGE' : 'STORE_INCHARGE';
+          await current.save({ session });
+          [issue] = await MaterialIssue.create([issuePayload], { session });
+          const reasonLabel = reason === 'other' ? req.body.reasonOtherText : reason.replace(/_/g, ' ');
+          await StatusHistory.create([{ entityType: 'MaterialRequest', entityId: current._id, fromStatus, toStatus: current.status, actorUserId: req.user._id, note: `Materials issued — ${issueNumber}${fullyIssued ? '' : ' (partial)'}. Reason: ${reasonLabel}`, timestamp: new Date() }], { session });
+        });
+      } catch (err) {
+        if (err.code === 20 || err.codeName === 'IllegalOperation') {
+          const unavailable = new Error('Material issue requires a MongoDB replica set for safe stock updates');
+          unavailable.statusCode = 503; throw unavailable;
         }
-
-        const line = mr.items.find((li) => li.materialId._id?.toString() === item.materialId.toString() || li.materialId.toString() === item.materialId.toString());
-        if (line) {
-          const nextIssued = (line.quantityIssued || 0) + item.quantity;
-          line.quantityIssued = nextIssued;
-          line.quantityAllocated = Math.max(line.quantityAllocated || 0, nextIssued);
-        }
+        throw err;
+      } finally {
+        await session.endSession();
       }
 
-      const fromStatus = mr.status;
-      const fullyIssued = getIndentLineItems(mr).every(
-        (line) => Number(line.quantityIssued || 0) >= Number(line.quantityRequested || 0)
-      );
-      mr.status = fullyIssued ? 'ISSUED' : 'PARTIALLY_ISSUED';
-      mr.pendingWithRole = fullyIssued ? 'SITE_INCHARGE' : 'STORE_INCHARGE';
-      await mr.save();
-
-      const reasonLabel = reason === 'other' ? req.body.reasonOtherText : reason.replace(/_/g, ' ');
-      await statusHistoryService.record(
-        'MaterialRequest',
-        mr._id,
-        fromStatus,
-        mr.status,
-        req.user._id,
-        `Materials issued — ${issueNumber}${fullyIssued ? '' : ' (partial)'}. Reason: ${reasonLabel}`
-      );
-
-      await notificationService.notifyUser(mr.requestedByUserId, {
-        title: 'Materials issued to site',
-        body: `Indent ${mr.indentNumber} materials have been issued.`,
-        relatedEntityType: 'MaterialRequest',
-        relatedEntityId: mr._id,
-      });
+      try {
+        await notificationService.notifyUser(mr.requestedByUserId, {
+          title: 'Materials issued to site',
+          body: `Indent ${mr.indentNumber} materials have been issued.`,
+          relatedEntityType: 'MaterialRequest',
+          relatedEntityId: mr._id,
+        });
+      } catch (err) {
+        console.error('Issue notification failed after commit:', err.message);
+      }
 
       const populated = await MaterialRequest.findById(mr._id).populate(populateFields);
       res.status(201).json({

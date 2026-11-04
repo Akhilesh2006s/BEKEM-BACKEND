@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const { MongoMemoryServer } = require('mongodb-memory-server');
+const { MongoMemoryReplSet } = require('mongodb-memory-server');
 const request = require('supertest');
 const { createApp } = require('../app');
 const { User, Material, Site, Project, StockLedger } = require('../models');
@@ -9,7 +9,9 @@ let mongoServer;
 let app;
 
 async function setupTestDb() {
-  mongoServer = await MongoMemoryServer.create();
+  mongoServer = await MongoMemoryReplSet.create({
+    replSet: { count: 1, storageEngine: 'wiredTiger', ip: '127.0.0.1' },
+  });
   await mongoose.connect(mongoServer.getUri());
   await seedDatabase();
   const { loadOrgSettings } = require('../services/orgSettingsService');

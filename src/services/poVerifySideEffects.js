@@ -121,25 +121,12 @@ async function runPostApprovalDispatch(po) {
   return po;
 }
 
-/**
- * Coordinator verify:
- * - ≤ Coordinator max → final approve
- * - > Coordinator max → Chairman queue
- * (PO approval is Coordinator / Chairman only — no PM band.)
- */
+/** Every purchase order goes from Coordinator verification to Chairman approval. */
 async function coordinatorVerifyPurchaseOrder(po, actorUserId, note) {
-  if (!requiresChairmanApproval(po.amount)) {
-    return finalizePurchaseOrder(
-      po,
-      actorUserId,
-      note || 'Coordinator approved',
-      null,
-      { chairmanOverride: false }
-    );
-  }
-
   const fromStatus = po.status;
   po.status = 'CHAIRMAN_PENDING';
+  po.coordinatorVerifiedByUserId = actorUserId;
+  po.coordinatorVerifiedAt = new Date();
   await po.save();
   await statusHistoryService.record(
     'PurchaseOrder',
@@ -147,36 +134,16 @@ async function coordinatorVerifyPurchaseOrder(po, actorUserId, note) {
     fromStatus,
     'CHAIRMAN_PENDING',
     actorUserId,
-    note || 'Coordinator verified — forwarded to Chairman (above coordinator limit)'
+    note || 'Coordinator verified — forwarded to Chairman'
   );
   await notifyChairmen(po);
   return po;
 }
 
 async function coordinatorOverrideApprove(po, actorUserId, remark) {
-  const text = String(remark || '').trim();
-  if (text.length < 30 || text.length > 300) {
-    const err = new Error('Override remark must be at least 30 characters (max 300)');
-    err.statusCode = 400;
-    throw err;
-  }
-  if (!requiresChairmanApproval(po.amount)) {
-    const { PO_CHAIRMAN_APPROVAL_THRESHOLD_INR } = require('../constants/approvalPolicy');
-    const threshold = PO_CHAIRMAN_APPROVAL_THRESHOLD_INR.toLocaleString('en-IN');
-    const err = new Error(`Emergency override applies only to POs above ₹${threshold}`);
-    err.statusCode = 400;
-    throw err;
-  }
-  const allowedStatuses = ['CHAIRMAN_PENDING', 'COORDINATOR_PENDING', 'PENDING_REVIEW', 'PM_PENDING'];
-  if (!allowedStatuses.includes(po.status)) {
-    const err = new Error('PO is not awaiting Coordinator or Chairman approval');
-    err.statusCode = 400;
-    throw err;
-  }
-  return finalizePurchaseOrder(po, actorUserId, 'Coordinator override approval', null, {
-    chairmanOverride: true,
-    overrideRemark: text,
-  });
+  const err = new Error('Chairman approval is required for every purchase order');
+  err.statusCode = 403;
+  throw err;
 }
 
 async function pmApprovePurchaseOrder() {
@@ -189,6 +156,11 @@ async function finalizePurchaseOrder(po, actorUserId, note, approvalContext, opt
   if (po.status === 'APPROVED') {
     await runPostApprovalDispatch(po);
     return po;
+  }
+  if (!po.coordinatorVerifiedByUserId || !po.coordinatorVerifiedAt) {
+    const err = new Error('Coordinator verification is required before Chairman approval');
+    err.statusCode = 409;
+    throw err;
   }
 
   const fromStatus = po.status;
@@ -242,7 +214,11 @@ async function finalizePurchaseOrder(po, actorUserId, note, approvalContext, opt
           ?.materialRequestId
       : null);
 
-  if (mr && typeof mr === 'object' && mr._id) {
+  // An amended or additional PO must never rewind an indent that has already
+  // reached receipt, issue, completion, or another terminal state.
+  const advancedIndentStatuses = new Set(['ALLOCATED', 'CHAIRMAN_APPROVED', 'MATERIAL_RECEIVED',
+    'PARTIALLY_ISSUED', 'ISSUED', 'COMPLETED', 'CLOSED', 'REJECTED', 'CANCELLED']);
+  if (mr && typeof mr === 'object' && mr._id && !advancedIndentStatuses.has(mr.status)) {
     const { startAllocationReview, notifyExecutives } = require('./pmProceedAllocationService');
     const mrFrom = mr.status;
     mr.status = 'CHAIRMAN_APPROVED';

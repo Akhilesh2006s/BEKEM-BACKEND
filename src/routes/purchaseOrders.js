@@ -21,7 +21,6 @@ const {
   notifyChairmen,
   notifyExecutivesReturned,
   coordinatorVerifyPurchaseOrder,
-  coordinatorOverrideApprove,
   finalizePurchaseOrder,
 } = require('../services/poVerifySideEffects');
 const { userCanAccessProject } = require('../utils/serialize');
@@ -627,6 +626,7 @@ router.post(
   async (req, res, next) => {
     const { handleIdempotent } = require('../utils/idempotentHandler');
     return handleIdempotent(req, res, `po-verify:${req.params.id}:${req.body.action}`, async () => {
+      if (req.user.role !== UserRole.COORDINATOR) return { statusCode: 403, body: { statusCode: 403, message: 'Coordinator only' } };
       const po = await PurchaseOrder.findById(req.params.id).populate({
         path: 'purchaseRequestId',
         populate: { path: 'materialRequestId' },
@@ -711,32 +711,7 @@ router.post(
   requireCapability('VERIFY_RECORDS'),
   [param('id').isMongoId(), body('remark').trim().isLength({ min: 30, max: 300 })],
   validate,
-  async (req, res, next) => {
-    try {
-      if (req.user.role !== UserRole.COORDINATOR) {
-        return res.status(403).json({ statusCode: 403, message: 'Coordinator only' });
-      }
-      const po = await PurchaseOrder.findById(req.params.id).populate({
-        path: 'purchaseRequestId',
-        populate: { path: 'materialRequestId' },
-      });
-      if (!po) return res.status(404).json({ statusCode: 404, message: 'Not found' });
-      if (po.status === 'APPROVED') {
-        const { runPostApprovalDispatch } = require('../services/poVerifySideEffects');
-        await runPostApprovalDispatch(po);
-        const populated = await PurchaseOrder.findById(po._id).populate(poPopulate);
-        return res.json({ data: serializePurchaseOrder(populated) });
-      }
-      await coordinatorOverrideApprove(po, req.user._id, req.body.remark);
-      const populated = await PurchaseOrder.findById(po._id).populate(poPopulate);
-      res.json({ data: serializePurchaseOrder(populated) });
-    } catch (err) {
-      if (err.statusCode) {
-        return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
-      }
-      next(err);
-    }
-  }
+  async (req, res) => res.status(403).json({ statusCode: 403, message: 'Chairman approval is required for every purchase order' })
 );
 
 router.post(

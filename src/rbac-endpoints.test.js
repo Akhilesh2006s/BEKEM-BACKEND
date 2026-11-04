@@ -39,7 +39,7 @@ describe('RBAC endpoint enforcement', () => {
     assert.strictEqual(res.status, 403);
   });
 
-  it('Coordinator is permitted to create purchase orders', async () => {
+  it('Coordinator cannot create purchase orders reserved for Executive', async () => {
     const app = getApp();
     const token = await loginAs('coordinator@bekem.com');
     const vendors = await request(app)
@@ -54,7 +54,7 @@ describe('RBAC endpoint enforcement', () => {
         paymentTerms: 'Net 30',
       });
 
-    assert.notStrictEqual(res.status, 403);
+    assert.strictEqual(res.status, 403);
   });
 
   it('Chairman can view user analytics', async () => {

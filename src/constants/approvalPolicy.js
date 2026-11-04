@@ -11,17 +11,16 @@ function poAmount(amount) {
   return Number(amount || 0);
 }
 
-function requiresPmApproval(amount) {
-  return poAmount(amount) < limits().poPmMaxInr;
+function requiresPmApproval(_amount) {
+  return false;
 }
 
-function requiresCoordinatorFinalApproval(amount) {
-  const a = poAmount(amount);
-  return a >= limits().poPmMaxInr && a <= limits().poCoordinatorMaxInr;
+function requiresCoordinatorFinalApproval(_amount) {
+  return false;
 }
 
-function requiresChairmanApproval(amount) {
-  return poAmount(amount) > limits().poCoordinatorMaxInr;
+function requiresChairmanApproval(_amount) {
+  return true;
 }
 
 function initialPoStatusForAmount(_amount) {
@@ -30,27 +29,14 @@ function initialPoStatusForAmount(_amount) {
 }
 
 function poApprovalRoutingNote(po) {
-  const { poPmMaxInr, poCoordinatorMaxInr } = limits();
-  const amount = poAmount(po?.amount);
-  const fmt = (n) => `₹${n.toLocaleString('en-IN')}`;
-
-  if (po?.status === 'PM_PENDING') {
-    return `Legacy low-value PO — now approved by Coordinator (under ${fmt(poPmMaxInr)}).`;
-  }
   if (po?.status === 'CHAIRMAN_PENDING' || po?.status === 'PENDING_APPROVAL') {
-    return `Amount ${fmt(amount)} is above ${fmt(poCoordinatorMaxInr)} — Chairman final approval required (or Coordinator may approve only if Chairman is not on premises, with a written reason).`;
+    return 'Coordinator verified; Chairman final approval is required.';
   }
-  if (po?.status === 'COORDINATOR_PENDING' || po?.status === 'PENDING_REVIEW') {
-    if (requiresChairmanApproval(amount)) {
-      return `Amount ${fmt(amount)} is above ${fmt(poCoordinatorMaxInr)}. Coordinator verifies then routes to Chairman, or may approve with a note that Chairman is not on premises.`;
-    }
-    return `Amount ${fmt(amount)} is up to ${fmt(poCoordinatorMaxInr)} — Coordinator final approval.`;
+  if (['PM_PENDING', 'COORDINATOR_PENDING', 'PENDING_REVIEW'].includes(po?.status)) {
+    return 'Coordinator verifies, then Chairman approves every purchase order.';
   }
   if (po?.status === 'APPROVED') {
-    if (requiresChairmanApproval(amount)) {
-      return `Approved via Chairman queue (above ${fmt(poCoordinatorMaxInr)}), or Coordinator exception (Chairman not on premises).`;
-    }
-    return `Approved by Coordinator (up to ${fmt(poCoordinatorMaxInr)}).`;
+    return 'Purchase orders require Coordinator verification and Chairman final approval.';
   }
   return limits().approvalRoutingNote;
 }

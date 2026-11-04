@@ -75,14 +75,14 @@ function getDayBounds(date = new Date(), timeZone = appTimezone()) {
   };
 }
 
-async function sumApprovalValues(entries) {
+async function sumApprovalValues(entries, session) {
   const seen = new Set();
   let total = 0;
   for (const entry of entries) {
     const id = entry.entityId?.toString();
     if (!id || seen.has(id)) continue;
     seen.add(id);
-    const mr = await MaterialRequest.findById(entry.entityId).select(
+    const mr = await MaterialRequest.findById(entry.entityId).session(session || null).select(
       'estimatedValue items quantityRequested materialId indentRequestType'
     );
     if (!mr) continue;
@@ -90,35 +90,37 @@ async function sumApprovalValues(entries) {
     const stored = Number(mr.estimatedValue);
     total += stored > 0 ? stored : await estimateIndentAmount(mr);
   }
-  return Math.round(total);
+  return Math.round(total * 100) / 100;
 }
 
 /**
  * Sum of PM local approvals today (fills the ₹5,000 bar).
  * Includes Below ₹5,000 local closes — those go FORWARDED_TO_PM → ALLOCATED, not PM_APPROVED.
  */
-async function getPmDailyApprovedTotal(pmUserId, date = new Date()) {
+async function getPmDailyApprovedTotal(pmUserId, date = new Date(), session = null) {
   const { start, endExclusive } = getDayBounds(date);
   const approvals = await StatusHistory.find({
     entityType: 'MaterialRequest',
-    actorUserId: pmUserId,
-    timestamp: { $gte: start, $lt: endExclusive },
-    $or: [
-      { toStatus: 'PM_APPROVED' },
-      { toStatus: 'ALLOCATED', fromStatus: 'FORWARDED_TO_PM' },
+    $and: [
+      { $or: [{ approvalPrincipalUserId: pmUserId }, { approvalPrincipalUserId: null, actorUserId: pmUserId }] },
+      { $or: [
+        { toStatus: 'PM_APPROVED' },
+        { toStatus: 'ALLOCATED', fromStatus: 'FORWARDED_TO_PM' },
+      ] },
     ],
-  }).select('entityId');
+    timestamp: { $gte: start, $lt: endExclusive },
+  }).session(session).select('entityId');
 
-  return sumApprovalValues(approvals);
+  return sumApprovalValues(approvals, session);
 }
 
 function wouldExceedPmDailyCap(currentTotal, requestValue) {
-  return currentTotal + requestValue > dailyCap();
+  return Math.round(currentTotal * 100) + Math.round(requestValue * 100) > Math.round(dailyCap() * 100);
 }
 
-async function checkPmCanApprove(pmUserId, mr, date = new Date()) {
+async function checkPmCanApprove(pmUserId, mr, date = new Date(), session = null) {
   const requestValue = mr.estimatedValue ?? (await estimateIndentAmount(mr));
-  const dailyApprovedTotal = await getPmDailyApprovedTotal(pmUserId, date);
+  const dailyApprovedTotal = await getPmDailyApprovedTotal(pmUserId, date, session);
   const wouldExceed = wouldExceedPmDailyCap(dailyApprovedTotal, requestValue);
   const { dayStr } = getDayBounds(date);
   return {

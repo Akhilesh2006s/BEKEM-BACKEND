@@ -89,20 +89,25 @@ describe('Final PO permission matrix (spec 41–42)', () => {
   });
 
   describe('Project Manager — PR/WO scope, no PO create/edit', () => {
-    it('GET /purchase-orders without queue returns 403', async () => {
+    it('GET /purchase-orders returns only purchase orders the PM may view', async () => {
       const res = await request(app)
         .get('/api/purchase-orders')
         .set('Authorization', `Bearer ${pmToken}`);
-      assert.strictEqual(res.status, 403);
+      assert.strictEqual(res.status, 200);
+      assert.ok(Array.isArray(res.body.data));
+      for (const po of res.body.data) {
+        const detail = await request(app).get(`/api/purchase-orders/${po.id}`)
+          .set('Authorization', `Bearer ${pmToken}`);
+        assert.strictEqual(detail.status, 200);
+      }
     });
 
-    it('GET /purchase-orders?queue=pm succeeds', async () => {
+    it('does not expose a PM purchase-order approval queue', async () => {
       const res = await request(app)
         .get('/api/purchase-orders')
         .query({ queue: 'pm' })
         .set('Authorization', `Bearer ${pmToken}`);
-      assert.strictEqual(res.status, 200);
-      assert.ok(Array.isArray(res.body.data));
+      assert.strictEqual(res.status, 403);
     });
 
     it('POST /purchase-orders/wizard returns 403', async () => {
@@ -155,7 +160,7 @@ describe('Final PO permission matrix (spec 41–42)', () => {
     });
   });
 
-  describe('Coordinator — view/create/edit/verify', () => {
+  describe('Coordinator — view/edit/verify, no PO creation', () => {
     it('GET /purchase-orders succeeds', async () => {
       const res = await request(app)
         .get('/api/purchase-orders')
@@ -163,7 +168,7 @@ describe('Final PO permission matrix (spec 41–42)', () => {
       assert.strictEqual(res.status, 200);
     });
 
-    it('POST /purchase-orders/wizard is not forbidden', async () => {
+    it('POST /purchase-orders/wizard returns 403', async () => {
       const vendors = await request(app)
         .get('/api/vendors')
         .set('Authorization', `Bearer ${coordinatorToken}`);
@@ -174,7 +179,7 @@ describe('Final PO permission matrix (spec 41–42)', () => {
           vendorId: vendors.body.data[0]?.id || '507f1f77bcf86cd799439011',
           paymentTerms: 'Net 30',
         });
-      assert.notStrictEqual(res.status, 403);
+      assert.strictEqual(res.status, 403);
     });
   });
 

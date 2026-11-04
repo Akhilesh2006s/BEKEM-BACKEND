@@ -82,12 +82,19 @@ const purchaseOrderSchema = new mongoose.Schema(
       enum: ['pending', 'queued', 'sent', 'failed', 'skipped'],
       default: 'pending',
     },
+    coordinatorVerifiedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    coordinatorVerifiedAt: { type: Date },
     approvedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     finalApprovedAt: { type: Date },
     approvedAsChairmanOverride: { type: Boolean, default: false },
     overrideRemark: { type: String, maxlength: 300, default: '' },
     /** Set once post-approval notifications + email dispatch complete (idempotency guard). */
     approvalDispatchedAt: { type: Date },
+    amendmentHistory: [{
+      changedByUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      changedAt: { type: Date, default: Date.now },
+      previousOrder: { type: mongoose.Schema.Types.Mixed },
+    }],
     fulfillmentStatus: {
       type: String,
       enum: ['open_partial', 'closed_complete'],
@@ -95,7 +102,7 @@ const purchaseOrderSchema = new mongoose.Schema(
     },
     trackingReceivedAt: { type: Date },
   },
-  { timestamps: true }
+  { timestamps: true, optimisticConcurrency: true }
 );
 
 purchaseOrderSchema.pre('validate', function unsetEmptyPoNumber() {

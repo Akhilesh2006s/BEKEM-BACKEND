@@ -95,6 +95,17 @@ router.get('/:id/comparison', param('id').isMongoId(), validate, async (req, res
   }
 });
 
+router.patch('/:id/quotation-rates', requireCapability('CREATE_RFQ'), [
+  param('id').isMongoId(), body('rates').isArray({ min: 1 }),
+  body('rates.*.vendorId').isMongoId(), body('rates.*.materialId').isMongoId(),
+  body('rates.*.rate').isFloat({ min: 0 }), body('rates.*.gstPercent').isFloat({ min: 0 }),
+], validate, async (req, res, next) => {
+  try {
+    const data = await rfqService.saveQuotationRateOverrides(req.params.id, req.user, req.body.rates);
+    res.json({ data });
+  } catch (err) { next(err); }
+});
+
 router.get('/:id', param('id').isMongoId(), validate, async (req, res, next) => {
   try {
     const data = await rfqService.getRfqDetail(req.params.id, req.user);

@@ -154,6 +154,8 @@ export interface ProcurementDecisionDto {
     coordinatorProcurementRemark: string;
     canExecutiveDecide: boolean;
     canCoordinatorReview: boolean;
+    /** Status allows Coordinator local close (within ₹10,000/day remaining). */
+    canCoordinatorLocalClose?: boolean;
     canFullyIssue?: boolean;
     hasAvailableStock?: boolean;
     redirect?: {
@@ -340,6 +342,16 @@ export interface ProjectGrnCounterDto {
     purchaseOrderId?: string;
     nextNumber: number;
     grnNumber: string;
+    /** True when GRN-002+ applies because prior receipts left remaining qty. */
+    showSequentialNumber?: boolean;
+    remainingQty?: number;
+    hasPendingApproval?: boolean;
+    pendingGrns?: Array<{
+        id: string;
+        grnNumber: string;
+        receiveType?: string;
+        status: string;
+    }>;
     lines?: PoGrnReceiptLineDto[];
 }
 export interface PoGrnReceiptLineDto {
@@ -382,9 +394,11 @@ export interface IndentLineItemDto {
     requiredQty?: number;
     /** Quantity received through GRNs for this indent line. */
     quantityReceived?: number;
-    /** Received quantity still available to issue for this indent line. */
+    /** Qty that can be issued now against this indent (remaining request ∩ site stock / GRN). */
     availableToIssueQty?: number;
-    /** Requested quantity not yet received through GRN. */
+    /** Requested minus already issued. */
+    remainingToIssueQty?: number;
+    /** Qty still needing inbound receipt after site stock and prior issues. */
     pendingReceiptQty?: number;
     /** Individual GRN receipt quantities and dates for this indent line. */
     receipts?: Array<{
@@ -455,6 +469,8 @@ export interface MaterialRequestDto {
     materialId?: string;
     quantityRequested?: number;
     quantityAllocated?: number;
+    /** Legacy single-line issued qty (prefer items[].quantityIssued). */
+    quantityIssued?: number;
     purpose?: string;
     requestedByName?: string;
     location?: string;
@@ -525,6 +541,21 @@ export interface MaterialRequestDto {
             materialId: string;
             materialName: string;
             quantityReceived: number;
+            unit?: string;
+        }>;
+    }>;
+    /** Per issue-slip history against this indent (partial issues listed separately). */
+    issues?: Array<{
+        id: string;
+        issueNumber: string;
+        status: string;
+        issuedAt: string | null;
+        issuedToName?: string;
+        issuedByName?: string;
+        items: Array<{
+            materialId: string;
+            materialName: string;
+            quantityIssued: number;
             unit?: string;
         }>;
     }>;

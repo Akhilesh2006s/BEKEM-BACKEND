@@ -465,13 +465,8 @@ router.post(
 
       const fromStatus = transfer.status;
       transfer.status = 'EXECUTIVE_APPROVED';
-      transfer.coordinatorDecision = 'transfer';
       transfer.executiveApprovedByUserId = req.user._id;
       transfer.executiveApprovedAt = new Date();
-      transfer.pmApprovedByUserId = req.user._id;
-      transfer.pmApprovedAt = new Date();
-      transfer.coordinatorDecidedByUserId = req.user._id;
-      transfer.coordinatorDecidedAt = new Date();
       if (req.body.note?.trim()) transfer.note = req.body.note.trim();
       await transfer.save();
 
@@ -482,16 +477,16 @@ router.post(
         'EXECUTIVE_APPROVED',
         req.user._id,
         req.body.note?.trim() ||
-          'Executive approved — source Project Manager must dispatch with challan and expected arrival'
+          'Executive approved — awaiting Coordinator review'
       );
 
       const fromProjectId = transfer.fromProjectId?._id || transfer.fromProjectId;
       const toProjectId = transfer.toProjectId?._id || transfer.toProjectId;
-      const sourcePms = await getProjectManagers(fromProjectId);
-      for (const pm of sourcePms) {
-        await notificationService.notifyUser(pm._id, {
-          title: 'Dispatch branch transfer',
-          body: `${transfer.transferNumber}: Executive approved. Confirm challan no. and expected arrival, then dispatch stock.`,
+      const coordinators = await User.find({ role: UserRole.COORDINATOR, isActive: { $ne: false } });
+      for (const coordinator of coordinators) {
+        await notificationService.notifyUser(coordinator._id, {
+          title: 'Review branch transfer',
+          body: `${transfer.transferNumber}: Executive approved; Coordinator review is required.`,
           relatedEntityType: 'BranchTransfer',
           relatedEntityId: transfer._id,
         });
@@ -500,7 +495,7 @@ router.post(
       if (requesterId) {
         await notificationService.notifyUser(requesterId, {
           title: 'Branch transfer approved by Executive',
-          body: `${transfer.transferNumber}: awaiting source project dispatch (challan / ETA).`,
+          body: `${transfer.transferNumber}: awaiting Coordinator review.`,
           relatedEntityType: 'BranchTransfer',
           relatedEntityId: transfer._id,
         });
@@ -510,7 +505,7 @@ router.post(
         if (requesterId && pm._id.toString() === requesterId.toString()) continue;
         await notificationService.notifyUser(pm._id, {
           title: 'Branch transfer approved',
-          body: `${transfer.transferNumber}: source PM will dispatch; you will receive and post GRN after arrival.`,
+          body: `${transfer.transferNumber}: awaiting Coordinator review.`,
           relatedEntityType: 'BranchTransfer',
           relatedEntityId: transfer._id,
         });
@@ -541,10 +536,10 @@ router.post(
       if (req.user.role !== UserRole.PROJECT_MANAGER) {
         return res.status(403).json({ statusCode: 403, message: 'Only Project Managers can dispatch' });
       }
-      if (transfer.status !== 'EXECUTIVE_APPROVED') {
+      if (transfer.status !== 'COORDINATOR_DECIDED' || transfer.coordinatorDecision !== 'transfer') {
         return res.status(400).json({
           statusCode: 400,
-          message: 'Transfer must be Executive-approved before source PM dispatch',
+          message: 'Transfer requires Coordinator approval before source PM dispatch',
         });
       }
       if (!userManagesProject(req.user, transfer.fromProjectId?._id || transfer.fromProjectId)) {
@@ -810,7 +805,7 @@ router.post(
   async (req, res, next) => {
     return handleIdempotent(req, res, `bt-coordinator-decide:${req.params.id}:${req.body.decision}`, async () => {
       const transfer = req.branchTransfer;
-      if (!['PM_APPROVED'].includes(transfer.status)) {
+      if (!['PM_APPROVED', 'EXECUTIVE_APPROVED'].includes(transfer.status)) {
         if (COORDINATOR_DECIDED_BT.includes(transfer.status)) {
           let redirect = null;
           if (transfer.status === 'RAISE_PO_INSTEAD' && transfer.materialRequestId) {
@@ -879,6 +874,15 @@ router.post(
 
       await transfer.save();
 
+      if (transfer.status === 'COORDINATOR_DECIDED') {
+        const sourcePms = await getProjectManagers(transfer.fromProjectId?._id || transfer.fromProjectId);
+        for (const pm of sourcePms) await notificationService.notifyUser(pm._id, {
+          title: 'Dispatch branch transfer',
+          body: `${transfer.transferNumber}: Coordinator approved. Please dispatch with challan and expected arrival.`,
+          relatedEntityType: 'BranchTransfer', relatedEntityId: transfer._id,
+        });
+      }
+
       await statusHistoryService.record(
         'BranchTransfer',
         transfer._id,
@@ -912,7 +916,7 @@ router.post(
   async (req, res, next) => {
     return handleIdempotent(req, res, `bt-execute:${req.params.id}`, async () => {
       const transfer = req.branchTransfer;
-      if (transfer.status === 'TRANSFERRED') return btResponse(transfer._id);
+      if (transfer.status === 'TRANSFERRED') return btResponse(transfer._id, req.user);
       if (transfer.status !== 'COORDINATOR_DECIDED' || transfer.coordinatorDecision !== 'transfer') {
         return {
           statusCode: 400,
@@ -939,7 +943,7 @@ router.post(
         relatedEntityId: transfer._id,
       });
 
-      return btResponse(transfer._id);
+      return btResponse(transfer._id, req.user);
     }, next);
   }
 );

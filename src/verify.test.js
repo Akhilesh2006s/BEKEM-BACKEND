@@ -30,7 +30,7 @@ describe('POST /purchase-orders/:id/verify', () => {
     await teardownTestDb();
   });
 
-  it('returns 200 on APPROVE and sets APPROVED', async () => {
+  it('routes Coordinator verification to Chairman approval', async () => {
     const app = getApp();
     const exec = await User.findOne({ email: 'executive@bekem.com' });
     const site = await Site.findOne();
@@ -82,11 +82,11 @@ describe('POST /purchase-orders/:id/verify', () => {
       .send({ action: 'APPROVE', note: 'Verified' });
 
     assert.strictEqual(res.status, 200, JSON.stringify(res.body));
-    assert.strictEqual(res.body.data.status, 'APPROVED');
+    assert.strictEqual(res.body.data.status, 'CHAIRMAN_PENDING');
 
     const updated = await PurchaseOrder.findById(po._id);
-    assert.strictEqual(updated.status, 'APPROVED');
-    assert.ok(updated.poNumber, 'official PO number should be assigned on approval');
+    assert.strictEqual(updated.status, 'CHAIRMAN_PENDING');
+    assert.ok(updated.coordinatorVerifiedByUserId);
   });
 
   it('serializePurchaseOrder does not throw when quotation rfqId is missing', () => {

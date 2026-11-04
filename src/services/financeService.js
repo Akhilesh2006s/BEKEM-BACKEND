@@ -132,8 +132,9 @@ async function applyPaymentToBill(bill, payload = {}) {
   return bill;
 }
 
-async function createBillFromGrn(grn, po, vendor, projectId, actorUserId) {
-  const existing = await PaymentBill.findOne({ grnId: grn._id });
+async function createBillFromGrn(grn, po, vendor, projectId, actorUserId, options = {}) {
+  const session = options.session || null;
+  const existing = await PaymentBill.findOne({ grnId: grn._id }).session(session);
   if (existing) return existing;
 
   const invoiceValue = Number(grn.invoiceValue) || Number(po?.amount) || 0;
@@ -141,7 +142,7 @@ async function createBillFromGrn(grn, po, vendor, projectId, actorUserId) {
   const dueDate = new Date();
   dueDate.setDate(dueDate.getDate() + 30);
 
-  const bill = await PaymentBill.create({
+  const billPayload = {
     billNumber,
     purchaseOrderId: po?._id,
     grnId: grn._id,
@@ -157,13 +158,16 @@ async function createBillFromGrn(grn, po, vendor, projectId, actorUserId) {
     invoiceStatus: 'BILL_RECEIVED',
     tallySyncStatus: 'PENDING',
     processedByUserId: actorUserId,
-  });
+  };
+  const bill = session ? (await PaymentBill.create([billPayload], { session }))[0] : await PaymentBill.create(billPayload);
 
-  await TallySyncRecord.create({
+  const tallyPayload = {
     grnId: grn._id,
     purchaseOrderId: po?._id,
     status: 'PENDING',
-  });
+  };
+  if (session) await TallySyncRecord.create([tallyPayload], { session });
+  else await TallySyncRecord.create(tallyPayload);
 
   return bill;
 }

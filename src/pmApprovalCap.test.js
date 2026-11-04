@@ -111,4 +111,32 @@ describe('PM daily approval cap calendar reset', () => {
     });
     assert.strictEqual(capCheck.wouldExceed, true);
   });
+
+  it('applies each approver’s own limit and permits exact daily boundaries', async () => {
+    const mongoose = require('mongoose');
+    const { checkCoordinatorCanApprove } = require('./services/coordinatorApprovalCapService');
+    const mr = await MaterialRequest.findOne();
+    await MaterialRequest.findByIdAndUpdate(mr._id, { estimatedValue: 3500 });
+    const pmA = new mongoose.Types.ObjectId();
+    const pmB = new mongoose.Types.ObjectId();
+    const coordA = new mongoose.Types.ObjectId();
+    const coordB = new mongoose.Types.ObjectId();
+    await StatusHistory.create([
+      { entityType: 'MaterialRequest', entityId: mr._id, fromStatus: 'FORWARDED_TO_PM', toStatus: 'ALLOCATED', actorUserId: pmA, timestamp: new Date() },
+      { entityType: 'MaterialRequest', entityId: mr._id, fromStatus: 'PENDING_HO', toStatus: 'ALLOCATED', actorUserId: coordA, timestamp: new Date() },
+    ]);
+    assert.equal((await checkPmCanApprove(pmA, { estimatedValue: 1500 })).wouldExceed, false);
+    assert.equal((await checkPmCanApprove(pmA, { estimatedValue: 1501 })).wouldExceed, true);
+    assert.equal((await checkPmCanApprove(pmA, { estimatedValue: 1500.01 })).wouldExceed, true);
+    assert.equal((await checkPmCanApprove(pmB, { estimatedValue: 5000 })).wouldExceed, false);
+    assert.equal((await checkCoordinatorCanApprove(coordA, { estimatedValue: 6500 })).wouldExceed, false);
+    assert.equal((await checkCoordinatorCanApprove(coordA, { estimatedValue: 6501 })).wouldExceed, true);
+    assert.equal((await checkCoordinatorCanApprove(coordA, { estimatedValue: 6500.01 })).wouldExceed, true);
+    assert.equal((await checkCoordinatorCanApprove(coordB, { estimatedValue: 10000 })).wouldExceed, false);
+    const delegate = new mongoose.Types.ObjectId();
+    await StatusHistory.create({ entityType: 'MaterialRequest', entityId: mr._id, fromStatus: 'FORWARDED_TO_PM',
+      toStatus: 'ALLOCATED', actorUserId: delegate, approvalPrincipalUserId: pmA, timestamp: new Date() });
+    assert.equal(await getPmDailyApprovedTotal(pmA), 3500);
+    assert.equal(await getPmDailyApprovedTotal(delegate), 0);
+  });
 });

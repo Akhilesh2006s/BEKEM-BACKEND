@@ -1,4 +1,5 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const { body, param } = require('express-validator');
 const {
   GoodsReceiptNote,
@@ -404,6 +405,13 @@ router.post(
       const outcome = await withIdempotency(req, `grn:${req.body.purchaseOrderId}`, async () => {
       const po = await PurchaseOrder.findById(req.body.purchaseOrderId);
       if (!po) return { statusCode: 404, body: { statusCode: 404, message: 'PO not found' } };
+      if (req.user.role === UserRole.STORE_INCHARGE) {
+        const request = await PurchaseRequest.findById(po.purchaseRequestId).select('projectId').lean();
+        const assignedProjects = (req.user.assignedProjectIds || []).map(String);
+        if (!request?.projectId || !assignedProjects.includes(String(request.projectId))) {
+          return { statusCode: 403, body: { statusCode: 403, message: 'Purchase order is outside your assigned projects' } };
+        }
+      }
       if (po.status !== 'APPROVED') {
         return { statusCode: 400, body: { statusCode: 400, message: 'PO must be approved before receipt' } };
       }
@@ -454,6 +462,21 @@ router.post(
         };
       }
       const saveDraft = req.body.saveDraft === true;
+      const invoiceNo = String(req.body.invoiceNo || '').trim();
+      if (!saveDraft && !invoiceNo) {
+        return { statusCode: 400, body: { statusCode: 400, message: 'Invoice number is required' } };
+      }
+      if (invoiceNo) {
+        const escapedInvoice = invoiceNo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const duplicate = await GoodsReceiptNote.findOne({
+          vendorId: po.vendorId,
+          invoiceNo: { $regex: `^${escapedInvoice}$`, $options: 'i' },
+          status: { $ne: 'REJECTED' },
+        }).select('_id').lean();
+        if (duplicate) {
+          return { statusCode: 409, body: { statusCode: 409, message: 'This supplier invoice already has a GRN' } };
+        }
+      }
       const rawAttachments = Array.isArray(req.body.attachments)
         ? req.body.attachments.filter((a) => a?.name)
         : [];
@@ -557,7 +580,7 @@ router.post(
         };
       }
 
-      const grn = await GoodsReceiptNote.create({
+      const grnPayload = {
         grnNumber,
         purchaseOrderId: po._id,
         poNumber,
@@ -579,7 +602,7 @@ router.post(
         isPartialGrn,
         varianceDetails:
           isPartial || hold.requiresHold || needsCoordinatorReview ? { lines: varianceLines } : null,
-        invoiceNo: req.body.invoiceNo || '',
+        invoiceNo,
         invoiceDate: new Date(req.body.invoiceDate),
         invoiceValue,
         challanNo: req.body.challanNo || '',
@@ -590,7 +613,38 @@ router.post(
         note: remarks,
         attachments,
         receivedByUserId: req.user._id,
-      });
+      };
+
+      // Serialize receipts for the same supplier inside the transaction. The
+      // version write makes competing transactions retry before checking the
+      // invoice, including when they target different purchase orders.
+      const session = await mongoose.startSession();
+      let grn;
+      try {
+        await session.withTransaction(async () => {
+          const supplier = await Vendor.updateOne({ _id: po.vendorId }, { $inc: { __v: 1 } }, { session });
+          if (!supplier.matchedCount) { const err = new Error('Supplier not found'); err.statusCode = 404; throw err; }
+          const currentCommitted = await getCommittedReceivedByLine(po._id, { session });
+          const changed = (po.lineItems || []).some((line, index) => {
+            const key = line._id?.toString() || `idx-${index}`;
+            const material = line.materialId?.toString();
+            return Number(cumulativeBefore[key] || cumulativeBefore[material] || 0) !==
+              Number(currentCommitted[key] || currentCommitted[material] || 0);
+          });
+          if (changed) { const err = new Error('Receipt quantities changed; reload the PO and try again'); err.statusCode = 409; throw err; }
+          if (invoiceNo) {
+            const escaped = invoiceNo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const duplicate = await GoodsReceiptNote.findOne({
+              vendorId: po.vendorId, invoiceNo: { $regex: `^${escaped}$`, $options: 'i' },
+              status: { $ne: 'REJECTED' },
+            }).session(session).lean();
+            if (duplicate) { const err = new Error('This supplier invoice already has a GRN'); err.statusCode = 409; throw err; }
+          }
+          [grn] = await GoodsReceiptNote.create([grnPayload], { session });
+        });
+      } finally {
+        await session.endSession();
+      }
 
       let fulfillment = { fulfillmentStatus: po.fulfillmentStatus };
 
@@ -712,7 +766,6 @@ router.post(
         grn.chairmanApprovedAt = new Date();
         grn.chairmanApprovedByUserId = req.user._id;
         if (req.body.remark) grn.note = [grn.note, req.body.remark].filter(Boolean).join('\n');
-        await grn.save();
 
         const { grn: finalized, fulfillment } = await finalizeApprovedGrn(grn, req.user._id);
         return res.json({

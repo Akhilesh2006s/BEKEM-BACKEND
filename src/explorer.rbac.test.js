@@ -71,7 +71,7 @@ describe('Portfolio explorer RBAC', () => {
       .set('Authorization', `Bearer ${token}`);
 
     assert.strictEqual(res.status, 200);
-    assert.ok(pm.assignedProjectIds.length >= 2 && pm.assignedProjectIds.length <= 4);
+    assert.ok(pm.assignedProjectIds.length >= 1 && pm.assignedProjectIds.length <= 4);
     assert.strictEqual(res.body.data.length, assignedCodes.length);
     const codes = res.body.data.map((p) => p.code).sort();
     assert.deepStrictEqual(codes, assignedCodes);

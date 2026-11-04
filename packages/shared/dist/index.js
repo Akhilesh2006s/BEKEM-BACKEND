@@ -44,6 +44,7 @@ var MaterialRequestStatus;
     MaterialRequestStatus["CHAIRMAN_APPROVED"] = "CHAIRMAN_APPROVED";
     MaterialRequestStatus["MATERIAL_RECEIVED"] = "MATERIAL_RECEIVED";
     MaterialRequestStatus["ISSUED"] = "ISSUED";
+    MaterialRequestStatus["PARTIALLY_ISSUED"] = "PARTIALLY_ISSUED";
     MaterialRequestStatus["COMPLETED"] = "COMPLETED";
     MaterialRequestStatus["REJECTED"] = "REJECTED";
     MaterialRequestStatus["CANCELLED"] = "CANCELLED";
@@ -186,7 +187,7 @@ exports.ROLE_COLORS = {
     [UserRole.CHAIRMAN]: { primary: '#1A4FA0', accent: '#E8F0FA' },
 };
 exports.ROLE_LABELS = {
-    [UserRole.SITE_INCHARGE]: 'New indent',
+    [UserRole.SITE_INCHARGE]: 'Site In-Charge / Indent Raiser',
     [UserRole.STORE_INCHARGE]: 'Store Incharge',
     [UserRole.PROJECT_MANAGER]: 'Project Manager',
     [UserRole.EXECUTIVE]: 'Executive',

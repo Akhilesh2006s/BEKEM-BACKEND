@@ -215,7 +215,7 @@ describe('PO tracking & GRN fulfillment (spec 21–29)', () => {
     );
     assert.equal(
       canEditPurchaseOrder('COORDINATOR', { status: 'APPROVED', amount: 1000 }),
-      true
+      false
     );
     assert.equal(
       canEditPurchaseOrder('CHAIRMAN', { status: 'APPROVED', amount: 25000 }),

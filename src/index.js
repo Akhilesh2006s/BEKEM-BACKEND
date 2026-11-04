@@ -1,17 +1,14 @@
 require('dotenv').config();
 const { connectMongo } = require('./db/connectMongo');
 const { createApp } = require('./app');
-const { ensureDefaultAddresses } = require('./services/addressBootstrapService');
-const { ensureMaterialCategories } = require('./services/materialCategoryService');
 
 const PORT = process.env.PORT || 4000;
 const { app, server } = createApp();
 
 async function start() {
   try {
+    require('./utils/productionConfig').validateProductionConfig();
     await connectMongo();
-    await ensureDefaultAddresses();
-    await ensureMaterialCategories();
     console.log('Connected to MongoDB');
 
     const { processOverdueDeliveries } = require('./services/deliveryAlertService');

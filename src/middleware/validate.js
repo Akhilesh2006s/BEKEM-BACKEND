@@ -14,10 +14,10 @@ function validate(req, res, next) {
 
 function errorHandler(err, req, res, _next) {
   console.error(err);
-  const status = err.statusCode || 500;
+  const status = err.statusCode || (err.name === 'VersionError' ? 409 : 500);
   res.status(status).json({
     statusCode: status,
-    message: err.message || 'Internal server error',
+    message: err.name === 'VersionError' ? 'This record changed while you were working. Refresh and try again.' : (err.message || 'Internal server error'),
     error: err.name || 'Error',
   });
 }
