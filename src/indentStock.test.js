@@ -60,8 +60,16 @@ describe('indent stock comparison', () => {
     const fields = computeLineStockFields(
       { quantityRequested: 10, quantityAllocated: 10, quantityIssued: 0 },
       { quantityOnHand: 0, quantityReserved: 0 },
-      0
+      0, [], 10
     );
     assert.strictEqual(fields.availableToIssueQty, 10);
+  });
+
+  it('does not treat an old receipt or allocated quantity as stock without a debit', () => {
+    const fields = computeLineStockFields(
+      { quantityRequested: 10, quantityAllocated: 10, quantityIssued: 0 },
+      { quantityOnHand: 0, quantityReserved: 0 }, 10
+    );
+    assert.strictEqual(fields.availableToIssueQty, 0);
   });
 });

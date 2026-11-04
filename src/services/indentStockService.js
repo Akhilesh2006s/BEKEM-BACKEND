@@ -11,7 +11,7 @@ async function getLedgerMap(siteId, session = null) {
   return map;
 }
 
-function computeLineStockFields(item, ledger, receivedQty = 0, receipts = [], indentStatus = '') {
+function computeLineStockFields(item, ledger, receivedQty = 0, receipts = [], allocatedDebits = 0) {
   const requestedQty = item.quantityRequested || 0;
   const issuedQty = item.quantityIssued || 0;
   const onHand = ledger?.quantityOnHand || 0;
@@ -20,22 +20,12 @@ function computeLineStockFields(item, ledger, receivedQty = 0, receipts = [], in
   const requiredQty = computeRequiredQty(requestedQty, availableQty);
   const quantityReceived = Math.max(0, Number(receivedQty) || 0);
   const remainingRequest = Math.max(0, requestedQty - issuedQty);
-  const receiptBalance = Math.max(0, quantityReceived - issuedQty);
-  let allocatedQty = Math.max(0, Number(item.quantityAllocated || 0));
-  // ALLOCATED (and post-allocation statuses) must remain issuable even if line
-  // quantityAllocated failed to persist — stock was already reserved/moved.
-  if (
-    allocatedQty <= 0 &&
-    ['ALLOCATED', 'PARTIALLY_ISSUED', 'ISSUED', 'MATERIAL_RECEIVED'].includes(
-      indentStatus
-    )
-  ) {
-    allocatedQty = requestedQty;
-  }
-  const allocatedBalance = Math.max(0, allocatedQty - issuedQty);
+  // Stock debited for this indent is reserved for it; a GRN or an allocated
+  // quantity alone does not prove that stock is still available.
+  const allocatedBalance = Math.max(0, Number(allocatedDebits || 0) - issuedQty);
   const availableToIssueQty = Math.min(
     remainingRequest,
-    Math.max(availableQty, receiptBalance, allocatedBalance)
+    availableQty + allocatedBalance
   );
   const pendingReceiptQty = Math.max(0, remainingRequest - availableQty);
   return {
@@ -53,14 +43,18 @@ function computeLineStockFields(item, ledger, receivedQty = 0, receipts = [], in
 async function enrichIndentWithStock(mr, session = null) {
   const siteId = mr.siteId?._id || mr.siteId;
   const lineItems = getIndentLineItems(mr);
-  const indentStatus = mr.status || '';
   const ledgerMap = await getLedgerMap(siteId, session);
-  const movements = await StockMovement.find({ materialRequestId: mr._id, type: 'INCOMING' }).session(session).sort({ timestamp: 1 }).lean();
+  const movements = await StockMovement.find({ materialRequestId: mr._id, type: { $in: ['INCOMING', 'ALLOCATION'] } }).session(session).sort({ timestamp: 1 }).lean();
   const receivedByMaterialId = new Map();
   const receiptsByMaterialId = new Map();
+  const allocatedByMaterialId = new Map();
   for (const movement of movements) {
     const materialId = movement.materialId?.toString();
     if (!materialId) continue;
+    if (movement.type === 'ALLOCATION') {
+      allocatedByMaterialId.set(materialId, (allocatedByMaterialId.get(materialId) || 0) + Math.max(0, -Number(movement.quantityDelta || 0)));
+      continue;
+    }
     receivedByMaterialId.set(
       materialId,
       (receivedByMaterialId.get(materialId) || 0) + Math.max(0, movement.quantityDelta || 0)
@@ -87,7 +81,7 @@ async function enrichIndentWithStock(mr, session = null) {
         ledger,
         receivedByMaterialId.get(materialId) || 0,
         receiptsByMaterialId.get(materialId) || [],
-        indentStatus
+        allocatedByMaterialId.get(materialId) || 0
       ),
     };
   });
