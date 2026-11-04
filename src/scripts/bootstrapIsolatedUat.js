@@ -47,10 +47,14 @@ async function bootstrap() {
   if (!hello.setName || !hello.logicalSessionTimeoutMinutes) throw new Error('A transaction-capable replica set is required');
   const collections = await mongoose.connection.db.listCollections({}, { nameOnly: true }).toArray();
   const names = collections.map((c) => c.name).filter((name) => !name.startsWith('system.'));
-  if (names.length && !names.includes('uat_bootstrap_markers')) throw new Error('Database is not empty and does not carry the UAT bootstrap marker');
+  const populated = [];
+  for (const name of names) {
+    if (await mongoose.connection.db.collection(name).findOne({}, { projection: { _id: 1 } })) populated.push(name);
+  }
+  if (populated.length && !names.includes('uat_bootstrap_markers')) throw new Error('Database contains records and does not carry the UAT bootstrap marker');
   const markers = mongoose.connection.db.collection('uat_bootstrap_markers');
   const marker = await markers.findOne({ _id: MARKER });
-  if (!marker && names.length) throw new Error('Expected UAT marker missing');
+  if (!marker && populated.length) throw new Error('Expected UAT marker missing');
   if (!marker) await markers.insertOne({ _id: MARKER, projectId: PROJECT_ID, environmentId: ENVIRONMENT_ID, createdAt: new Date() });
   else if (marker.projectId !== PROJECT_ID || marker.environmentId !== ENVIRONMENT_ID) throw new Error('UAT marker identity mismatch');
 
