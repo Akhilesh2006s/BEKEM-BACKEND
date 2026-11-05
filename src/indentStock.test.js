@@ -63,6 +63,7 @@ describe('indent stock comparison', () => {
       0, [], 10
     );
     assert.strictEqual(fields.availableToIssueQty, 10);
+    assert.strictEqual(fields.pendingReceiptQty, 0);
   });
 
   it('does not treat an old receipt or allocated quantity as stock without a debit', () => {

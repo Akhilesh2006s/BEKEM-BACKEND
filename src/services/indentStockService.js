@@ -27,7 +27,7 @@ function computeLineStockFields(item, ledger, receivedQty = 0, receipts = [], al
     remainingRequest,
     availableQty + allocatedBalance
   );
-  const pendingReceiptQty = Math.max(0, remainingRequest - availableQty);
+  const pendingReceiptQty = Math.max(0, remainingRequest - availableToIssueQty);
   return {
     requestedQty,
     availableQty,
