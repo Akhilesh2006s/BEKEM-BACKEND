@@ -964,7 +964,7 @@ router.post(
       const mr = await MaterialRequest.findById(req.params.id);
       if (!mr) return { statusCode: 404, body: { statusCode: 404, message: 'Request not found' } };
 
-      if (!userCanAccessSite(req.user, mr.siteId)) {
+      if (req.user.role === UserRole.PROJECT_MANAGER ? !userCanAccessProject(req.user, mr.projectId) : !userCanAccessSite(req.user, mr.siteId)) {
         return { statusCode: 403, body: { statusCode: 403, message: 'Forbidden: not your site' } };
       }
 
@@ -1031,13 +1031,8 @@ router.post(
       const mr = await MaterialRequest.findById(req.params.id);
       if (!mr) return { statusCode: 404, body: { statusCode: 404, message: 'Request not found' } };
 
-      if (!userCanAccessSite(req.user, mr.siteId) && req.user.role !== UserRole.PROJECT_MANAGER) {
-        if (req.user.role === UserRole.PROJECT_MANAGER && !userCanAccessProject(req.user, mr.projectId)) {
-          return { statusCode: 403, body: { statusCode: 403, message: 'Forbidden' } };
-        }
-        if (req.user.role !== UserRole.PROJECT_MANAGER) {
-          return { statusCode: 403, body: { statusCode: 403, message: 'Forbidden: not your site' } };
-        }
+      if (req.user.role === UserRole.PROJECT_MANAGER ? !userCanAccessProject(req.user, mr.projectId) : !userCanAccessSite(req.user, mr.siteId)) {
+        return { statusCode: 403, body: { statusCode: 403, message: 'Forbidden: not your site' } };
       }
 
       if (mr.status === 'FORWARDED_TO_PM') {
@@ -1111,7 +1106,7 @@ router.post(
         return res.status(404).json({ statusCode: 404, message: 'Request not found' });
       }
 
-      if (!userCanAccessSite(req.user, mr.siteId)) {
+      if (req.user.role === UserRole.PROJECT_MANAGER ? !userCanAccessProject(req.user, mr.projectId) : !userCanAccessSite(req.user, mr.siteId)) {
         return res.status(403).json({ statusCode: 403, message: 'Forbidden: not your site' });
       }
 
@@ -1694,7 +1689,7 @@ async function loadPoStatusForMaterialRequest(mrId) {
 function canAccessProceedAllocation(user, mr) {
   if (user.role === UserRole.EXECUTIVE) return executiveCanAccessIndent(user, mr);
   if (user.role === UserRole.PROJECT_MANAGER) {
-    return userCanAccessProject(user, mr.projectId) || userCanAccessSite(user, mr.siteId);
+    return userCanAccessProject(user, mr.projectId);
   }
   if (user.role === UserRole.STORE_INCHARGE) {
     return userCanAccessSite(user, mr.siteId);

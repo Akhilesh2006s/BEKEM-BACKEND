@@ -430,6 +430,9 @@ router.post(
         quantityReceived: i.quantityReceived,
         invoiceUnitPrice: i.invoiceUnitPrice,
       }));
+      if (new Set(linePayloads.map((line) => line.lineIndex)).size !== linePayloads.length) {
+        return { statusCode: 400, body: { statusCode: 400, message: 'Each purchase order line may appear only once per receipt' } };
+      }
       const { items, isPartial, varianceLines } = computeLineVariances(
         po,
         linePayloads,

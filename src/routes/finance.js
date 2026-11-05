@@ -71,13 +71,6 @@ router.patch(
   validate,
   async (req, res, next) => {
     try {
-      const bill = await PaymentBill.findById(req.params.id)
-        .populate('vendorId', 'name code')
-        .populate('projectId', 'code name');
-      if (!bill) return res.status(404).json({ statusCode: 404, message: 'Bill not found' });
-
-      assertCanAccessBill(req.user, bill);
-
       if (req.body.paymentAmount == null && req.body.paidAmount == null) {
         return res.status(400).json({
           statusCode: 400,
@@ -85,11 +78,25 @@ router.patch(
         });
       }
 
-      await applyPaymentToBill(bill, req.body);
-      bill.processedByUserId = req.user._id;
-      await bill.save();
-
-      res.json({ data: serializePaymentBill(bill) });
+      // Retry if another payment changed the bill after it was read. The
+      // version check makes each accepted installment apply to the latest total.
+      for (let attempt = 0; attempt < 10; attempt++) {
+        const bill = await PaymentBill.findById(req.params.id)
+          .populate('vendorId', 'name code')
+          .populate('projectId', 'code name');
+        if (!bill) return res.status(404).json({ statusCode: 404, message: 'Bill not found' });
+        assertCanAccessBill(req.user, bill);
+        await applyPaymentToBill(bill, req.body);
+        bill.processedByUserId = req.user._id;
+        const changes = bill.getChanges().$set || {};
+        const saved = await PaymentBill.findOneAndUpdate(
+          { _id: bill._id, __v: bill.__v == null ? { $exists: false } : bill.__v },
+          { $set: changes, $inc: { __v: 1 } },
+          { new: true, runValidators: true }
+        ).populate('vendorId', 'name code').populate('projectId', 'code name');
+        if (saved) return res.json({ data: serializePaymentBill(saved) });
+      }
+      return res.status(409).json({ statusCode: 409, message: 'Bill changed during payment update; please retry' });
     } catch (err) {
       if (err.statusCode) {
         return res.status(err.statusCode).json({ statusCode: err.statusCode, message: err.message });
