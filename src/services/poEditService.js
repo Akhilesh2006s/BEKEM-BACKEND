@@ -26,6 +26,7 @@ function chairmanHasFinalApproved(po) {
 
 function canEditPurchaseOrder(role, po) {
   if (!po) return false;
+  if (role === 'EXECUTIVE') return po.status === 'DRAFT';
   if (role === 'COORDINATOR') {
     if (chairmanHasFinalApproved(po)) return false;
     return COORDINATOR_EDIT_STATUSES.has(po.status);

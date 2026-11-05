@@ -570,7 +570,7 @@ router.patch(
       const isStore = req.user.role === UserRole.STORE_INCHARGE;
       const isExecutive = req.user.role === UserRole.EXECUTIVE;
 
-      if (isStore || isExecutive) {
+      if (isStore) {
         return res.status(403).json({ statusCode: 403, message: 'Forbidden' });
       }
       if (!canEditPurchaseOrder(req.user.role, po)) {
@@ -579,7 +579,7 @@ router.patch(
           message: 'You do not have permission to edit this PO',
         });
       }
-      if (!isCoordinator && !isChairman) {
+      if (!isCoordinator && !isChairman && !isExecutive) {
         return res.status(403).json({ statusCode: 403, message: 'Forbidden' });
       }
 
@@ -611,6 +611,28 @@ router.patch(
       }
       next(err);
     }
+  }
+);
+
+router.post(
+  '/:id/resubmit',
+  param('id').isMongoId(),
+  validate,
+  async (req, res, next) => {
+    try {
+      if (req.user.role !== UserRole.EXECUTIVE) return res.status(403).json({ message: 'Executive only' });
+      const po = await PurchaseOrder.findOneAndUpdate(
+        { _id: req.params.id, status: 'DRAFT' },
+        { $set: { status: 'COORDINATOR_PENDING' } },
+        { new: true }
+      );
+      if (!po) return res.status(409).json({ message: 'Purchase order is not a draft' });
+      await runSideEffect('PO status history', () =>
+        recordPoStatusHistory(po, 'DRAFT', 'COORDINATOR_PENDING', req.user._id, 'Resubmitted to Coordinator')
+      );
+      const populated = await PurchaseOrder.findById(po._id).populate(poPopulate);
+      return res.json({ data: serializePurchaseOrder(populated) });
+    } catch (err) { next(err); }
   }
 );
 

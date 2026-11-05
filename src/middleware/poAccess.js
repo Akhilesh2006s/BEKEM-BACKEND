@@ -43,7 +43,7 @@ function requirePoEditRole(req, res, next) {
   if (!req.user) {
     return res.status(401).json({ statusCode: 401, message: 'Unauthorized' });
   }
-  if ([UserRole.COORDINATOR, UserRole.CHAIRMAN].includes(req.user.role)) {
+  if ([UserRole.EXECUTIVE, UserRole.COORDINATOR, UserRole.CHAIRMAN].includes(req.user.role)) {
     return next();
   }
   return res.status(403).json({

@@ -1,4 +1,5 @@
 const { StockBatch, StockLedger, StockMovement } = require('../models');
+const mongoose = require('mongoose');
 
 /**
  * Create FIFO batches from a GRN and sync StockLedger.
@@ -160,8 +161,9 @@ async function consumeReservedFifo({ siteId, materialId, quantity, session = nul
  * Aging rows: Item / Batch / GRN / Received Date / Available Qty / Aging Days
  */
 function siteMatch(siteId, siteIds) {
-  if (siteId) return { siteId };
-  if (siteIds?.length) return { siteId: { $in: siteIds } };
+  const toObjectId = (id) => new mongoose.Types.ObjectId(String(id));
+  if (siteId) return { siteId: toObjectId(siteId) };
+  if (siteIds?.length) return { siteId: { $in: siteIds.map(toObjectId) } };
   return {};
 }
 
